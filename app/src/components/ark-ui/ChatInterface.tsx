@@ -733,8 +733,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 disabled={promoting()}
                 p="x-3 y-1.5"
                 rounded="md"
-                text="xs white"
-                bg="cyber-700 hover:cyber-600"
+                text="xs ui-on-accent"
+                bg="ui-accent hover:ui-accent-deep"
                 font="medium"
                 transition="all"
               >

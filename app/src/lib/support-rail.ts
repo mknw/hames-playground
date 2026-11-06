@@ -28,9 +28,11 @@ export interface SupportTabMeta {
   label: string
   /** The icon utility class — the same one the tab trigger renders. */
   iconClass: string
-  /** The tab's accent, as rendered by its active trigger. Literal hexes where
-   *  the trigger itself uses one (Context manager, Data, Sandbox), so the rail
-   *  and the tab cannot disagree; the theme-token rule keeps them honest. */
+  /** The tab's accent, as rendered by its active trigger — the same literal
+   *  string, so the rail and the tab cannot disagree. Since #1008 the
+   *  Context manager, Data and Sandbox triggers use theme-aware values of
+   *  their old amber / cyan / green (the 400-level hexes were about 2:1 on
+   *  the light panel). */
   accent: string
 }
 
@@ -52,19 +54,19 @@ export const SUPPORT_RAIL_TABS: readonly SupportTabMeta[] = [
     id: 'stats',
     label: 'Context manager',
     iconClass: 'i-material-symbols-analytics-outline',
-    accent: '#f59e0b',
+    accent: 'var(--ui-evt-controller-action)',
   },
   {
     id: 'data',
     label: 'Data',
     iconClass: 'i-material-symbols-dataset-outline',
-    accent: '#22d3ee',
+    accent: 'var(--ui-evt-tool-result)',
   },
   {
     id: 'sandbox',
     label: 'Sandbox',
     iconClass: 'i-material-symbols-terminal',
-    accent: '#10b981',
+    accent: 'var(--ui-success)',
   },
 ]
 

@@ -10,6 +10,7 @@ import {
   parsePromptBody,
   type ParsedMessage,
 } from '@hames-ai/harness-patterns/observability/prompt-parse'
+import { eventColors } from '~/lib/observability/event-styles'
 
 // ============================================================================
 // Shared Components
@@ -33,15 +34,20 @@ export const CodeBlock = (props: { content: string | undefined; placeholder?: st
 // Parsed Prompt View Component
 // ============================================================================
 
+// #1008 round 2: the role badges take the timeline's own theme-aware label
+// colours (the semantic match is exact — system prompts and tool calls are
+// the same violet family, user turns blue, assistant turns green, tool
+// results cyan) instead of their own fixed 400-level hexes, which failed
+// 4.5:1 on a light ground.
 const roleColors: Record<string, string> = {
-  system: '#a78bfa', // violet-400
-  user: '#60a5fa', // blue-400
-  assistant: '#34d399', // green-400
-  tool: '#22d3ee', // cyan-400
+  system: eventColors.tool_call,
+  user: eventColors.user_message,
+  assistant: eventColors.assistant_message,
+  tool: eventColors.tool_result,
 }
 
 const PromptMessage = (props: { msg: ParsedMessage }) => {
-  const color = () => roleColors[props.msg.role] ?? '#94a3b8'
+  const color = () => roleColors[props.msg.role] ?? eventColors.pattern_enter
 
   return (
     <div border="1 ui-border-secondary/40" rounded="md" overflow="hidden">

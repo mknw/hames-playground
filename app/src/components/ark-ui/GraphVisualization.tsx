@@ -61,9 +61,9 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node',
     style: {
-      'background-color': '#00ffff',
+      'background-color': '#45b0b8',
       label: 'data(label)',
-      color: '#e4e4e7',
+      color: '#e2e4e8',
       'text-valign': 'top',
       'text-halign': 'center',
       'text-margin-y': -8,
@@ -76,7 +76,7 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
       'text-wrap': 'wrap',
       'text-max-width': '100px',
       'text-background-opacity': 1,
-      'text-background-color': '#0a0a0f',
+      'text-background-color': '#0f1115',
       'text-background-padding': '4px',
       'text-background-shape': 'roundrectangle',
     },
@@ -93,10 +93,10 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
       label: 'data(label)',
       'font-size': '10px',
       'font-family': 'Inter, sans-serif',
-      color: '#a1a1aa',
+      color: '#9aa1ab',
       'text-rotation': 'autorotate',
       'text-background-opacity': 1,
-      'text-background-color': '#0a0a0f',
+      'text-background-color': '#0f1115',
       'text-background-padding': '3px',
     },
   },
@@ -104,8 +104,8 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node:selected',
     style: {
-      'background-color': '#ff00ff',
-      'border-color': '#ff00ff',
+      'background-color': '#b863c9',
+      'border-color': '#b863c9',
       'border-width': 3,
     } as Record<string, string | number>,
   },
@@ -113,8 +113,8 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'edge:selected',
     style: {
-      'line-color': '#ff00ff',
-      'target-arrow-color': '#ff00ff',
+      'line-color': '#b863c9',
+      'target-arrow-color': '#b863c9',
       width: 3,
     },
   },
@@ -123,7 +123,7 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
     selector: 'node:active',
     style: {
       'overlay-opacity': 0.2,
-      'overlay-color': '#00ffff',
+      'overlay-color': '#45b0b8',
     },
   },
   {
@@ -137,22 +137,22 @@ const BASE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node.highlighted',
     style: {
-      'background-color': '#00ffff',
-      'border-color': '#00ffff',
+      'background-color': '#45b0b8',
+      'border-color': '#45b0b8',
       'border-width': 4,
       'overlay-opacity': 0.3,
-      'overlay-color': '#00ffff',
+      'overlay-color': '#45b0b8',
     } as Record<string, string | number>,
   },
   // Highlighted edges (from latest query)
   {
     selector: 'edge.highlighted',
     style: {
-      'line-color': '#00ffff',
-      'target-arrow-color': '#00ffff',
+      'line-color': '#45b0b8',
+      'target-arrow-color': '#45b0b8',
       width: 3,
       'overlay-opacity': 0.2,
-      'overlay-color': '#00ffff',
+      'overlay-color': '#45b0b8',
     },
   },
 ]
@@ -1302,7 +1302,6 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
             flex="~"
             items="center"
             gap="2"
-            shadow="[0_0_15px_rgba(168,85,247,0.4)]"
           >
             <span>
               Select target node for relation from <strong>{relationMode()!.sourceLabel}</strong>

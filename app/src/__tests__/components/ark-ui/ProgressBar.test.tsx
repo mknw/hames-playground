@@ -31,11 +31,13 @@ describe('ProgressBar — determinate', () => {
     expect(root?.getAttribute('aria-valuemax')).toBe('100')
   })
 
-  it('fills to exactly the percentage given, with the glow', () => {
+  it('fills to exactly the percentage given, with the accent gradient', () => {
     const { container } = render(() => <ProgressBar percent={43} />)
     const style = range(container)?.getAttribute('style') ?? ''
     expect(style).toContain('width: 43%')
-    expect(style).toContain('box-shadow')
+    // #1008 removed the neon glow and the cyan→magenta gradient; the fill is
+    // the single-hue accent fade PROGRESS_GRADIENT now names.
+    expect(style).not.toContain('box-shadow')
     // jsdom re-serialises `rgba(0,255,255,.85)` with spaces, so compare with
     // whitespace stripped rather than pinning jsdom's formatting.
     const squash = (v: string) => v.replace(/\s+/g, '')

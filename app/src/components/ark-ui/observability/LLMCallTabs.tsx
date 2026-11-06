@@ -167,7 +167,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             title="Input tokens read from cache — billed at 0.1× the base rate"
           >
             <span text="xs ui-text-tertiary">Cache read</span>
-            <span text="sm violet-400" font="mono">
+            <span text="sm [var(--ui-evt-tool-call)]" font="mono">
               {props.llmCall.usage!.cachedInputTokens.toLocaleString()}
             </span>
           </div>
@@ -179,7 +179,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             title="Input tokens written to cache — billed at 1.25× the base rate"
           >
             <span text="xs ui-text-tertiary">Cache write</span>
-            <span text="sm amber-400" font="mono">
+            <span text="sm [var(--ui-evt-warning)]" font="mono">
               {props.llmCall.usage!.cacheCreationInputTokens!.toLocaleString()}
             </span>
           </div>
@@ -196,7 +196,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
           title="All tokens processed: fresh + cache read + cache write + output"
         >
           <span text="xs ui-text-tertiary">Total</span>
-          <span text="sm amber-400" font="mono">
+          <span text="sm [var(--ui-evt-warning)]" font="mono">
             {props.llmCall.usage!.totalTokens.toLocaleString()}
           </span>
         </div>
@@ -211,7 +211,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             title="This step needed multiple API calls (truncation retry / fallback chain); tokens and cost below include all of them"
           >
             <span text="xs ui-text-tertiary">Attempts</span>
-            <span text="sm red-400" font="mono">
+            <span text="sm ui-danger" font="mono">
               {props.llmCall.metrics!.attempts}
             </span>
           </div>
@@ -427,7 +427,10 @@ export const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
               </Show>
               <Show when={rawOutput() !== undefined}>
                 <div>
-                  <div text={`xs ${unparsed() ? 'amber-400' : 'ui-text-tertiary'}`} m="b-1">
+                  <div
+                    text={`xs ${unparsed() ? '[var(--ui-evt-warning)]' : 'ui-text-tertiary'}`}
+                    m="b-1"
+                  >
                     {unparsed() ? 'Raw response — BAML could not parse this' : 'Raw response'}
                   </div>
                   <CodeBlock content={rawOutput()} />

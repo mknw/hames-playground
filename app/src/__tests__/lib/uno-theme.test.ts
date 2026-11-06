@@ -56,43 +56,67 @@ async function palette(selector: ':root' | ':root.light'): Promise<Record<string
   )
 }
 
-// The roles that existed as fixed hexes before the theme, and the value each
-// one had. Half are still declared under `theme.colors.dark` / `neon`; the
-// rest were literals inside the hand-written CSS in the second preflight.
-// Every entry here is load-bearing: it is the proof that migrating the app to
-// `ui-*` changed nothing about how it renders in dark.
+// The dark palette, pinned value by value. Originally the hexes the `ui-*`
+// rename inherited unchanged (#226 B8); #1008 re-pinned the whole record when
+// the sober dark palette replaced the neon accent and the violet-cast
+// neutrals — the point of the pin is unchanged: a one-line edit to the
+// preflight cannot move the dark palette without going through this list.
 const INHERITED_DARK_VALUES: Record<string, string> = {
-  '--ui-bg-primary': '#0a0a0f',
-  '--ui-bg-secondary': '#12121a',
-  '--ui-bg-tertiary': '#1a1a24',
-  '--ui-bg-hover': '#22222f',
-  '--ui-border-primary': '#2a2a3a',
-  '--ui-border-secondary': '#3a3a4a',
-  '--ui-border-accent': '#4a4a5a',
-  '--ui-text-primary': '#e4e4e7',
-  '--ui-text-secondary': '#a1a1aa',
-  '--ui-text-tertiary': '#71717a',
+  '--ui-bg-primary': '#0f1115',
+  '--ui-bg-secondary': '#16191e',
+  '--ui-bg-tertiary': '#1d2127',
+  '--ui-bg-hover': '#262b33',
+  '--ui-border-primary': '#2b3038',
+  '--ui-border-secondary': '#3a4048',
+  '--ui-border-accent': '#4b525c',
+  '--ui-text-primary': '#e2e4e8',
+  '--ui-text-secondary': '#9aa1ab',
+  '--ui-text-tertiary': '#848b93',
   // The brand accent and the success tone, previously `neon-cyan` /
-  // `neon-green`.
-  '--ui-accent': '#00ffff',
-  '--ui-success': '#39ff14',
+  // `neon-green`, sobered by #1008.
+  '--ui-accent': '#45b0b8',
+  '--ui-success': '#3fb950',
   // Literals lifted out of `.prose-chat`, `.think-*`, `.agent-glyph` and
   // `.graph-entity`, which are CSS rather than utilities and so could not
   // carry a token at all before.
-  '--ui-accent-soft': 'rgba(0, 255, 255, 0.1)',
-  '--ui-accent-glow': 'rgba(0, 255, 255, 0.15)',
-  '--ui-accent-strong': 'rgba(0, 255, 255, 0.2)',
-  '--ui-accent-line': 'rgba(0, 255, 255, 0.4)',
+  '--ui-accent-soft': 'rgba(69, 176, 184, 0.1)',
+  '--ui-accent-glow': 'rgba(69, 176, 184, 0.15)',
+  '--ui-accent-strong': 'rgba(69, 176, 184, 0.2)',
+  '--ui-accent-line': 'rgba(69, 176, 184, 0.4)',
   '--ui-overlay-wash': 'rgba(255, 255, 255, 0.03)',
   '--ui-overlay-raise': 'rgba(255, 255, 255, 0.06)',
   '--ui-overlay-line': 'rgba(255, 255, 255, 0.06)',
   '--ui-overlay-hairline': 'rgba(255, 255, 255, 0.05)',
   '--ui-overlay-sunken': 'rgba(0, 0, 0, 0.15)',
-  '--ui-code-bg': '#0a0a0f',
+  '--ui-code-bg': '#0c0e11',
+  // #1008 round 2: the accent as a button ground, and its text.
+  '--ui-on-accent': '#0f1115',
+  '--ui-accent-deep': '#2f9aa4',
+  // …and as text on a tint of itself.
+  '--ui-accent-text': '#45b0b8',
 }
 
 describe('ui-* token palette', () => {
-  it('keeps the dark palette byte-identical to the hexes it replaced', async () => {
+  it('keeps the fixed dark.* hexes equal to the dark --ui-* values they mirror', async () => {
+    // uno.config.ts promises this equality in prose; until #1008's review this
+    // test did not exist, and `dark.text.tertiary` had drifted to #7b828c.
+    const dark = await palette(':root')
+    const fixed = (
+      config as { theme: { colors: { dark: Record<string, Record<string, string>> } } }
+    ).theme.colors.dark
+    let compared = 0
+    for (const [group, entries] of Object.entries(fixed)) {
+      for (const [key, hex] of Object.entries(entries)) {
+        expect(hex, `dark.${group}.${key} vs --ui-${group}-${key}`).toBe(
+          dark[`--ui-${group}-${key}`],
+        )
+        compared++
+      }
+    }
+    expect(compared).toBeGreaterThanOrEqual(10)
+  })
+
+  it('keeps the dark palette byte-identical to its pinned values (#1008)', async () => {
     const dark = await palette(':root')
     for (const [variable, hex] of Object.entries(INHERITED_DARK_VALUES)) {
       expect(dark[variable], variable).toBe(hex)
@@ -136,6 +160,11 @@ describe('ui-* utilities', () => {
     ['text-ui-success', '--ui-success'],
     ['bg-ui-success', '--ui-success'],
     ['bg-ui-danger/10', '--ui-danger'],
+    // The primary button's pair (#1008 round 2): `cyber-button` and + New
+    // Chat use these, and an unregistered key emits nothing at all.
+    ['text-ui-on-accent', '--ui-on-accent'],
+    ['hover:bg-ui-accent-deep', '--ui-accent-deep'],
+    ['text-ui-accent-text', '--ui-accent-text'],
   ] as const
 
   it.each(cases)('%s resolves through %s', async (utility, variable) => {

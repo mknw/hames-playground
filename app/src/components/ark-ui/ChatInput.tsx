@@ -80,7 +80,7 @@ export const ChatInput = (props: ChatInputProps) => {
           m="b-2"
           rounded="md"
           border="1 ui-accent/30"
-          bg="cyber-700/15"
+          bg="ui-accent/10"
           text="xs ui-text-secondary"
         >
           <span

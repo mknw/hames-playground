@@ -70,7 +70,7 @@ export const LaneHeaders = () => (
 
     {/* Guardrails Lane Header — the orange the timeline spends on a guard firing */}
     <div w="1/3" p="2" flex="~" items="center" justify="center" gap="2">
-      <div w="2" h="2" rounded="full" bg="orange-400" />
+      <div w="2" h="2" rounded="full" bg="[var(--ui-evt-content-sanitized)]" />
       <span text="xs ui-text-primary" font="medium">
         Guardrails
       </span>
@@ -119,10 +119,17 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       items="center"
       gap="2"
       p="x-3 y-1"
+      // #1008 round 2: pc.color is now a var(), so the old hex-suffix alpha
+      // (`${pc.color}40`) cannot be used — color-mix resolves the var and
+      // fades it the same way.
       style={{
         'background-color': pc.tint,
-        'border-top': isEnter ? `1px solid ${pc.color}40` : 'none',
-        'border-bottom': !isEnter ? `1px solid ${pc.color}40` : 'none',
+        'border-top': isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
+        'border-bottom': !isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
         'min-height': '24px',
       }}
     >
@@ -143,9 +150,12 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       >
         {patternId}
       </span>
+      {/* Not in the pattern colour: a 60%-alpha tint of it was the one
+          timeline label that could not clear 4.5:1 on a light ground, and
+          the word is decorative direction, not identity (#1008 round 2). */}
       <span
         style={{
-          color: `${pc.color}99`,
+          color: 'var(--ui-text-tertiary)',
           'font-size': '9px',
           'font-family': '"Fira Code", ui-monospace, monospace',
         }}
@@ -216,7 +226,7 @@ export const EventRow = (props: {
 
       <Show when={type === 'decision_made'}>
         <span
-          text="xs ui-accent"
+          text="xs ui-accent-text"
           bg="ui-accent/10"
           p="x-1.5 y-0.5"
           rounded="sm"
@@ -292,6 +302,9 @@ export const ToolPairRow = (props: {
   // panel — otherwise the only way to learn a result was rewritten is to open
   // every one of them (SA-H10).
   const sanitized = () => resultData().sanitized
+  // The same theme-aware pair an unmerged tool_call / error row uses, so this
+  // label clears AA in both themes too (#1008 round 2).
+  const color = () => (success() ? eventColors.tool_call : eventColors.error)
 
   return (
     <div
@@ -321,12 +334,12 @@ export const ToolPairRow = (props: {
           <span
             class="i-material-symbols-build-outline"
             text="lg"
-            style={{ color: success() ? '#a78bfa' : '#ef4444' }}
+            style={{ color: color() }}
             aria-hidden="true"
           />
           <div
             style={{
-              color: success() ? '#a78bfa' : '#ef4444',
+              color: color(),
               'font-size': '11px',
               'font-family': '"Fira Code", ui-monospace, monospace',
               'font-weight': '500',

@@ -85,7 +85,7 @@ const NOT_GATED = [
  * These are the app's existing accessibility debt, already measured and written up
  * in `A11Y-CHECKLIST.md`. The gate's job is to stop the list GROWING; shrinking it
  * is UI work with its own review, and each entry below says why it has not had one
- * yet. Two entries have already left that way — see the note above `header-strip`.
+ * yet. Three entries have already left that way — see the note above `header-strip`.
  */
 const KNOWN_OPEN: Record<string, readonly string[]> = {
   // Present on all three surfaces in both themes, because all three are the same
@@ -97,10 +97,6 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   //    "the single most-violated rule in the codebase". Fixing it is a pass over
   //    the component tree with its own review; naming the buttons wrongly is worse
   //    than not naming them, so it is not a commit to smuggle in here.
-  //  - `color-contrast` (serious): `ui-text-tertiary` on the tier switch's own
-  //    labels. The checklist already records `dark-text-tertiary` (#71717a) as a
-  //    MUTED LABEL colour that fails as body copy — this is that judgement showing
-  //    up as a machine finding, and changing it is a palette decision.
   //
   // TWO ARE GONE, and how they left is the point of the equality. `document-title`
   // (the app rendered no `<title>` at all) and `label-title-only` (the composer was
@@ -111,12 +107,14 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   // list usually cannot fail in, and it is why this one is an equality.
   // `entry-server.tsx` and `ChatInput.tsx` carry the fixes and the reasoning.
   //
-  // #1008's sober palette took `color-contrast` off the dark header strip (its
-  // tertiary text is #848b93 on #0f1115, 4.7:1), so that line lost the rule —
-  // the equality made the deletion required, as above. The light strip and the
-  // other surfaces still fire it.
+  // A THIRD LEFT WITH #1008: `color-contrast` (serious), which was the palette
+  // decision recorded here — the tier switch's labels, then the selected tier's
+  // accent on its own tint (4.05:1 in light), the user bubble's timestamp
+  // (4.39:1 in dark) and the decision chip. The sober palette and its accent
+  // ink (`--ui-accent-text`) clear all of them, on every surface in both
+  // themes, so the equality made deleting it from every line required.
   'header-strip:dark': ['button-name'],
-  'header-strip:light': ['button-name', 'color-contrast'],
+  'header-strip:light': ['button-name'],
 
   // Plus, wherever a scrolling list is on screen:
   //  - `scrollable-region-focusable` (serious): the thread list and the transcript
@@ -124,10 +122,10 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   //    A `tabindex="0"` on a scroll container is a real fix with a real
   //    consequence for the tab order, which is `keyboard-nav` on the checklist and
   //    a thing a person has to try rather than a line to add.
-  'sidebar-with-rows:dark': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
-  'sidebar-with-rows:light': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
-  'chat-view:dark': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
-  'chat-view:light': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
+  'sidebar-with-rows:dark': ['button-name', 'scrollable-region-focusable'],
+  'sidebar-with-rows:light': ['button-name', 'scrollable-region-focusable'],
+  'chat-view:dark': ['button-name', 'scrollable-region-focusable'],
+  'chat-view:light': ['button-name', 'scrollable-region-focusable'],
 }
 
 for (const theme of THEMES) {

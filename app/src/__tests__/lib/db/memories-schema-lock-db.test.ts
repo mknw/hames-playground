@@ -85,6 +85,7 @@ describe('ensureMemoriesSchema against one database', () => {
 
   // `freshProcess()` calls are awaited in SEQUENCE: interleaved, both resolve to the
   // same module instance and the "race" is one initialiser.
+  // 2.1 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('two concurrent first boots on a database without the extension both end available', async () => {
     const a = await freshProcess()
     const b = await freshProcess()
@@ -92,8 +93,9 @@ describe('ensureMemoriesSchema against one database', () => {
     await Promise.all([a.memories.ensureMemoriesSchema(), b.memories.ensureMemoriesSchema()])
     expect(a.memories.isMemoryAvailable()).toBe(true)
     expect(b.memories.isMemoryAvailable()).toBe(true)
-  })
+  }, 15_000)
 
+  // 1.8 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('a lost CREATE EXTENSION race is not sticky: memory ends available', async () => {
     const proc = await freshProcess()
     await proc.client.query('SELECT 1') // main schema ready; the extension is still absent
@@ -118,8 +120,9 @@ describe('ensureMemoriesSchema against one database', () => {
     // A unique violation is a rejection the next call retries — never "no pgvector".
     await proc.memories.ensureMemoriesSchema()
     expect(proc.memories.isMemoryAvailable()).toBe(true)
-  })
+  }, 15_000)
 
+  // 1.7 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('waits for the schema lock instead of running past it', async () => {
     const holder = new pg.Client({ connectionString: target })
     await holder.connect()
@@ -136,7 +139,7 @@ describe('ensureMemoriesSchema against one database', () => {
       await holder.query('ROLLBACK').catch(() => undefined)
       await holder.end()
     }
-  })
+  }, 15_000)
 
   it('takes no table lock on a boot where the memory schema is current', async () => {
     const seed = await freshProcess()

@@ -113,6 +113,7 @@ describe('the harness-baml README compiles (guide-docs pin)', () => {
     }
     expect(failures).toEqual([])
     // Compiling the fences pulls the package's real source graph in — the
-    // default 5s test timeout is a cold-CI red, not a real failure.
-  }, 60_000)
+    // default 5s test timeout is a cold-CI red, not a real failure. It took
+    // 22.7 s under coverage at load 13-16 on 8 cores, of 60 s (#998).
+  }, 120_000)
 })

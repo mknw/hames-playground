@@ -798,7 +798,8 @@ describe('parseXml', () => {
   it(
     'tree mode refuses a part over the node budget; the walks without a tree do not',
     {
-      timeout: 30_000,
+      // 11.6 s under coverage at load 13-16 on 8 cores, of 30 s (#998).
+      timeout: 60_000,
     },
     () => {
       const n = XML_LIMITS.maxTreeNodes

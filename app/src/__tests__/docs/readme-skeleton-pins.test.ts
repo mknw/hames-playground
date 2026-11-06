@@ -245,7 +245,8 @@ describe('sandbox and connectors README fences compile', () => {
       expect(fences.length, `${file} has no typescript fence`).toBeGreaterThan(0)
     })
 
-    it(`${file}: every typescript fence compiles`, { timeout: 60_000 }, () => {
+    // Up to 21.4 s under coverage at load 13-16 on 8 cores, of 60 s (#998).
+    it(`${file}: every typescript fence compiles`, { timeout: 120_000 }, () => {
       const options: ts.CompilerOptions = {
         strict: true,
         target: ts.ScriptTarget.ESNext,

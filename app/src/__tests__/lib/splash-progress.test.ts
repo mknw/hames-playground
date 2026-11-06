@@ -27,6 +27,7 @@ import {
 beforeEach(resetSplashClock)
 
 describe('splashPercent', () => {
+  // 1.8 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('never reaches 100, at any elapsed time', () => {
     // Every 50 ms of the first two minutes, then the absurd end of the range —
     // a wait this long is a broken app, and the bar still must not claim done.
@@ -37,7 +38,7 @@ describe('splashPercent', () => {
     for (const t of [10 * 60_000, 60 * 60_000, Number.MAX_SAFE_INTEGER]) {
       expect(splashPercent(t)).toBeLessThan(100)
     }
-  })
+  }, 15_000)
 
   it('starts at a visible sliver rather than at zero width', () => {
     // The server-rendered frame is at elapsed 0, and a zero-width fill is

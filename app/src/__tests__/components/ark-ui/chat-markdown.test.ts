@@ -688,16 +688,16 @@ describe('renderAssistantMarkdown — unterminated link-shaped input is bounded'
   // The input is sparse on purpose (one `[` per 400 characters): the cost with
   // the cap is one bounded scan per `[`, the cost without it is one scan to the
   // end per `[`, so a large input with few asks keeps the capped cost tiny and
-  // the uncapped one huge. Measured on this machine, 2 MB / 5 000 asks: ~0.1 s
-  // capped, ~0.3 s capped under the v8 coverage run, ~15 s with the label cap
-  // removed. 1.5 s sits 5x above the slowest capped run and 10x below the
-  // uncapped one.
-  it('renders 2 MB of widely spaced unclosed labels in under 1.5 seconds', () => {
+  // the uncapped one huge. Measured, 2 MB / 5 000 asks: ~0.1 s capped, ~0.6 s
+  // capped under the v8 coverage run, 1.4 s capped under coverage on a host at
+  // load 13-16 on 8 cores, 27 s with the label cap removed. 5 s sits 3.6x above
+  // the loaded run and 5x below the uncapped one (#998; 1.5 s left 1.07x).
+  it('renders 2 MB of widely spaced unclosed labels in under 5 seconds', () => {
     const md = `${'a'.repeat(399)}[`.repeat(5_000)
     const t0 = performance.now()
     marked.parse(md, { async: false })
 
-    expect(performance.now() - t0).toBeLessThan(1_500)
+    expect(performance.now() - t0).toBeLessThan(5_000)
   }, 120_000)
 })
 

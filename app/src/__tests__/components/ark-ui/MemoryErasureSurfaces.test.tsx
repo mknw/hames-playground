@@ -72,6 +72,7 @@ beforeEach(() => {
 })
 
 describe('Forget everything', () => {
+  // 1.9 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('removes the card, the dialog and the inbox badge without a reload or a timer', async () => {
     render(() => (
       <>
@@ -98,7 +99,7 @@ describe('Forget everything', () => {
       expect(q('hitl-inbox-trigger')).toBeNull()
     })
     expect(document.body.textContent).not.toContain('ERASE-ME-TEXT')
-  })
+  }, 15_000)
 
   // A partial failure leaves memory OFF: the surfaces still clear.
   it('clears them on a failed erase too (memory may already be off)', async () => {

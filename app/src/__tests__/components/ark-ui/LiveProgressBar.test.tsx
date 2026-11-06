@@ -255,6 +255,7 @@ describe('LiveProgressBar — the cold-start notice', () => {
     expect(shell(container)).toBe(beforeShell)
   })
 
+  // 2.7 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('counts the estimate down against the browser’s own clock', async () => {
     const [now, setNow] = createSignal(1_000_000)
     const { container } = render(() => (
@@ -274,7 +275,7 @@ describe('LiveProgressBar — the cold-start notice', () => {
     const text = coldNotice(container)!.textContent!
     expect(text).toContain('longer than the usual ~2 min')
     expect(text).not.toContain('~0 sec')
-  })
+  }, 15_000)
 
   it('announces one complete phrase, and hides the ticking figure from it', async () => {
     const { container } = render(() => (

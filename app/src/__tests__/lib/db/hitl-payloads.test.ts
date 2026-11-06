@@ -95,6 +95,7 @@ describe('N8 durable tool sends', () => {
 
   // N8-03. MUTATION: keep the started claim in process memory instead of the
   // database → a second Node process reports new and could send twice.
+  // 12.9 s under coverage at load 13-16 on 8 cores, of 30 s (#998).
   it('a fresh process sees the committed started claim as outcome unknown', async () => {
     const key = {
       userId: 'alice',
@@ -119,7 +120,7 @@ describe('N8 durable tool sends', () => {
       timeout: 30_000,
     })
     expect(JSON.parse(output.split('N8_PROBE:')[1].split('\n')[0])).toEqual({ status: 'unknown' })
-  }, 30_000)
+  }, 60_000)
 })
 
 describe('N8 owner-scoped batch plans', () => {

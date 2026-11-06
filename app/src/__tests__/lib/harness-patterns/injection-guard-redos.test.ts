@@ -39,9 +39,13 @@
  *
  * `TOTAL_BUDGET_MS` is deliberately a HARD ceiling on the whole grid, not a
  * per-case one: the threat is a hostile page burning the single-threaded event
- * loop, so what matters is the sum of everything one page can trigger. 2s over
- * the full cross product leaves ~15x headroom on the measured ~135ms, so it fails
- * on a real regression and not on a loaded CI box.
+ * loop, so what matters is the sum of everything one page can trigger. 2.5s over
+ * the full cross product is 3.2x the ~790ms it measures under v8 coverage (as CI
+ * and release:check run it) at load 13-16 on 8 cores (~270ms idle, ~480ms idle
+ * under coverage), so it fails on a real regression and not on a loaded CI box
+ * (#998). Restoring the `[ \t]*` runs in `instruction-turn-spoof` aborts the
+ * grid at 12.5k (~240ms against that size's 200ms), or, on a host fast enough
+ * to pass that, at 50k, where its two cells cost 16x their 108ms at 12.5k.
  *
  * ## The instrument: CPU time, and the MINIMUM of a few passes
  *
@@ -110,16 +114,17 @@ const N = SIZES[SIZES.length - 1]
 
 /** Hard ceiling for the ENTIRE grid at the LARGEST size, in CPU milliseconds
  *  (see the header for why not wall clock). */
-const TOTAL_BUDGET_MS = 2_000
+const TOTAL_BUDGET_MS = 2_500
 
 /**
  * Budget for one size's pass, in CPU milliseconds. Legitimate cost is linear in
  * the input, so a linear corpus scales with `n`; a quadratic rule scales with
  * `n²` and blows a proportional budget at every size — including the cheap first
  * one, which is the point. The floor keeps the smallest size from being flaky on
- * a loaded box.
+ * a loaded box: 200ms is 3.6x the 56ms the 12.5k pass measures under v8 coverage
+ * at load 13-16 on 8 cores (#998).
  */
-const sizeBudgetMs = (n: number): number => Math.max(150, (TOTAL_BUDGET_MS * n) / N)
+const sizeBudgetMs = (n: number): number => Math.max(200, (TOTAL_BUDGET_MS * n) / N)
 
 /**
  * The input that stresses each rule's OWN quantifiers — its trigger, repeated.
@@ -389,9 +394,10 @@ describe('ReDoS: the corpus is bounded by test, not by claim', () => {
   it('no single rule/shape cell is pathological on its own', () => {
     // A total-only budget could be met while one rule ate most of it. The
     // measured worst legitimate cell is ~70ms of CPU (`exfil-auto-image`, many
-    // cheap bounded matches — linear, not backtracking), so 500ms is generous
-    // slack that still catches a quadratic rule long before it hangs a request.
-    const offenders = cells.filter((c) => c.ms >= 500)
+    // cheap bounded matches — linear, not backtracking), 232ms under v8
+    // coverage at load 13-16 on 8 cores, so 750ms (3.2x, #998) still catches a
+    // quadratic rule long before it hangs a request.
+    const offenders = cells.filter((c) => c.ms >= 750)
     expect(
       offenders.map((c) => `${c.rule} [${c.shape}] ${c.ms.toFixed(0)}ms`),
       'a cell this slow is quadratic, not merely busy',

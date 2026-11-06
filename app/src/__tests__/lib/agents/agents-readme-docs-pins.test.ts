@@ -76,7 +76,8 @@ describe('the @hames-ai/agents README compiles (guide-docs pin)', () => {
   // 60s, not the 5s default: the fences compile against three packages'
   // sources on CI runners — the same budget the baml README pin got for the
   // same reason (PR-1b's "README pin gets a 60s budget").
-  it('every typescript fence compiles against the package source', { timeout: 60_000 }, () => {
+  // 22.3 s under coverage at load 13-16 on 8 cores, of 60 s (#998).
+  it('every typescript fence compiles against the package source', { timeout: 120_000 }, () => {
     const options: ts.CompilerOptions = {
       strict: true,
       target: ts.ScriptTarget.ESNext,

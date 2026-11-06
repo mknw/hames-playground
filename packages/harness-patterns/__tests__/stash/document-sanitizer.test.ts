@@ -986,7 +986,7 @@ describe('#475 F1 [SD-2]: link flattening is linear on its own openers', () => {
     ['[', '['.repeat(1024 * 1024)],
   ]
   for (const [label, body] of bodies) {
-    it(`1 MiB of "${label}" flattens in under 1 s`, async () => {
+    it(`1 MiB of "${label}" flattens in under 1.5 s`, async () => {
       // CPU time, minimum of 3 passes, as in injection-guard-redos.test.ts:
       // interference only ever lengthens a measurement (#482 review).
       let best = Infinity
@@ -996,8 +996,11 @@ describe('#475 F1 [SD-2]: link flattening is linear on its own openers', () => {
         const d = process.cpuUsage(c)
         best = Math.min(best, (d.user + d.system) / 1000)
       }
-      expect(best).toBeLessThan(1000)
-    })
+      // Measured (#998): 0.39 s idle, 0.60 s under coverage at load 13-16 on
+      // 8 cores, 3.8 s with either class restored. 1.5 s splits the two; the
+      // per-class pin below holds those mutants 33x over its own budget.
+      expect(best).toBeLessThan(1500)
+    }, 30_000)
   }
 
   it('the openers still pair as before on ordinary markdown', async () => {
@@ -1070,6 +1073,7 @@ describe('#475 F2: the package parts are capped before they are parsed', () => {
    * BEFORE any parse, and the parse that follows builds no tree (`scanXml`).
    * MUTATION: drop the cap → red.
    */
+  // 1.7 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('a [Content_Types].xml of 1 MiB + 1 byte is refused with content-type', async () => {
     const bytes = docx(part(CT_HEAD, '</Types>', MiB + 1), small(RELS_HEAD, '</Relationships>'))
     expect(
@@ -1080,8 +1084,9 @@ describe('#475 F2: the package parts are capped before they are parsed', () => {
         ),
       ),
     ).toBe('content-type')
-  })
+  }, 30_000)
 
+  // 1.9 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('a _rels/.rels of 1 MiB + 1 byte is refused with content-type', async () => {
     const bytes = docx(small(CT_HEAD, '</Types>'), part(RELS_HEAD, '</Relationships>', MiB + 1))
     expect(
@@ -1092,8 +1097,10 @@ describe('#475 F2: the package parts are capped before they are parsed', () => {
         ),
       ),
     ).toBe('content-type')
-  })
+  }, 30_000)
 
+  // 6.6 s under coverage at load 13-16 on 8 cores: it timed out at the 5 s
+  // default (#998).
   it('parts of exactly 1 MiB are accepted', async () => {
     const bytes = docx(part(CT_HEAD, '</Types>', MiB), part(RELS_HEAD, '</Relationships>', MiB))
     expect(
@@ -1104,7 +1111,7 @@ describe('#475 F2: the package parts are capped before they are parsed', () => {
         ),
       ),
     ).toBe('accepted')
-  })
+  }, 30_000)
 
   const CT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
   const MAIN_OVERRIDE = `<Override PartName="/word/document.xml" ContentType="${MAIN_TYPES.docx}"/>`

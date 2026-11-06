@@ -349,6 +349,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
         expect(missing).toEqual([])
       })
 
+      // 4.9 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
       it('(d) every bare import in a packed .ts is declared in the packed manifest', () => {
         const declared = new Set(
           Object.keys({
@@ -376,7 +377,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
             "consumer's tsc (TS2307) — these packages ship raw TypeScript, so the " +
             "consumer compiles the imports' FILES, not the workspace's node_modules",
         ).toEqual([])
-      })
+      }, 30_000)
     })
   }
 })

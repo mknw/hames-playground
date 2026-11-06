@@ -1433,11 +1433,12 @@ describe('Z2: a notes slide cannot bring a hidden slide back', () => {
 })
 
 describe('the output reopens through the reader that refused the input', () => {
+  // 3.5 s on a host at load 13-16 on 8 cores, of a 5 s default (#998).
   it('a part too repetitive to deflate under 100:1 is stored', async () => {
     const body = para('VISIBLE') + '<w:p/>'.repeat(200_000)
     const out = await ooxmlDisarm(docx({ body, stored: true }), MIME.docx)
     expect(everything(out.bytes)).toContain('VISIBLE')
-  })
+  }, 15_000)
 
   it(
     'a part the rewrite would take past 20 MiB is refused, not written',
@@ -3257,7 +3258,8 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
       }
       expect(await growth(doc)).toBeLessThan(6)
     },
-    120_000,
+    // Up to 90 s on a host at load 13-16 on 8 cores, of 120 s (#998).
+    300_000,
   )
   it('by type, when the run’s own type has n placeholders that lack its level', async () => {
     // A per-type bucket scanned for the first entry with the run's level —

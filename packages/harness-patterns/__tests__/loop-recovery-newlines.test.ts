@@ -54,6 +54,29 @@ describe('the classifier matches the signature', () => {
     expect(fix).toContain('triple quotes')
   })
 
+  // Fix round 1, term 3 (coordinator): the REAL incident ran its Python
+  // through a heredoc — `python3 - <<'PY'` reads the script from stdin, so the
+  // body IS the code, and the mask that silenced it now keeps such a body.
+  // Mutation: treat every heredoc body as masked (drop the `python` branch in
+  // `maskHeredocBodies`) → this and the unquoted-delimiter positive go red.
+  it('a heredoc-fed Python script with the bug matches — the incident shape', () => {
+    expect(
+      unterminatedStringFeedback(
+        { command: "python3 - <<'PY'\nrows = ['a', 'b']\ntext = '\n'.join(rows)\nprint(text)\nPY" },
+        REAL_ERROR,
+      ),
+    ).toContain(FIX)
+  })
+
+  it('the same through an unquoted delimiter and flags before the `-`', () => {
+    expect(
+      unterminatedStringFeedback(
+        { command: "python3 -I - <<PY\ntext = '\n'.join(rows)\nPY" },
+        REAL_ERROR,
+      ),
+    ).toContain(FIX)
+  })
+
   it('a match survives an apostrophe in an earlier double-quoted string', () => {
     // `print("it's here")` closes its string on the line; the OPEN literal on a
     // later line is still the signature.
@@ -102,6 +125,35 @@ describe('the classifier refuses everything else', () => {
     expect(
       unterminatedStringFeedback(
         { code: 'banner = """dear reader,\nstay a while"""\nprint(banner)' },
+        REAL_ERROR,
+      ),
+    ).toBeUndefined()
+  })
+
+  // Mutation: make `heredocFeedsPython` return true unconditionally (every
+  // body scanned as code) → the legitimate-content heredocs above AND the
+  // two below go red.
+  it('a heredoc whose body is DATA — a script-file argument, `-c` — stays masked', () => {
+    expect(
+      unterminatedStringFeedback(
+        { command: "python3 run.py <<EOF\ndon't stop reading\nEOF" },
+        REAL_ERROR,
+      ),
+    ).toBeUndefined()
+    expect(
+      unterminatedStringFeedback(
+        { command: "python3 -c 'print(1)' <<EOF\ndon't stop reading\nEOF" },
+        REAL_ERROR,
+      ),
+    ).toBeUndefined()
+  })
+
+  it('a heredoc-fed Python script whose multi-line strings are triple-quoted', () => {
+    expect(
+      unterminatedStringFeedback(
+        {
+          command: "python3 - <<'PY'\nbanner = '''dear reader,\nstay a while'''\nprint(banner)\nPY",
+        },
         REAL_ERROR,
       ),
     ).toBeUndefined()

@@ -526,18 +526,19 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
     omitResultFields(result?.result, p.resultOmit?.[action.tool_name]),
   )
   const expansions = expansionsOf(call, p)
+  // A recovery's `feedback` is what the live run put in the turn log for this
+  // round (#1018: the newline-escape fix appended to a tool error), so a
+  // resume rebuilds the SAME entry from it instead of the bare error. Both
+  // paths bound at maxResultChars (#440): the decorated error is error + fix,
+  // and an unbounded one would fill every later controller prompt.
+  const loggedError = recovery?.feedback ?? result?.error ?? null
   return {
     ...head,
     tool_result: {
       tool: action.tool_name,
       result: truncateTo(resultStr, p.maxResultChars),
       success: result?.success ?? false,
-      // A recovery's `feedback` is what the live run put in the turn log for
-      // this round (#1018: the newline-escape fix appended to a tool error),
-      // so a resume rebuilds the SAME entry from it instead of the bare error.
-      error:
-        recovery?.feedback ??
-        (result?.error == null ? null : truncateTo(result.error, p.maxResultChars)),
+      error: loggedError == null ? null : truncateTo(loggedError, p.maxResultChars),
     },
     ...(expansions.length > 0 ? { expansions } : {}),
   }

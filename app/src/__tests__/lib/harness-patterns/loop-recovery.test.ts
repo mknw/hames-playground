@@ -331,6 +331,27 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     expect(input.turns[0].tool_result?.error).toContain('escape the backslash')
   })
 
+  // Fix round 1, term 1 (review): the DECORATED error is bounded at
+  // maxResultChars exactly like the bare error it replaces (#440) — the
+  // default is 8000, so a matching failure with a long stderr must not ride
+  // into every later controller prompt unbounded. Mutation: return the
+  // feedback untruncated from `projectRound` → red.
+  it('the decorated error is truncated at maxResultChars like the bare error', async () => {
+    const longError = `${SYNTAX_ERROR}\n${'e'.repeat(20_000)}`
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: longError })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch(JSON.stringify({ code: "text = '\n'.join(rows)" })))
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    await loop(controller)
+
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns[0]
+    expect(seen.tool_result?.error).toContain('unterminated string literal')
+    expect(seen.tool_result?.error).toMatch(/…\[truncated\]$/)
+    expect(seen.tool_result?.error!.length).toBeLessThanOrEqual(8000 + '…[truncated]'.length)
+  })
+
   // Mutation: return the fix on EVERY failed tool call (drop the argument
   // scan in `unterminatedStringFeedback`) → this goes red, alongside the
   // exact-shape 'row limit' recovery test above.

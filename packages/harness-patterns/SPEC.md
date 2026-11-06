@@ -824,10 +824,16 @@ that should genuinely span lines need triple quotes — to what the next round
 reads: the projected turn log (`simpleLoop`, including a released held call's
 re-dispatch), the attempt log (`actorCritic`), and the recovery's `feedback`,
 so a resume replays the same entry. The committed `tool_result` event keeps the
-error verbatim. Triple-quoted spans, heredoc bodies and `#` comments are
-masked before the scan, so legitimate multi-line strings and heredoc prose
-never match, and neither do the multi-line spellings of the failure
-(`unterminated triple-quoted string literal`, `EOF in multi-line string`).
+error verbatim. Triple-quoted spans and `#` comments are masked before the
+scan, so a legitimate multi-line string never matches, and neither do the
+multi-line spellings of the failure (`unterminated triple-quoted string
+literal`, `EOF in multi-line string`). Heredocs split by what feeds them
+(fix round 1): the body of a heredoc NOT fed to Python (`cat > notes.txt
+<<'EOF'`) is masked — its lines are literal content, and quotes in them are
+text — while a heredoc FED to Python (`python3 - <<'PY'`, the shape the real
+incident ran) has its body kept and scanned like any other code, since the
+interpreter reads the script from stdin; a script-file argument or `-c` after
+the interpreter token makes the body data again, and it is masked.
 
 What stays **fatal**, deliberately:
 

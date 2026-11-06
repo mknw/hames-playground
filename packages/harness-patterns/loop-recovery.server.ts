@@ -241,11 +241,14 @@ export function trackLoopRecovery(
 //     legal Python, and the triple-quoted spellings of the failure
 //     ("unterminated triple-quoted string literal", "EOF in multi-line
 //     string") do not match the error regex either.
-//   - Heredoc bodies (`<<'EOF'` … terminator line) are masked too: their
-//     lines are literal content, not code, and quotes in them (an apostrophe
-//     in prose, most commonly) are text. The mask can HIDE the signature when
-//     the script itself travels inside a heredoc — the classifier then stays
-//     silent, which is the pre-#1018 behaviour, not a new failure.
+//   - The body of a heredoc NOT fed to Python (`cat > notes.txt <<'EOF'` …)
+//     is masked: its lines are literal content, and quotes in them (an
+//     apostrophe in prose, most commonly) are text. A heredoc FED to Python —
+//     `python3 - <<'PY'`, the shape the real incident ran — is the opposite:
+//     its body IS the script, so it is kept and scanned like any other code,
+//     with the same triple-quote masking. Anything after the interpreter
+//     token beyond flags (a script-file argument, `-c`) makes the body data
+//     again, and it is masked.
 //   - Everything else errs toward advice the model does not need — but only
 //     on a round that ALREADY failed with the matching error, so a false
 //     positive costs one redundant sentence, never a different route.
@@ -277,23 +280,44 @@ function* stringValuesOf(value: unknown): Generator<string> {
   }
 }
 
-/** Blank out heredoc BODY lines: from the line after a `<<[-]DELIM` start to
- *  the line that is DELIM alone (`<<-` allows leading whitespace before it).
- *  The start and terminator lines are kept — they are code. */
+/** Does this text BEFORE a heredoc's `<<` feed the heredoc to Python, so its
+ *  body is the script itself? `python3 -` and a bare `python3` read the script
+ *  from stdin, so flags only — including the `-` that names stdin — still make
+ *  the body code. A script-file argument or `-c` means the body is DATA the
+ *  interpreter reads, and it is masked like any other heredoc body. */
+function heredocFeedsPython(head: string): boolean {
+  const m = /(?:^|[\s/])python3?(?![\w-])\s*([^\n]*)$/.exec(head)
+  if (!m) return false
+  const rest = m[1].trim()
+  return rest === '' || rest.split(/\s+/).every((token) => token.startsWith('-'))
+}
+
+/** Blank out heredoc BODY lines — from the line after a `<<[-]DELIM` start to
+ *  the line that is DELIM alone (`<<-` allows leading whitespace before it) —
+ *  EXCEPT when the heredoc is fed to Python ({@link heredocFeedsPython}): its
+ *  body IS the script, so those lines are kept and scanned like any other
+ *  code. The start and terminator lines are always kept — they are code. */
 function maskHeredocBodies(text: string): string {
   const out: string[] = []
   let delim: string | undefined
+  let python = false
   for (const line of text.split('\n')) {
     if (delim !== undefined) {
       if (line.trim() === delim) {
         delim = undefined
+        python = false
+        out.push(line)
+      } else if (python) {
         out.push(line)
       }
       continue
     }
     const start = /<<-?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line)
     out.push(line)
-    if (start) delim = start[2]
+    if (start) {
+      delim = start[2]
+      python = heredocFeedsPython(line.slice(0, start.index))
+    }
   }
   return out.join('\n')
 }

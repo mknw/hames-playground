@@ -54,7 +54,9 @@ export async function takeEgressAttempts(): Promise<EgressAttempt[]> {
     throw new Error('e2e hermetic egress backstop was not started')
   }
   return new Promise((resolve, reject) => {
-    get(`${url}/record`, (res) => {
+    // A synchronous fresh-host subprocess can outlive an idle pooled socket.
+    // Open a fresh control connection, so a queued FIN cannot break the drain.
+    get(`${url}/record`, { agent: false }, (res) => {
       let body = ''
       res.setEncoding('utf8')
       res.on('data', (chunk: string) => (body += chunk))

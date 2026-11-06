@@ -24,8 +24,10 @@
  * self-describes its `type` and owns its query transform — a `vector` backend
  * embeds internally (local) or sends text for server-side embedding (Supabase).
  *
- * Query source: the previous pattern's compacted `scope.data.intent` if present,
- * else the last user message; optionally widened with the last-N user turns.
+ * Query source: a compacted `scope.data.intent` if present — the resolved
+ * intent `compactIntent` or a `decisionLoop` handed in (#1006), already a
+ * standalone instruction, so the rewrite below is skipped — else the last user
+ * message, optionally rewritten by `generateQuery` when history exists.
  * The matches are written to `scope.data.matches` AND emitted as a `tool_result`
  * event so the compactExecution consumes them via `view.fromLastPattern()`.
  */
@@ -283,10 +285,16 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       const lastUser = [...msgs].reverse().find((e) => e.type === 'user_message')
       const latest = lastUser ? (lastUser.data as UserMessageEventData).content : ''
 
-      let text = latest
+      // A compacted `data.intent` handed in by an upstream pattern (#1006) IS
+      // the query: `compactIntent` under a chain, or `decisionLoop` threading
+      // the turn's resolved intent, already resolved this turn's back-references
+      // into a standalone instruction, so the rewrite below is skipped. Absent
+      // or empty, today's ladder applies in full.
+      const handedIntent = ((scope.data as RetrieverData).intent ?? '').trim()
+      let text = handedIntent || latest
       let llmCall: LLMCallData | undefined
 
-      if (latest && generateQuery) {
+      if (!handedIntent && latest && generateQuery) {
         const rawHistory = msgs
           .filter((e) => e !== lastUser)
           .map((e) => ({

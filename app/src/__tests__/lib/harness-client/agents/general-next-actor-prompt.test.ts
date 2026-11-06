@@ -382,3 +382,27 @@ it.each([0, 1])(
     expect(unavailableRendered[wire]).toContain('Run code for computations.')
   },
 )
+
+// #1006: on a turn with a resolved intent the brief is the actor's task, and the
+// user's own latest message is rendered beside it in the same task frame, so a
+// brief that drifted from what the user asked has to contradict the user's
+// words in the prompt the actor reads. MUTATIONS: pass `userMessage: task` in
+// actorCritic.server.ts, or delete the `USER REQUEST:` line from
+// `ActorTaskFrame` in actorCritic.baml (and regenerate) — red on both wires.
+it('#1006: the actor’s task frame renders the user’s latest message beside the resolved intent', async () => {
+  const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
+  const patterns = await generalNextAgent.createPatterns('intent-session', deps)
+  const actor = walk(patterns).find((p) => p.name === 'actorCritic')!
+  // The beforeAll's spy is still in place and, after its second run, renders
+  // into `unavailableRendered`: read only what this run adds.
+  const before = unavailableRendered.length
+  await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+    harness(actor)('USER-WORDS-SENTINEL', 'intent-session', { intent: 'BRIEF-SENTINEL' }),
+  )
+  const bodies = unavailableRendered.slice(before)
+  expect(bodies).toHaveLength(2)
+  for (const body of bodies) {
+    expect(body).toContain('USER INTENT: BRIEF-SENTINEL')
+    expect(body).toContain('USER REQUEST: USER-WORDS-SENTINEL')
+  }
+})

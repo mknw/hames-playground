@@ -82,7 +82,11 @@ const sectionSummary = (questions: UseCaseQuestion[]): string => {
  *  The word is the accessible content, the colour only reinforces it. The
  *  branches are sibling `Show`s inside one returned element (exactly one
  *  matches; no early returns: Solid components run once, and an early
- *  return reads as one). */
+ *  return reads as one).
+ *
+ *  Status glyphs sit at w-6 (1.5rem), not the page's default w-5 (#1008):
+ *  a 20px glyph beside 16px badge text read as a footnote rather than a
+ *  status, and 24px is the badge's own line box. */
 const ResultBadge = (props: { result: UseCaseResult }) => (
   <>
     <Show when={props.result === 'works'}>
@@ -94,7 +98,7 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
         text="base ui-success"
         font="medium"
       >
-        <span class="i-material-symbols-task-alt" w="5" h="5" aria-hidden="true" />
+        <span class="i-material-symbols-task-alt" w="6" h="6" aria-hidden="true" />
         Tested
       </span>
     </Show>
@@ -107,7 +111,7 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
         text="base ui-danger"
         font="medium"
       >
-        <span class="i-material-symbols-error" w="5" h="5" aria-hidden="true" />
+        <span class="i-material-symbols-error" w="6" h="6" aria-hidden="true" />
         Not yet reliable
       </span>
     </Show>
@@ -120,7 +124,7 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
         text="base ui-accent"
         font="medium"
       >
-        <span class="i-material-symbols-schedule" w="5" h="5" aria-hidden="true" />
+        <span class="i-material-symbols-schedule" w="6" h="6" aria-hidden="true" />
         Coming soon
       </span>
     </Show>
@@ -135,7 +139,7 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
         text="base ui-text-secondary"
         font="medium"
       >
-        <span class="i-material-symbols-pending" w="5" h="5" aria-hidden="true" />
+        <span class="i-material-symbols-pending" w="6" h="6" aria-hidden="true" />
         Not tested yet
       </span>
     </Show>

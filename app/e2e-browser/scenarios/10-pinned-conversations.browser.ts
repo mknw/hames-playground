@@ -17,7 +17,7 @@
  * question the user is asking when they pin one.
  */
 import { test, expect } from '../lib/fixtures'
-import { open, send, waitForReplies, userBubbles } from '../lib/chat'
+import { newChat, open, send, waitForReplies, userBubbles } from '../lib/chat'
 import { expectGlyphRenders } from '../lib/visible'
 
 const FIRST = 'what is the oldest conversation about'
@@ -48,9 +48,13 @@ test('a pinned conversation leads the sidebar, reads as pinned without hover, an
   // Two conversations, oldest first. Each is one persisted row.
   await send(page, FIRST)
   await waitForReplies(page, 1)
-  await page.getByRole('button', { name: 'New chat' }).click()
+  // `newChat` waits until the new chat is the one on screen. A bare click let
+  // SECOND go to the first conversation (see the helper).
+  await newChat(page)
   await send(page, SECOND)
   await waitForReplies(page, 1)
+  // A pin toggle exists only on a PERSISTED row (the optimistic "new chat" row
+  // has none), so this count is also the wait for the second row to land.
   await expect(pins(page)).toHaveCount(2)
 
   // The "before": newest-created leads, and nothing is pinned.

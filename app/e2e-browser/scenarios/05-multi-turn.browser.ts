@@ -54,10 +54,17 @@ test('three turns all stay visible, in order', async ({ page, appUrl, backend })
   // appended all three answers after all three questions would pass every
   // count above and fail here.
   const order = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-role="user"], [data-role="assistant"]')]
+    // The welcome bubble and the progress row are both assistant-shaped. The
+    // welcome is chrome and falls outside the last six. The progress row is
+    // stamped `data-progress` and is excluded here, as `assistantBubbles` does.
+    // Until 2026-11-06 it was not: on a loaded host the row was still painted
+    // when this ran and read as a seventh, trailing `assistant`.
+    [
+      ...document.querySelectorAll(
+        '[data-role="user"], [data-role="assistant"]:not([data-progress])',
+      ),
+    ]
       .map((node) => node.getAttribute('data-role'))
-      // The welcome bubble and the progress row are both assistant-shaped; the
-      // first is chrome and the second is stamped `data-progress`.
       .filter((_, index, all) => all.length - index <= 6),
   )
   expect(order).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant'])

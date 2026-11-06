@@ -158,9 +158,23 @@ async function clickTier(page: Page, tier: Tier): Promise<void> {
   await tierOption(page, label).click()
 }
 
-/** Start a fresh conversation, the way a user does. */
+/**
+ * Start a fresh conversation, the way a user does, and wait until it is the one
+ * on screen.
+ *
+ * The click is not the switch. "+ New Chat" puts the new id in the URL through
+ * a router navigation, and the router holds the outgoing view until that
+ * navigation settles. On a slow server that took over a second. The composer is
+ * enabled the whole time, so a message typed after the click went to the OLD
+ * conversation. Scenario 10 hit this on 2026-11-06: its second question was
+ * POSTed with the first chat's session id, and the new chat never got a row. An
+ * empty transcript is the evidence the new conversation is displayed, because
+ * the transcript and the send both read the same selected session.
+ */
 export async function newChat(page: Page): Promise<void> {
   await page.getByRole('button', { name: '+ New Chat' }).click()
+  await expect(userBubbles(page)).toHaveCount(0)
+  await expect(replies(page)).toHaveCount(0)
   await expect(composer(page)).toBeEnabled()
 }
 

@@ -40,13 +40,19 @@
  * - **The lowest of three passes.** A GC pause or a busy core can only make a
  *   pass slower. A super-linear step is slow on every pass, so taking the
  *   lowest does not hide it.
- * - **A fixed budget per call, with wide margins on both sides.** At the
- *   bound the budget is 25 ms. The fixed code costs ~1 ms there, and the old
- *   code ~35 ms to ~300 ms (and ~0.5 s for the cubic shape at 2k). Past the
- *   bound the budget scales with the size, up to 250 ms at 200k, against
- *   well under a millisecond for the refusal. There is no linearity-ratio
- *   assertion, because the fixed code's figures are too small to divide
- *   reliably.
+ * - **A fixed budget per call, between the fixed code and the old (#998).**
+ *   At the bound the budget is 25 ms. The fixed code costs 1-2 ms there on an
+ *   idle host, ~5x that under v8 coverage (as CI and release:check run it),
+ *   and up to 17 ms under coverage at load 13-16 on 8 cores. The old code
+ *   costs ~35 ms to ~300 ms there (115-390 ms measured on 2026-11-06), and
+ *   ~0.5 s for the cubic shape at 2k (1.6 s), so 3x the loaded run would sit
+ *   above its cheapest shape. The nested literal costs the fixed code the
+ *   most (10 ms idle, 31 ms loaded: a false red at 25 ms), so its case raises
+ *   its floor to 100 ms, against 568 ms for the old code, which also throws
+ *   there. Past the bound the budget scales with the size, up to 250 ms at
+ *   200k, against well under a millisecond for the refusal. There is no
+ *   linearity-ratio assertion, because the fixed code's figures are too small
+ *   to divide reliably.
  * - **Escalating sizes**, with the budget scaled to the size. A super-linear
  *   step goes over an early budget within a second or two of CPU, and the
  *   failed `expect` ends that case there. The test therefore names the slow
@@ -71,8 +77,12 @@ const OVER_SIZES = [65_536, 200_000]
 /** CPU budget for ONE call at the largest size, in milliseconds. */
 const BUDGET_MS = 250
 
+/** The smallest budget at any size, in milliseconds. See the header. */
+const FLOOR_MS = 25
+
 /** The budget scaled to `n`, with a floor so the smallest size cannot flake. */
-const budgetMs = (n: number): number => Math.max(25, (BUDGET_MS * n) / 200_000)
+const budgetMs = (n: number, floorMs = FLOOR_MS): number =>
+  Math.max(floorMs, (BUDGET_MS * n) / 200_000)
 
 const REPEATS = 3
 
@@ -135,6 +145,8 @@ type Case = {
   shape: string
   input: (n: number) => string
   expected: (n: number) => Outcome
+  /** A higher floor for a shape whose fixed cost needs one (#998). */
+  floorMs?: number
 }
 
 function pin(cases: Case[], sizes: number[]): void {
@@ -143,14 +155,15 @@ function pin(cases: Case[], sizes: number[]): void {
   // failure on a slow runner instead of a bare timeout.
   it.each(cases)(
     '$shape',
-    ({ input, expected }) => {
+    ({ input, expected, floorMs }) => {
       for (const n of sizes) {
         const text = input(n)
         const { ms, outcome } = measure(text)
+        const budget = budgetMs(n, floorMs)
         expect(
           ms,
-          `n=${text.length}: ${ms.toFixed(1)} ms CPU, budget ${budgetMs(n).toFixed(0)} ms (lowest of ${REPEATS})`,
-        ).toBeLessThan(budgetMs(n))
+          `n=${text.length}: ${ms.toFixed(1)} ms CPU, budget ${budget.toFixed(0)} ms (lowest of ${REPEATS})`,
+        ).toBeLessThan(budget)
         expect(canon(outcome), `n=${text.length}: outcome`).toBe(canon(expected(n)))
       }
     },
@@ -224,6 +237,10 @@ const SCANNER_CASES: Case[] = [
       for (let k = 0; k < nestedDepth(n); k++) value = [value]
       return { q: value }
     },
+    // The costliest shape for the fixed code: 10 ms of CPU at the bound idle,
+    // 31 ms loaded under coverage. 100 ms is 3x that, under the pre-#463 code's
+    // 568 ms (#998).
+    floorMs: 100,
   },
   {
     // Path 3: each nested literal is refused, because its innermost value
@@ -252,15 +269,16 @@ describe('json-repair: the #463 scanner shapes are linear', () => {
 describe('json-repair: every shape past the bound is refused at once', () => {
   it.each([...REGEX_CASES, ...SCANNER_CASES])(
     '$shape',
-    ({ input }) => {
+    ({ input, floorMs }) => {
       for (const n of OVER_SIZES) {
         const text = input(n)
         expect(text.length).toBeGreaterThan(CHAIN_MAX)
         const { ms } = measure(text)
+        const budget = budgetMs(n, floorMs)
         expect(
           ms,
-          `n=${text.length}: ${ms.toFixed(1)} ms CPU, budget ${budgetMs(n).toFixed(0)} ms (lowest of ${REPEATS})`,
-        ).toBeLessThan(budgetMs(n))
+          `n=${text.length}: ${ms.toFixed(1)} ms CPU, budget ${budget.toFixed(0)} ms (lowest of ${REPEATS})`,
+        ).toBeLessThan(budget)
         expect(() => repairJson(text), `n=${text.length}`).toThrow(/too long to repair/)
       }
     },

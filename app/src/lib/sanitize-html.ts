@@ -235,6 +235,31 @@ function isAllowedImageSource(src: string): boolean {
     url.searchParams.has('download')
   )
 }
+/**
+ * Whether a refused image's source is still a TRUSTED shape: resolved the way
+ * the browser would resolve it ({@link isAllowedImageSource}'s discipline), the
+ * app's own origin AND the stash document route — the shape that function
+ * already allows, minus whatever got this one refused (today always the
+ * missing `download` param; the pathname test is the shape, not the param).
+ *
+ * Scope of the blocked-image open path, judged narrow on purpose (#901, owner
+ * ruling 2026-11-04, issue #901 comment 6618793027): "trusted sources" is read
+ * as the source SHAPE the sanitizer already trusts — never "own origin at
+ * large" (a same-origin side-effecting route such as `/api/auth/logout` keeps
+ * its inert placeholder; the auto-load refusal exists because this app had
+ * such routes, and a model-suggested one is still a model-suggested GET) and
+ * never a `data:` URL (inline bytes, not a source with an address). The open
+ * itself is a user-initiated, dialog-reviewed top-level navigation.
+ */
+function isTrustedImageSource(src: string): boolean {
+  let url: URL
+  try {
+    url = new URL(src, window.location.href)
+  } catch {
+    return false
+  }
+  return url.origin === window.location.origin && STASH_DOWNLOAD_PATH.test(url.pathname)
+}
 
 /**
  * The inert text that stands where a refused image was: it says what happened
@@ -245,13 +270,30 @@ function isAllowedImageSource(src: string): boolean {
 function blockedImagePlaceholder(img: Element, src: string): Element {
   const placeholder = img.ownerDocument.createElement('span')
   placeholder.setAttribute('class', 'blocked-image')
+  // The same read that judges the source also decides whether the placeholder
+  // stays inert or carries the open path (ruling below).
+  const trusted = isTrustedImageSource(src)
   placeholder.setAttribute(
     'title',
     'Not loaded: an image in an answer is fetched automatically, which would send a ' +
-      'request (and anything in its address) to wherever it points.',
+      'request (and anything in its address) to wherever it points.' +
+      (trusted ? ' Activate to review this address and open it in another tab.' : ''),
   )
   const shown = src.length > BLOCKED_SOURCE_SHOWN ? `${src.slice(0, BLOCKED_SOURCE_SHOWN)}…` : src
   placeholder.textContent = `Image blocked: ${shown}`
+  // The blocked-image open path (#901, owner ruling 2026-11-04, issue #901
+  // comment 6618793027): for a source that is still a TRUSTED shape, the
+  // placeholder carries the link-review dialog's open path instead of staying
+  // inert — the resolved destination rides a code-owned attribute (set here,
+  // AFTER DOMPurify, so it is never the model's) and the span becomes
+  // activatable. ChatMessages' click and keyboard delegation open the dialog
+  // on it; the defang is also DOM-side, in ChatMessages. The AUTO-LOAD
+  // refusal above is unchanged — this is a user-reviewed, user-initiated open.
+  if (trusted) {
+    placeholder.setAttribute('data-img-dest', new URL(src, window.location.href).href)
+    placeholder.setAttribute('role', 'button')
+    placeholder.setAttribute('tabindex', '0')
+  }
   return placeholder
 }
 

@@ -622,6 +622,110 @@ describe('ChatMessages — link review (#901 slice 2)', () => {
   })
 })
 
+describe('ChatMessages — the blocked-image placeholder’s open path (#901 override)', () => {
+  // Owner ruling 2026-11-04 (issue #901 comment 6618793027): the user CAN open
+  // images from trusted sources — the placeholder carries the link-review
+  // dialog's open path for trusted-source images. The SAME dialog serves it;
+  // nothing here adds images to the acceptance store (the ruling adds no
+  // acceptance for images).
+
+  /** An assistant answer whose only image is the trusted stash route, refused
+   *  because its `download` param is missing. */
+  const trustedImageMessage = (over: Partial<Message> = {}): Message =>
+    msg({
+      role: 'assistant',
+      content: '![chart](/api/stash/document/abc?sessionId=s1)',
+      ...over,
+    })
+
+  /** An assistant answer whose only image is refused and NOT trusted-shaped. */
+  const attackerImageMessage = (): Message =>
+    msg({ role: 'assistant', content: '![chart](https://attacker.example/p.png)' })
+
+  const noDialog = () =>
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+
+  // MUTATION: drop the `interceptImageReview` call from handleClick → the
+  // click opens nothing → red.
+  it('opens the review dialog with the image’s resolved address when the placeholder is activated', async () => {
+    const { container } = render(() => <ChatMessages messages={[trustedImageMessage()]} />)
+    noDialog()
+    const placeholder = container.querySelector<HTMLElement>(
+      '.prose-chat .blocked-image[data-img-dest]',
+    )!
+    expect(placeholder).toBeTruthy()
+    expect(placeholder.getAttribute('data-img-dest')).toBe(
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1`,
+    )
+
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="link-review-address"]')!.textContent).toBe(
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1`,
+    )
+    // The open action is the dialog's reviewed anchor, stamped exactly as the
+    // sanitizer stamps every rendered link.
+    const open = document.querySelector<HTMLAnchorElement>('[data-testid="link-review-open"]')!
+    expect(open.getAttribute('target')).toBe('_blank')
+    expect(open.getAttribute('rel')).toBe('noopener noreferrer')
+
+    // Dismiss decides nothing: the placeholder keeps its open path.
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-cancel"]')!,
+    )
+    await tick()
+    noDialog()
+    expect(container.querySelector('.blocked-image[data-img-dest]')).toBe(placeholder)
+  })
+
+  // MUTATION: widen `isTrustedImageSource` in the sanitizer to "own origin at
+  // large" → the attacker placeholder is stamped here too → red.
+  it('a non-trusted-source placeholder stays inert — activating it opens nothing', async () => {
+    const { container } = render(() => <ChatMessages messages={[attackerImageMessage()]} />)
+    const placeholder = container.querySelector('.blocked-image')!
+    expect(placeholder).toBeTruthy()
+    expect(placeholder.hasAttribute('data-img-dest')).toBe(false)
+
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    noDialog()
+  })
+
+  it('keyboard activation (Enter) opens the dialog exactly as the click does', async () => {
+    const { container } = render(() => <ChatMessages messages={[trustedImageMessage()]} />)
+    const placeholder = container.querySelector<HTMLElement>('.blocked-image[data-img-dest]')!
+    placeholder.focus()
+    fireEvent.keyDown(placeholder, { key: 'Enter' })
+    await tick()
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+  })
+
+  // The ruling adds no acceptance for images, so unlike the link defang
+  // (ruling Q5: a PERSISTED mark) the image defang is current-rendering-only:
+  // a re-render derived from message.content presents the placeholder again.
+  it('"Cancel and mark unsafe" removes the open path from this rendering — and a re-render presents it again', async () => {
+    const [messages, setMessages] = createSignal<Message[]>([trustedImageMessage()])
+    const { container } = render(() => <ChatMessages messages={messages()} />)
+    const placeholder = container.querySelector<HTMLElement>('.blocked-image[data-img-dest]')!
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+    noDialog()
+    // Inert again: no affordance left in THIS rendering, text kept.
+    expect(container.querySelector('.blocked-image[data-img-dest]')).toBeNull()
+    expect(container.querySelector('.blocked-image')!.hasAttribute('role')).toBe(false)
+    expect(container.textContent).toContain('Image blocked:')
+
+    setMessages([trustedImageMessage()])
+    await tick()
+    expect(container.querySelector('.blocked-image[data-img-dest]')).toBeTruthy()
+  })
+})
+
 describe('ChatMessages — auto-scroll', () => {
   // The scroll is deferred by 50ms so the new bubble has laid out first —
   // settle past that (and past any timer left by an earlier mount) before

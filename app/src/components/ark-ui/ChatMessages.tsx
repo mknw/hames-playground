@@ -319,15 +319,16 @@ export function renderAssistantMarkdown(
   return { html, unverifiedLinks }
 }
 
-/** The link under review (#901 slice 2): the chosen anchor's own spelling
- *  (slice 1's `data-link-raw` — the defang identity), its resolved destination
- *  (`data-link-dest`, what the dialog shows and opens), and the one message
- *  rendering it lives in. */
-interface LinkReviewTarget {
-  readonly raw: string
-  readonly dest: string
-  readonly container: Element
-}
+/** The review under way (#901 slice 2, extended by the blocked-image open
+ *  path — owner ruling 2026-11-04, issue #901 comment 6618793027): a LINK
+ *  carries the chosen anchor's own spelling (`data-link-raw`, the defang
+ *  identity); an IMAGE placeholder (`.blocked-image[data-img-dest]`, the
+ *  sanitizer's trusted-source stamp) carries only its resolved destination.
+ *  Both carry `dest` — what the dialog shows and opens — and the one message
+ *  rendering the element. */
+type LinkReviewTarget =
+  | { kind: 'link'; raw: string; dest: string; container: Element }
+  | { kind: 'image'; dest: string; container: Element }
 
 /** "Cancel and defang" (#901 slice 2, ruling Q5): replace every anchor in
  *  `container` whose own spelling (`data-link-raw`, the defang identity) is
@@ -352,6 +353,27 @@ export function defangAnchors(container: Element, raw: string): number {
     replaced++
   }
   return replaced
+}
+
+/** "Cancel and mark unsafe" for a blocked-image placeholder (#901 owner
+ *  ruling 2026-11-04, comment 6618793027): strip the open-path affordance
+ *  (`data-img-dest`, `role`, `tabindex`) from every placeholder in
+ *  `container` whose resolved destination is `dest`, leaving the inert text
+ *  the sanitizer rendered. CURRENT-RENDERING-ONLY: the ruling says nothing
+ *  about acceptance for images — the open path is not an Accept-as-safe item
+ *  and nothing enters the acceptance store — so no mark is recorded, and a
+ *  re-render derived from `message.content` presents the placeholder again.
+ *  Returns how many placeholders were defanged. */
+export function defangImagePlaceholders(container: Element, dest: string): number {
+  let defanged = 0
+  for (const el of Array.from(container.querySelectorAll('.blocked-image[data-img-dest]'))) {
+    if (el.getAttribute('data-img-dest') !== dest) continue
+    el.removeAttribute('data-img-dest')
+    el.removeAttribute('role')
+    el.removeAttribute('tabindex')
+    defanged++
+  }
+  return defanged
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
@@ -404,8 +426,23 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     e.preventDefault()
     e.stopPropagation()
     if (raw !== null && dest !== null && container) {
-      setReviewTarget({ raw, dest, container })
+      setReviewTarget({ kind: 'link', raw, dest, container })
     }
+    return true
+  }
+
+  // The blocked-image open path (#901, owner ruling 2026-11-04, issue #901
+  // comment 6618793027): activating a trusted-source placeholder — click,
+  // Enter or Space — opens the SAME link-review dialog on the image's
+  // resolved destination (`data-img-dest`, stamped by the sanitizer after
+  // DOMPurify, so it is never the model's). Dismiss decides nothing; the
+  // defang strips the affordance (current rendering only, no store).
+  const interceptImageReview = (e: { target: EventTarget | null }): boolean => {
+    const el = (e.target as HTMLElement | null)?.closest('.blocked-image[data-img-dest]')
+    if (!el) return false
+    const dest = el.getAttribute('data-img-dest')
+    const container = el.closest('.prose-chat')
+    if (dest !== null && container) setReviewTarget({ kind: 'image', dest, container })
     return true
   }
 
@@ -446,6 +483,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     // anchor can wrap an entity or citation span, and the navigation is what
     // is being gated.
     if (interceptLinkReview(e)) return
+
+    // The blocked-image open path takes the click before the citation and
+    // entity branches. A placeholder nested in a stamped anchor stays with
+    // the LINK review above (that click's gated thing is the anchor's
+    // navigation) — an accepted, rare nesting.
+    if (interceptImageReview(e)) return
 
     // Reference citation (inline superscript) → open the inline file viewer.
     const refTarget = (e.target as HTMLElement).closest('.doc-ref') as HTMLElement | null
@@ -511,6 +554,15 @@ export const ChatMessages = (props: ChatMessagesProps) => {
             onClick={handleClick}
             on:auxclick={(e: MouseEvent) => {
               interceptLinkReview(e)
+            }}
+            onKeyDown={(e: KeyboardEvent) => {
+              // Keyboard activation of the blocked-image open path: Enter or
+              // Space on the focusable placeholder opens the dialog exactly
+              // as the click does; preventDefault stops Space scrolling the
+              // page.
+              if ((e.key === 'Enter' || e.key === ' ') && interceptImageReview(e)) {
+                e.preventDefault()
+              }
             }}
           >
             <For each={props.messages}>
@@ -979,17 +1031,26 @@ export const ChatMessages = (props: ChatMessagesProps) => {
         onDefang={() => {
           const target = reviewTarget()
           if (!target) return
-          defangAnchors(target.container, target.raw)
-          // The mark is PERSISTED, not rendering-only (ruling Q5 as
-          // overridden — issue #901 comment 6618793027, 2026-11-04): every
-          // re-render of this message re-derives the defang from the store.
-          // Keyed like acceptance on (message id, the defang identity
-          // `data-link-raw`); client-side, per session — no session state
-          // beyond the mark, nothing across reloads, nothing to a server.
-          const messageId = target.container.getAttribute('data-message-id')
-          if (messageId !== null) linkAcceptance().markUnsafe(messageId, target.raw)
-          // Re-derive the strip: the anchor left this rendering, so it leaves
-          // the indicator's count and the Accept-as-safe list too (slice 3).
+          if (target.kind === 'image') {
+            // The blocked-image open path: strip the affordance from this
+            // rendering's placeholders. CURRENT-RENDERING-ONLY — the ruling
+            // says nothing about acceptance for images (the open path is not
+            // an Accept-as-safe item; nothing enters the acceptance store),
+            // so no mark is recorded and a re-render presents it again.
+            defangImagePlaceholders(target.container, target.dest)
+          } else {
+            defangAnchors(target.container, target.raw)
+            // The mark is PERSISTED, not rendering-only (ruling Q5 as
+            // overridden — issue #901 comment 6618793027, 2026-11-04): every
+            // re-render of this message re-derives the defang from the store.
+            // Keyed like acceptance on (message id, the defang identity
+            // `data-link-raw`); client-side, per session — no session state
+            // beyond the mark, nothing across reloads, nothing to a server.
+            const messageId = target.container.getAttribute('data-message-id')
+            if (messageId !== null) linkAcceptance().markUnsafe(messageId, target.raw)
+          }
+          // Re-derive the strip: the defanged element left this rendering, so
+          // it leaves the indicator's count and the Accept-as-safe list too.
           setDefangTick((t) => t + 1)
           setReviewTarget(null)
         }}

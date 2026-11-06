@@ -544,6 +544,13 @@ export default defineConfig({
           word-break: break-all;
         }
 
+        /* The trusted-source variant carries the open path (lib/sanitize-html.ts):
+           activatable, so it reads as a control where the plain placeholder
+           stays inert text. */
+        .prose-chat .blocked-image[data-img-dest] {
+          cursor: pointer;
+        }
+
         /* Thinking/reasoning collapsible */
         .think-root {
           margin: -12px -12px 8px -12px;

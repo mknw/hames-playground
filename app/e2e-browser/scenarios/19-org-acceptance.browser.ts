@@ -18,10 +18,10 @@ import { FAKE_ORG_MESSAGE } from '../../e2e/lib/fake-llm'
 /** The proposal arrives after the reply, on the card's poll (2s, 8s, 30s). */
 const CARD_TIMEOUT_MS = 45_000
 
-/** Pixels on the Org.graph canvases painted in the "added" colour (#ff6600,
- *  `ADDED_COLOUR` in `SupportPanel.tsx`). Cytoscape draws on 2D canvases, so
- *  the page can read them back; antialiasing is why it is a tolerance, not an
- *  equality. */
+/** Pixels on the Org.graph canvases painted in the "added" colour (#d9822b,
+ *  `ADDED_COLOUR` in `SupportPanel.tsx`, toned down from #ff6600 by #1008).
+ *  Cytoscape draws on 2D canvases, so the page can read them back;
+ *  antialiasing is why it is a tolerance, not an equality. */
 async function addedPixels(page: import('@playwright/test').Page): Promise<number> {
   return page.evaluate(() => {
     // The Cytoscape canvases are the only canvases the app draws, and the tab
@@ -33,7 +33,7 @@ async function addedPixels(page: import('@playwright/test').Page): Promise<numbe
       const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
       for (let i = 0; i < data.length; i += 4) {
         const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]]
-        if (a > 200 && r > 230 && g > 80 && g < 125 && b < 40) n++
+        if (a > 200 && r > 195 && r < 240 && g > 110 && g < 150 && b > 15 && b < 75) n++
       }
     }
     return n

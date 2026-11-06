@@ -817,7 +817,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     flex="1"
                     p="y-1"
                     rounded="md"
-                    text={active() ? 'xs ui-accent' : 'xs ui-text-tertiary'}
+                    // #1008: the active segment's word is the primary text, not
+                    // the accent — light mode's accent is 4.6:1 on the page
+                    // ground already and no tint under it keeps 4.5:1. The tint
+                    // and the accent border carry "active".
+                    text={active() ? 'xs ui-text-primary' : 'xs ui-text-tertiary'}
                     bg={active() ? 'ui-accent/15' : 'transparent hover:ui-bg-hover'}
                     border={active() ? '1 ui-accent/40' : '1 transparent'}
                     transition="all"
@@ -943,7 +947,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                           text="left"
                           p="3"
                           rounded="md"
-                          bg={isSelected() ? 'ui-accent/15' : ''}
+                          // /8, not more: the row's tertiary timestamp has to
+                          // keep 4.5:1 on the tint (4.9:1 in both themes); the
+                          // accent border marks the selection (#1008).
+                          bg={isSelected() ? 'ui-accent/8' : ''}
                           hover="bg-ui-bg-hover"
                           transition="all"
                           border={

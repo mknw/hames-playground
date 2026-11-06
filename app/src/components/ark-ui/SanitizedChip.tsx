@@ -91,7 +91,9 @@ export const SanitizedChip = (props: {
         aria-label={`${chipLabel(s())} — open the injection-guard audit event`}
         flex="~ items-center gap-1"
         text="xs [var(--ui-evt-content-sanitized)]"
-        bg="orange-400/10 hover:orange-400/20"
+        // No hover tint (#1008): a /20 wash took the label to 3.8:1 in dark;
+        // the border's 30→60 step is the hover.
+        bg="orange-400/10"
         border="1 orange-400/30 hover:orange-400/60"
         p="x-1.5 y-0.5"
         min-h="6"

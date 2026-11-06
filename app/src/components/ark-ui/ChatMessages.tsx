@@ -488,16 +488,15 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                       justify="center"
                       text={
                         // #1008 round 2: the user's ground is the accent's
-                        // soft tint (not the solid violet), so its initials
-                        // take the accent itself; error and warning stay on
+                        // soft tint (not the solid violet); its initials take
+                        // the primary text, because the accent on its own
+                        // tint is 4.0:1 in light. Error and warning stay on
                         // solid dark grounds where white reads. The
                         // assistant's ground is the theme's own, and white on
                         // it disappears the moment the theme turns light.
-                        message.role === 'user'
-                          ? 'ui-accent xs'
-                          : message.role === 'error' || message.role === 'warning'
-                            ? 'white xs'
-                            : 'ui-text-primary xs'
+                        message.role === 'error' || message.role === 'warning'
+                          ? 'white xs'
+                          : 'ui-text-primary xs'
                       }
                       font="medium"
                       bg={

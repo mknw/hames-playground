@@ -74,7 +74,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(detail).toBeVisible()
     await expect(detail).toHaveCSS(
       'background-color',
-      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(18, 18, 26)',
+      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(22, 25, 30)',
     )
     for (const label of [
       'controller action',
@@ -107,7 +107,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(detail).toBeVisible()
     await expect(detail).toHaveCSS(
       'background-color',
-      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(18, 18, 26)',
+      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(22, 25, 30)',
     )
     await expectReadable(detail.getByText('Status', { exact: true }), `pair status in ${theme}`)
     await expectReadable(detail.getByText('Success'), `pair result in ${theme}`)

@@ -102,6 +102,26 @@ describe('event + pattern label colours clear WCAG AA in both themes', () => {
     }
   })
 
+  it('an unlisted pattern id falls back to a declared, AA-clearing colour', async () => {
+    // The fallback is the path every pattern id missing from pattern-colors.json
+    // takes (`orchestrator`, `info`, …). It once named `--ui-pat-default`, which
+    // the palette does not declare, so those labels painted the inherited colour
+    // — near-invisible on the dark panel — while every listed id passed above.
+    const [dark, light] = await Promise.all([palette(':root'), palette(':root.light')])
+    const names = [...getPatternColor('no-such-pattern').color.matchAll(/var\((--ui-[\w-]+)/g)].map(
+      (m) => m[1],
+    )
+    expect(names.length).toBeGreaterThan(0)
+    for (const name of names) {
+      expect(dark[name], `${name} missing from the dark palette`).toMatch(/^#[0-9a-f]{6}$/i)
+      expect(light[name], `${name} missing from the light palette`).toMatch(/^#[0-9a-f]{6}$/i)
+      for (const ground of DARK_GROUNDS)
+        expect(contrast(dark[name], ground)).toBeGreaterThanOrEqual(4.5)
+      for (const ground of LIGHT_GROUNDS)
+        expect(contrast(light[name], ground)).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
   it('the accent button pair clears AA with its own text colour', async () => {
     const [dark, light] = await Promise.all([palette(':root'), palette(':root.light')])
     // Rest state: --ui-accent ground, --ui-on-accent text.

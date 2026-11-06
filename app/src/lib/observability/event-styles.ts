@@ -38,7 +38,9 @@ export interface PatternColorEntry {
 }
 
 const patternColors = patternColorsJson as unknown as Record<string, { tint: string }>
-const DEFAULT_PATTERN_VAR = 'var(--ui-pat-default)'
+// The id-derived name of pattern-colors.json's `_default` entry — a var the
+// palette does not declare would leave every unlisted pattern unstyled.
+const DEFAULT_PATTERN_VAR = 'var(--ui-pat-_default)'
 
 export function getPatternColor(patternId: string): PatternColorEntry {
   const entry = patternColors[patternId]

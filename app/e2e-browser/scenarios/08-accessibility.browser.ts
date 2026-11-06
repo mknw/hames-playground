@@ -110,7 +110,12 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   // delete its line" — until the lines went. That is the direction a known-open
   // list usually cannot fail in, and it is why this one is an equality.
   // `entry-server.tsx` and `ChatInput.tsx` carry the fixes and the reasoning.
-  'header-strip:dark': ['button-name', 'color-contrast'],
+  //
+  // #1008's sober palette took `color-contrast` off the dark header strip (its
+  // tertiary text is #848b93 on #0f1115, 4.7:1), so that line lost the rule —
+  // the equality made the deletion required, as above. The light strip and the
+  // other surfaces still fire it.
+  'header-strip:dark': ['button-name'],
   'header-strip:light': ['button-name', 'color-contrast'],
 
   // Plus, wherever a scrolling list is on screen:

@@ -17,13 +17,13 @@ describe('getPatternColor', () => {
     const pc = getPatternColor('neo4j-query')
     // #1008 round 2: the colour is theme-aware — a var the preflight
     // declares for this id — and the tint stays a literal rgba wash.
-    expect(pc.color).toBe('var(--ui-pat-neo4j-query, var(--ui-pat-default))')
+    expect(pc.color).toBe('var(--ui-pat-neo4j-query, var(--ui-pat-_default))')
     expect(pc.tint).toMatch(/^rgba?\(/)
   })
 
   it('falls back to the default var for an unknown pattern', () => {
     const pc = getPatternColor('a-pattern-that-does-not-exist')
-    expect(pc.color).toBe('var(--ui-pat-default)')
+    expect(pc.color).toBe('var(--ui-pat-_default)')
     expect(pc.tint).toBeTruthy()
   })
 })

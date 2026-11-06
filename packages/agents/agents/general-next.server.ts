@@ -5,6 +5,7 @@ import {
   actorCritic,
   collectToolNames,
   compactExecution,
+  compactIntent,
   createIngressGuard,
   decisionLoop,
   planner,
@@ -490,6 +491,18 @@ async function createPatterns(
     }),
   })
   const patterns = [
+    // One resolved intent per turn (#1006): the compact-intent step runs FIRST,
+    // every turn `continueSession` re-runs the chain, so `data.intent` is always
+    // THIS turn's brief — never turn 1's. describe role: DescribeAnthropic on
+    // the Anthropic tier, SmallQwen on the private tier, via the adapter's
+    // clientOverrideFor('describe'). Skipped entirely (no call) on a
+    // conversation's first turn; on a failed call it clears the intent and the
+    // routes run on the raw message, as before #1006. The brief is the ROUTES'
+    // task only: the synthesizer below answers what the user said.
+    compactIntent<AgentData>(baml.compactIntent, {
+      patternId: 'intent',
+      liveEvents: true,
+    }),
     orchestrator,
     compactExecution<AgentData>({
       mode: 'thread',
@@ -500,7 +513,13 @@ async function createPatterns(
       // The guide rides only a turn that ran no route (`stepsThisTurn` 0):
       // onboarding is answered directly, and a turn with tool results does not
       // pay ~400 uncached prompt tokens for a block it is told to ignore.
-      synthesize: (input) => (input.stepsThisTurn ? baml.synthesize(input) : guided(input)),
+      // INTENT is the user's own message, never the compact-intent brief
+      // (#1006): the answer is to what the user said, as before #1006 —
+      // `compactExecution` would otherwise read `data.intent` first.
+      synthesize: (input) => {
+        const own = { ...input, intent: input.userMessage }
+        return own.stepsThisTurn ? baml.synthesize(own) : guided(own)
+      },
       liveEvents: true,
     }),
   ]

@@ -35,10 +35,10 @@ import { FAKE_TITLE, LARGE_LLM_MODEL } from '../lib/env'
 import { expectHeld } from '../lib/control'
 import { conversationRows } from '../lib/db'
 import {
+  newChat,
   open,
   replies,
   send,
-  sendButton,
   stopButton,
   threadRow,
   userBubbles,
@@ -137,8 +137,10 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
     .toBe('done')
 
   // And it is readable: reopening the thread shows both turns, in order.
-  await page.getByRole('button', { name: 'New chat' }).click()
-  await expect(sendButton(page)).toBeVisible()
+  // `newChat` waits until the new chat is the one on screen. After a bare
+  // click the old thread was still the selected one, so clicking its row was a
+  // no-op and the pending "New chat" then landed on an empty view (see the helper).
+  await newChat(page)
   await threadRow(page, FAKE_TITLE).click()
 
   await expect(userBubbles(page)).toHaveCount(2)

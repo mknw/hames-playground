@@ -617,20 +617,21 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         items="center"
                         justify="center"
                         text={
-                          // The three coloured avatars are solid in both themes,
-                          // so white reads on all of them. The assistant's ground
-                          // is the theme's own, and white on it disappears the
-                          // moment the theme turns light.
-                          message.role === 'user' ||
-                          message.role === 'error' ||
-                          message.role === 'warning'
+                          // #1008 round 2: the user's ground is the accent's
+                          // soft tint (not the solid violet); its initials take
+                          // the primary text, because the accent on its own
+                          // tint is 4.0:1 in light. Error and warning stay on
+                          // solid dark grounds where white reads. The
+                          // assistant's ground is the theme's own, and white on
+                          // it disappears the moment the theme turns light.
+                          message.role === 'error' || message.role === 'warning'
                             ? 'white xs'
                             : 'ui-text-primary xs'
                         }
                         font="medium"
                         bg={
                           message.role === 'user'
-                            ? 'cyber-700'
+                            ? 'ui-accent/20'
                             : message.role === 'error'
                               ? 'red-900/50'
                               : message.role === 'warning'
@@ -639,21 +640,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         }
                         border={
                           message.role === 'user'
-                            ? '1 cyber-500'
+                            ? '1 ui-accent/50'
                             : message.role === 'error'
                               ? '1 red-500/50'
                               : message.role === 'warning'
                                 ? '1 amber-500/50'
                                 : '1 ui-accent/50'
-                        }
-                        shadow={
-                          message.role === 'user'
-                            ? '[0_0_10px_rgba(79,70,229,0.3)]'
-                            : message.role === 'error'
-                              ? '[0_0_10px_rgba(239,68,68,0.2)]'
-                              : message.role === 'warning'
-                                ? '[0_0_10px_rgba(245,158,11,0.2)]'
-                                : '[0_0_10px_rgba(0,255,255,0.2)]'
                         }
                       >
                         {getInitials(message.role)}
@@ -666,7 +658,9 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         rounded="lg"
                         bg={
                           message.role === 'user'
-                            ? 'cyber-800/50'
+                            ? // /6: the bubble's tertiary timestamp keeps 4.5:1
+                              // on it in dark (4.7; /10 was 4.4) (#1008).
+                              'ui-accent/6'
                             : message.role === 'error'
                               ? 'red-900/20'
                               : message.role === 'warning'
@@ -676,7 +670,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         text="ui-text-primary"
                         border={
                           message.role === 'user'
-                            ? '1 cyber-700/50'
+                            ? '1 ui-accent/40'
                             : message.role === 'error'
                               ? '1 red-500/30'
                               : message.role === 'warning'

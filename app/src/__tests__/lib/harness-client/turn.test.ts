@@ -2619,6 +2619,7 @@ describe('memory host turns (G9)', () => {
     ])
     expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
   })
+  // 2.5 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('a reply during settle can lose its trailing save; the next load repairs the committed source', async () => {
     wireMemory()
     compactBulkData.mockImplementationOnce(async () => {})
@@ -2699,7 +2700,7 @@ describe('memory host turns (G9)', () => {
       sources.mockRestore()
       store.mockRestore()
     }
-  })
+  }, 15_000)
   it('no shipped-style agent opt-in means no memory wake or settle', async () => {
     await runTurnAndPersist(interactive())
     await flush()

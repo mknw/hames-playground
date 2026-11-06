@@ -207,7 +207,13 @@ describe('GUARD_PSEUDONYMISE reaches general-next through agentDeps() (boundary 
       guards,
       egressRoster,
     })
-    return { root: patterns[0].name, pseudonymises: harnessPseudonymisesInputs(patterns) }
+    // #1006: the compact-intent step is the composition's first pattern; the
+    // orchestrator is the second, which is what these pins name as the root.
+    const orchestratorAt = patterns.findIndex((p) => p.name.includes('decisionLoop'))
+    return {
+      root: patterns[orchestratorAt].name,
+      pseudonymises: harnessPseudonymisesInputs(patterns),
+    }
   }
 
   it.each(['on'])(

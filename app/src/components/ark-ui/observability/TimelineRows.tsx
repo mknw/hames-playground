@@ -6,18 +6,22 @@
  * chip, so a guard that acted is seen as a guard (#795).
  */
 
-import { Show } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
+import type { JSX } from 'solid-js'
 import type {
   ContextEvent,
   DecisionMadeEventData,
   ToolCallEventData,
   ToolResultEventData,
 } from '@hames-ai/harness-patterns'
+import { Collapsible } from '@ark-ui/solid/collapsible'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 import {
   getEventLane,
   getEventPreview,
   isGuardEvent,
+  type TimelineItem,
+  type TimelineSection,
 } from '@hames-ai/harness-patterns/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
@@ -66,7 +70,7 @@ export const LaneHeaders = () => (
 
     {/* Guardrails Lane Header — the orange the timeline spends on a guard firing */}
     <div w="1/3" p="2" flex="~" items="center" justify="center" gap="2">
-      <div w="2" h="2" rounded="full" bg="orange-400" />
+      <div w="2" h="2" rounded="full" bg="[var(--ui-evt-content-sanitized)]" />
       <span text="xs ui-text-primary" font="medium">
         Guardrails
       </span>
@@ -115,10 +119,17 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       items="center"
       gap="2"
       p="x-3 y-1"
+      // #1008 round 2: pc.color is now a var(), so the old hex-suffix alpha
+      // (`${pc.color}40`) cannot be used — color-mix resolves the var and
+      // fades it the same way.
       style={{
         'background-color': pc.tint,
-        'border-top': isEnter ? `1px solid ${pc.color}40` : 'none',
-        'border-bottom': !isEnter ? `1px solid ${pc.color}40` : 'none',
+        'border-top': isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
+        'border-bottom': !isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
         'min-height': '24px',
       }}
     >
@@ -139,9 +150,12 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       >
         {patternId}
       </span>
+      {/* Not in the pattern colour: a 60%-alpha tint of it was the one
+          timeline label that could not clear 4.5:1 on a light ground, and
+          the word is decorative direction, not identity (#1008 round 2). */}
       <span
         style={{
-          color: `${pc.color}99`,
+          color: 'var(--ui-text-tertiary)',
           'font-size': '9px',
           'font-family': '"Fira Code", ui-monospace, monospace',
         }}
@@ -212,7 +226,7 @@ export const EventRow = (props: {
 
       <Show when={type === 'decision_made'}>
         <span
-          text="xs ui-accent"
+          text="xs ui-accent-text"
           bg="ui-accent/10"
           p="x-1.5 y-0.5"
           rounded="sm"
@@ -288,6 +302,9 @@ export const ToolPairRow = (props: {
   // panel — otherwise the only way to learn a result was rewritten is to open
   // every one of them (SA-H10).
   const sanitized = () => resultData().sanitized
+  // The same theme-aware pair an unmerged tool_call / error row uses, so this
+  // label clears AA in both themes too (#1008 round 2).
+  const color = () => (success() ? eventColors.tool_call : eventColors.error)
 
   return (
     <div
@@ -317,12 +334,12 @@ export const ToolPairRow = (props: {
           <span
             class="i-material-symbols-build-outline"
             text="lg"
-            style={{ color: success() ? '#a78bfa' : '#ef4444' }}
+            style={{ color: color() }}
             aria-hidden="true"
           />
           <div
             style={{
-              color: success() ? '#a78bfa' : '#ef4444',
+              color: color(),
               'font-size': '11px',
               'font-family': '"Fira Code", ui-monospace, monospace',
               'font-weight': '500',
@@ -352,5 +369,106 @@ export const ToolPairRow = (props: {
         <Show when={sanitized()}>{(summary) => <SanitizedChip summary={summary()} compact />}</Show>
       </div>
     </div>
+  )
+}
+
+// ============================================================================
+// Controller Section (#1007) — one collapsible per controller run
+// ============================================================================
+
+/**
+ * One controller run, collapsed by default: the loop's actions, tool calls and
+ * results fold behind a single header that names the run, counts what it did
+ * and flags a failure. Display-only grouping — the rows inside are the same
+ * EventRow/ToolPairRow the flat timeline renders, at their own timeline index,
+ * so opening one still drives the shared detail panel.
+ */
+export const ControllerSection = (props: {
+  section: Extract<TimelineSection, { kind: 'controller' }>
+  /** The item's index in the flat timeline — the detail panel's address. */
+  indexOf: (item: TimelineItem) => number
+  /** The panel's own row factory, so grouped rows stay identical rows. */
+  renderItem: (item: TimelineItem, index: number) => JSX.Element
+}) => {
+  const [open, setOpen] = createSignal(false)
+
+  // The collapsed header's one line: what the run did and whether anything
+  // failed — a failed tool result, or a recovery (the loop's own error round).
+  const actions = () =>
+    props.section.items.filter(
+      (item) => item.kind === 'event' && item.event.type === 'controller_action',
+    ).length
+  const toolCalls = () =>
+    props.section.items.filter(
+      (item) =>
+        item.kind === 'tool_pair' || (item.kind === 'event' && item.event.type === 'tool_call'),
+    ).length
+  const failed = () =>
+    props.section.items.some((item) => {
+      if (item.kind === 'tool_pair') {
+        return (item.result.data as ToolResultEventData).success === false
+      }
+      if (item.kind !== 'event') return false
+      return (
+        item.event.type === 'loop_recovery' ||
+        (item.event.type === 'tool_result' &&
+          (item.event.data as ToolResultEventData).success === false)
+      )
+    })
+
+  return (
+    <Collapsible.Root open={open()} onOpenChange={(details) => setOpen(details.open)}>
+      <Collapsible.Trigger
+        w="full"
+        flex="~ items-center"
+        gap="2"
+        p="x-3 y-1.5"
+        bg="ui-bg-secondary hover:ui-bg-tertiary"
+        border="b ui-border-secondary/30"
+        cursor="pointer"
+        text="left"
+        transition="colors"
+        ring="2 transparent focus:ui-accent/40"
+      >
+        <Collapsible.Indicator>
+          <span
+            class={open() ? 'i-material-symbols-expand-more' : 'i-material-symbols-chevron-right'}
+            w="4"
+            h="4"
+            text="ui-text-tertiary"
+            aria-hidden="true"
+          />
+        </Collapsible.Indicator>
+        <span
+          class="i-material-symbols-adjust"
+          w="4"
+          h="4"
+          style={{ color: eventColors.controller_action }}
+          aria-hidden="true"
+        />
+        <span text="xs ui-text-primary" font="medium">
+          controller
+        </span>
+        <Show when={props.section.patternId !== 'harness'}>
+          <span text="xs ui-text-tertiary" font="mono">
+            {props.section.patternId}
+          </span>
+        </Show>
+        <span text="xs ui-text-secondary" font="mono" flex="1">
+          {actions()} action{actions() === 1 ? '' : 's'} · {toolCalls()} tool call
+          {toolCalls() === 1 ? '' : 's'}
+        </span>
+        <Show when={failed()}>
+          <span text="xs ui-danger" font="mono">
+            error
+          </span>
+        </Show>
+      </Collapsible.Trigger>
+      <Collapsible.Content>
+        <For each={props.section.items}>
+          {(item) => props.renderItem(item, props.indexOf(item))}
+        </For>
+      </Collapsible.Content>
+    </Collapsible.Root>
   )
 }

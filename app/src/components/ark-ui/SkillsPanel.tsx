@@ -429,7 +429,7 @@ const SkillRow = (props: { skill: SkillView }) => (
       {props.skill.name}
     </TreeView.ItemText>
     <Show when={props.skill.mine && props.skill.isGlobal}>
-      <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+      <span text="xs ui-accent-text" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
         global
       </span>
     </Show>

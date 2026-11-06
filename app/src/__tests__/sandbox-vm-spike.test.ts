@@ -13,12 +13,13 @@ describe('nested VM spike offline safety checks', () => {
       const result = spawnSync('python3', ['scripts/sandbox-vm.test.py', ...args], {
         cwd: root,
         encoding: 'utf8',
-        // --mutations measured 111.8 s wall (load ~7, 2026-11-05); 300 s is ~2.7x for a loaded host.
-        timeout: 300_000,
+        // --mutations measured 111.8 s wall (load ~7, 2026-11-05) and 227 s at load 13-16
+        // on 8 cores (#998); 720 s is 3.2x the loaded run.
+        timeout: 720_000,
       })
       expect(result.status, result.stdout + result.stderr).toBe(0)
     },
-    310_000, // The mutation matrix launches a fresh Python process for every named pin.
+    730_000, // The mutation matrix launches a fresh Python process for every named pin.
   )
 
   // One store from image assembly to boot: the image preloads the classic overlay2

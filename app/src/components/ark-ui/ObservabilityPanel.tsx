@@ -11,13 +11,18 @@
  * `./observability/` (#226 B5).
  */
 
-import { For, Show, createSignal, createMemo } from 'solid-js'
-import { Tooltip } from '@ark-ui/solid/tooltip'
+import { For, Show, createSignal, createMemo, onCleanup } from 'solid-js'
+import { Menu } from '@ark-ui/solid/menu'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import { getPatternColor } from '~/lib/observability/event-styles'
-import { buildTimelineItems } from '@hames-ai/harness-patterns/observability/projection'
+import {
+  buildTimelineItems,
+  groupControllerRuns,
+  type TimelineItem,
+} from '@hames-ai/harness-patterns/observability/projection'
 import { SummaryBar } from './observability/SummaryBar'
 import {
+  ControllerSection,
   EmptyState,
   EventRow,
   LaneHeaders,
@@ -39,12 +44,43 @@ interface ObservabilityPanelProps {
 export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const [expandedIndex, setExpandedIndex] = createSignal<number | null>(null)
 
-  const handleSave = async () => {
+  const [menuOpen, setMenuOpen] = createSignal(false)
+  // One serialiser for every export path (#1002): Copy and Save locally both
+  // read this snapshot, so their outputs are byte-identical — a payload built
+  // per action would stamp a different `exportedAt` on each.
+  const sessionExport = createMemo(() => {
     const payload = props.context ?? { events: props.events, exportedAt: Date.now() }
-    const json = JSON.stringify(payload, null, 2)
     const sessionId = props.context?.sessionId ?? 'session'
     const date = new Date().toISOString().slice(0, 10)
-    const filename = `context-${sessionId}-${date}.json`
+    return {
+      json: JSON.stringify(payload, null, 2),
+      filename: `context-${sessionId}-${date}.json`,
+    }
+  })
+
+  const [exportStatus, setExportStatus] = createSignal<'idle' | 'copied' | 'failed'>('idle')
+
+  let statusTimer: ReturnType<typeof setTimeout> | undefined
+  const flashStatus = (status: 'copied' | 'failed') => {
+    setExportStatus(status)
+    clearTimeout(statusTimer)
+    statusTimer = setTimeout(() => setExportStatus('idle'), 2500)
+  }
+  onCleanup(() => clearTimeout(statusTimer))
+
+  const handleCopy = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable')
+      await navigator.clipboard.writeText(sessionExport().json)
+      flashStatus('copied')
+    } catch (e) {
+      console.error('Copy failed', e)
+      flashStatus('failed')
+    }
+  }
+
+  const handleSave = async () => {
+    const { json, filename } = sessionExport()
 
     if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
       try {
@@ -80,6 +116,16 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
 
   // Build merged timeline items (tool_call + tool_result → tool_pair)
   const timelineItems = createMemo(() => buildTimelineItems(timelineEvents()))
+
+  // Display sections (#1007): one collapsible per controller run, everything
+  // else a single row. Grouping is display-only — the items keep their flat
+  // timeline indices, which is what the detail panel and the tints are
+  // addressed by, and exports read the raw events, never these.
+  const timelineSections = createMemo(() => {
+    const items = timelineItems()
+    const indices = new Map<TimelineItem, number>(items.map((item, i) => [item, i]))
+    return { sections: groupControllerRuns(items), indices }
+  })
 
   // Compute per-item background tint based on active pattern stack
   const itemTints = createMemo(() => {
@@ -123,6 +169,39 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const handleClose = () => setExpandedIndex(null)
 
   /**
+   * The panel's one row factory: the row a flat timeline renders, keyed by the
+   * item's timeline index — the detail panel's address. Controller sections
+   * reuse it so the grouped rows stay identical rows (#1007).
+   */
+  const renderTimelineItem = (item: TimelineItem, index: number) => {
+    if (item.kind === 'tool_pair') {
+      return (
+        <ToolPairRow
+          call={item.call}
+          result={item.result}
+          index={index}
+          expanded={expandedIndex() === index}
+          onExpand={() => handleExpand(index)}
+          bgTint={itemTints()[index]}
+        />
+      )
+    }
+    const event = item.event
+    const isBoundary = () => event.type === 'pattern_enter' || event.type === 'pattern_exit'
+    return (
+      <Show when={!isBoundary()} fallback={<PatternBoundaryRow event={event} />}>
+        <EventRow
+          event={event}
+          index={index}
+          expanded={expandedIndex() === index}
+          onExpand={() => handleExpand(index)}
+          bgTint={itemTints()[index]}
+        />
+      </Show>
+    )
+  }
+
+  /**
    * Open the detail panel for an event by id — the shield chip's click-through
    * from a neutralized `tool_result` to the `content_sanitized` event holding
    * the verbatim spans (SA-H10).
@@ -153,44 +232,54 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
       {/* Timeline Container */}
       <div flex="1" overflow="auto">
         <Show when={hasEvents()} fallback={<EmptyState />}>
-          <For each={timelineItems()}>
-            {(item, index) => {
-              if (item.kind === 'tool_pair') {
-                return (
-                  <ToolPairRow
-                    call={item.call}
-                    result={item.result}
-                    index={index()}
-                    expanded={expandedIndex() === index()}
-                    onExpand={() => handleExpand(index())}
-                    bgTint={itemTints()[index()]}
-                  />
+          <For each={timelineSections().sections}>
+            {(section) => {
+              if (section.kind === 'single') {
+                return renderTimelineItem(
+                  section.item,
+                  timelineSections().indices.get(section.item) ?? -1,
                 )
               }
-              const event = item.event
-              const isBoundary = () =>
-                event.type === 'pattern_enter' || event.type === 'pattern_exit'
               return (
-                <Show when={!isBoundary()} fallback={<PatternBoundaryRow event={event} />}>
-                  <EventRow
-                    event={event}
-                    index={index()}
-                    expanded={expandedIndex() === index()}
-                    onExpand={() => handleExpand(index())}
-                    bgTint={itemTints()[index()]}
-                  />
-                </Show>
+                <ControllerSection
+                  section={section}
+                  indexOf={(item) => timelineSections().indices.get(item) ?? -1}
+                  renderItem={renderTimelineItem}
+                />
               )
             }}
           </For>
         </Show>
       </div>
 
-      {/* Save Button */}
+      {/* Export menu (#1002) — Copy / Save locally over one serialiser */}
       <Show when={props.events.length > 0}>
-        <Tooltip.Root openDelay={300} closeDelay={100}>
-          <Tooltip.Trigger
-            onClick={handleSave}
+        <Show when={exportStatus() !== 'idle'}>
+          <span
+            role="status"
+            style={{ position: 'absolute', bottom: '3.5rem', right: '1rem', 'z-index': '20' }}
+            bg="ui-bg-tertiary"
+            border="1 ui-border-primary"
+            rounded="md"
+            p="x-2 y-1"
+            text="xs ui-text-primary"
+            shadow="md"
+          >
+            {exportStatus() === 'copied'
+              ? 'Session copied to clipboard'
+              : 'Copy failed — clipboard unavailable or denied'}
+          </span>
+        </Show>
+        <Menu.Root
+          open={menuOpen()}
+          onOpenChange={(details) => setMenuOpen(details.open)}
+          positioning={{ placement: 'top-end' }}
+        >
+          <Menu.Trigger
+            onMouseEnter={() => setMenuOpen(true)}
+            aria-label="Export session"
+            title="Export session"
+            flex="~ items-center justify-center"
             style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
             p="2.5"
             bg="ui-bg-tertiary hover:ui-bg-hover"
@@ -200,35 +289,69 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             transition="all"
             shadow="lg"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              style={{ color: '#22d3ee' }}
-            >
-              <path
-                d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </Tooltip.Trigger>
-          <Tooltip.Positioner>
-            <Tooltip.Content
-              bg="ui-bg-tertiary"
+            <span
+              class="i-material-symbols-file-export-outline"
+              w="4"
+              h="4"
+              text="ui-accent"
+              aria-hidden="true"
+            />
+          </Menu.Trigger>
+          <Menu.Positioner>
+            <Menu.Content
+              bg="ui-bg-secondary"
               border="1 ui-border-primary"
-              rounded="md"
-              p="x-2 y-1"
-              text="xs ui-text-primary"
-              shadow="md"
+              rounded="lg"
+              shadow="lg"
+              p="y-1"
+              min-w="44"
+              z="50"
             >
-              Save session
-            </Tooltip.Content>
-          </Tooltip.Positioner>
-        </Tooltip.Root>
+              <Menu.Item
+                value="copy"
+                onClick={handleCopy}
+                flex="~"
+                items="center"
+                gap="2"
+                p="x-3 y-2"
+                text="sm ui-text-primary"
+                bg="hover:ui-bg-hover"
+                cursor="pointer"
+                transition="colors"
+              >
+                <span
+                  class="i-material-symbols-content-copy-outline"
+                  w="4"
+                  h="4"
+                  text="ui-accent"
+                  aria-hidden="true"
+                />
+                <Menu.ItemText>Copy</Menu.ItemText>
+              </Menu.Item>
+              <Menu.Item
+                value="save"
+                onClick={handleSave}
+                flex="~"
+                items="center"
+                gap="2"
+                p="x-3 y-2"
+                text="sm ui-text-primary"
+                bg="hover:ui-bg-hover"
+                cursor="pointer"
+                transition="colors"
+              >
+                <span
+                  class="i-material-symbols-download"
+                  w="4"
+                  h="4"
+                  text="ui-accent"
+                  aria-hidden="true"
+                />
+                <Menu.ItemText>Save locally</Menu.ItemText>
+              </Menu.Item>
+            </Menu.Content>
+          </Menu.Positioner>
+        </Menu.Root>
       </Show>
 
       {/* Detail Panel */}

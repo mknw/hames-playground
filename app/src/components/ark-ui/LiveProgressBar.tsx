@@ -200,9 +200,11 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           rounded="full"
           items="center"
           justify="center"
-          text="white xs"
+          text="ui-text-primary xs"
           font="medium"
-          bg="cyber-800"
+          // Same ground as the assistant avatar it sits beside (the user
+          // avatar is the accent tint now, #1008 round 2) — not the violet.
+          bg="ui-bg-tertiary"
           border="~ ui-accent/30"
         >
           AI

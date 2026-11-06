@@ -160,7 +160,11 @@ always be there) rather than around the loop. A conversation saved by an older
 version may carry `withheldEventIds` on a record; they are still honoured,
 and nothing writes new ones. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
-data, never `memories`. That data does carry the conversation before the
+data, never `memories` — and, since #1006, the turn's resolved intent when the
+chain runs a compact-intent step: the brief this turn's `intent_compacted`
+event carries, which heads the decide state and is every route's task, so the
+actor, the critic and the retriever all work from one resolved sentence instead
+of re-reading the raw message. That data also carries the conversation before the
 user's latest message (the decisions model's own lines, minus that message,
 each capped and quoted), under its own data heading in `plan_context`, so a
 follow-up such as "the same count" reaches the route with its referent. An

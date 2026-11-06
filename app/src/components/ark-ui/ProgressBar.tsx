@@ -35,17 +35,14 @@ import { Show, type JSX } from 'solid-js'
 import { Progress } from '@ark-ui/solid/progress'
 
 /**
- * The fill. Fixed hexes rather than tokens, and legitimately so: `--ui-accent`
- * flips to a dark teal in light mode, and this is a two-stop gradient whose
- * second stop (`neon-magenta`) has no `ui-*` role at all. Per the styleguide's
- * §4 this is the "value the build cannot see" case — a gradient is not a
- * utility — and it is data-coloured chrome that reads on both grounds.
+ * The fill. A fixed hex rather than a token, and legitimately so: this is a
+ * two-stop gradient, and a gradient is not a utility — the styleguide's §4
+ * "value the build cannot see" case. #1008 retuned it from neon cyan →
+ * magenta to a single-hue accent fade: same hue as the dark `--ui-accent`
+ * (#45b0b8), fading out instead of sliding into a second colour.
  */
 export const PROGRESS_GRADIENT =
-  'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
-
-/** The glow under a determinate fill. */
-const PROGRESS_GLOW = '0 0 8px rgba(0,255,255,0.45)'
+  'linear-gradient(90deg, rgba(69,176,184,0.9), rgba(69,176,184,0.45))'
 
 /** Track height. 3px in all three original copies. */
 const TRACK_HEIGHT = '3px'
@@ -125,7 +122,6 @@ export const ProgressBar = (props: ProgressBarProps) => {
               height: '100%',
               width: `${props.percent}%`,
               'background-image': PROGRESS_GRADIENT,
-              'box-shadow': PROGRESS_GLOW,
               transition: `width ${FILL_TRANSITION_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
             }}
           />

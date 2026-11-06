@@ -68,13 +68,16 @@ for (const theme of ['light', 'dark'] as const) {
     await seedConversation(id)
     await page.goto(`${appUrl}/?c=${id}`)
     await page.getByRole('tab', { name: 'Context manager' }).click()
+    // Since #1010 a controller's events sit in a section that starts
+    // collapsed; open it so its rows can be clicked.
+    await page.locator('[data-scope="collapsible"][data-part="trigger"]').first().click()
 
     await page.getByText('controller action', { exact: true }).first().click()
     const detail = page.getByTestId('event-detail-surface')
     await expect(detail).toBeVisible()
     await expect(detail).toHaveCSS(
       'background-color',
-      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(18, 18, 26)',
+      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(22, 25, 30)',
     )
     for (const label of [
       'controller action',
@@ -107,7 +110,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(detail).toBeVisible()
     await expect(detail).toHaveCSS(
       'background-color',
-      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(18, 18, 26)',
+      theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(22, 25, 30)',
     )
     await expectReadable(detail.getByText('Status', { exact: true }), `pair status in ${theme}`)
     await expectReadable(detail.getByText('Success'), `pair result in ${theme}`)

@@ -731,9 +731,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                       margin: '0 auto 4px',
                       'border-radius': '0.375rem',
                       border: isSelected()
-                        ? '1px solid rgba(0, 255, 255, 0.4)'
+                        ? '1px solid var(--ui-accent-line)'
                         : '1px solid transparent',
-                      background: isSelected() ? 'rgba(67, 56, 202, 0.3)' : 'transparent',
+                      // #1008 round 2: the selected rail chip takes the
+                      // accent's own soft tint, not the violet indigo's.
+                      background: isSelected() ? 'var(--ui-accent-soft)' : 'transparent',
                       cursor: 'pointer',
                     }}
                     hover="bg-ui-bg-hover"
@@ -780,7 +782,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               onClick={() => props.onNewChat()}
               title="New chat"
               aria-label="New chat"
-              bg="cyber-700 hover:cyber-600"
+              bg="ui-accent hover:ui-accent-deep"
               rounded="md"
               transition="all"
               style={{
@@ -794,7 +796,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               <span
                 class="i-material-symbols-add-2"
                 aria-hidden="true"
-                style={{ width: '16px', height: '16px', color: 'white' }}
+                style={{ width: '16px', height: '16px', color: 'var(--ui-on-accent)' }}
               />
             </button>
           </div>
@@ -815,8 +817,12 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     flex="1"
                     p="y-1"
                     rounded="md"
-                    text={active() ? 'xs ui-accent' : 'xs ui-text-tertiary'}
-                    bg={active() ? 'cyber-700/30' : 'transparent hover:ui-bg-hover'}
+                    // #1008: the active segment's word is the primary text, not
+                    // the accent — light mode's accent is 4.6:1 on the page
+                    // ground already and no tint under it keeps 4.5:1. The tint
+                    // and the accent border carry "active".
+                    text={active() ? 'xs ui-text-primary' : 'xs ui-text-tertiary'}
+                    bg={active() ? 'ui-accent/15' : 'transparent hover:ui-bg-hover'}
                     border={active() ? '1 ui-accent/40' : '1 transparent'}
                     transition="all"
                     font="medium"
@@ -941,7 +947,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                           text="left"
                           p="3"
                           rounded="md"
-                          bg={isSelected() ? 'cyber-700/30' : ''}
+                          // /8, not more: the row's tertiary timestamp has to
+                          // keep 4.5:1 on the tint (4.9:1 in both themes); the
+                          // accent border marks the selection (#1008).
+                          bg={isSelected() ? 'ui-accent/8' : ''}
                           hover="bg-ui-bg-hover"
                           transition="all"
                           border={
@@ -1251,12 +1260,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               onClick={() => props.onNewChat()}
               flex="1"
               p="2"
-              bg="cyber-700 hover:cyber-600"
-              text="white sm"
+              bg="ui-accent hover:ui-accent-deep"
+              text="ui-on-accent sm"
               font="medium"
               rounded="md"
               transition="all"
-              shadow="hover:[0_0_15px_rgba(79,70,229,0.5)]"
             >
               + New Chat
             </button>

@@ -27,9 +27,10 @@ vi.mock('../stash/document-store.server', () => {
 })
 
 describe('the stash is opt-in (core-absorb PR-2 pin)', () => {
+  // 2.5 s under coverage at load 13-16 on 8 cores, of a 5 s default (#998).
   it('the root barrel imports without evaluating any stash module', async () => {
     await expect(import('../index')).resolves.toBeTruthy()
-  })
+  }, 15_000)
 
   it('the ./patterns barrel imports without evaluating any stash module', async () => {
     await expect(import('../patterns/index')).resolves.toBeTruthy()

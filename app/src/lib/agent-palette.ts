@@ -8,7 +8,9 @@
  * flavour inherits `sandbox` rather than needing a novel hue.
  *
  * RESERVED — never assign these to an agent. The sidebar spends them on run
- * status, and status must stay readable on top of agent identity:
+ * status, and status must stay readable on top of agent identity. #1008 left
+ * these as they were: they are status colours, not neon chrome, and the run
+ * state must stay legible whatever the palette around them does:
  *   cyan  #22d3ee  live run / selected row
  *   green #4ade80  completed  (completionBorderColor)
  *   red   #f87171  errored    (completionBorderColor)
@@ -24,22 +26,23 @@
 /** Accent token stored on `AgentConfig.accent` and sent over the wire. */
 export type AgentAccent = keyof typeof AGENT_ACCENTS
 
-/** Family token → hex. Tuned for the #0a0a0f background. */
+/** Family token → hex. Tuned for the #0f1115 background (#1008: the same five
+ *  hues at lower brightness, matching the toned-down graph data colours). */
 export const AGENT_ACCENTS = {
   /** general-purpose — the house indigo */
-  indigo: '#818cf8',
+  indigo: '#7d84e0',
   /** code execution */
-  amber: '#fbbf24',
+  amber: '#d9a844',
   /** sandboxed compute, any flavour */
-  orange: '#fb923c',
+  orange: '#d98a52',
   /** knowledge work: research + retrieval */
-  violet: '#a78bfa',
+  violet: '#9484d6',
   /** third-party integrations */
-  blue: '#60a5fa',
+  blue: '#5f94d6',
 } as const
 
 /** Removed agents and rows whose agent no longer resolves. */
-export const AGENT_ACCENT_FALLBACK = '#a1a1aa'
+export const AGENT_ACCENT_FALLBACK = '#9aa1ab'
 
 /**
  * Resolve an accent token to a hex colour. Unknown or absent tokens fall back

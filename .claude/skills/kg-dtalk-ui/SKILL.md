@@ -152,9 +152,14 @@ modes, it needs a `ui-*` token — add the variable to both blocks of the
 palette preflight, not a `dark:` utility to the component.
 
 Practical consequence for contrast: a `ui-*` surface has to clear 4.5:1 in
-**both** palettes — that is why `ui-accent` is `#0e7490` in light rather than
-`#00ffff`. A colour written as a literal is only ever checked against the dark
-ground, which is the failure this palette exists to prevent.
+**both** palettes — that is why the accent is a muted teal in dark (`#45b0b8`)
+and a deep one in light (`#0e7490`), and why text that sits on an accent TINT
+uses `ui-accent-text` rather than `ui-accent`: light's accent clears 4.5:1 on
+the bare page ground but not on any tint of itself (#1008). A colour written as
+a literal is only ever checked against the dark ground, which is the failure
+this palette exists to prevent. The pairs are pinned per token in
+`uno-theme.test.ts` and, for labels, chips and tinted controls, in
+`event-contrast*.test.ts` and `tinted-controls-contrast.test.tsx`.
 
 **Not on the theme yet**, and each is a visible seam in light mode: the
 Cytoscape canvas, `UserMenu`'s dropdown (white in both modes), the retriever
@@ -214,13 +219,13 @@ what is left, and the reason each survives:
 
 | Hex       | Uses | Where, and why it is still a literal                                        |
 | --------- | ---- | --------------------------------------------------------------------------- |
-| `#22d3ee` | 17   | citation chips + Data Stash accents — **no token yet**, see the table below |
-| `#00ffff` | 11   | Cytoscape node/edge styles — the canvas cannot read `var()`                 |
-| `#f59e0b` | 10   | warning role — **no token yet**                                             |
-| `#52525b` | 10   | disabled/grayed affordances — **no token yet**                              |
-| `#ff00ff` | 7    | `neon-magenta`, graph data colour                                           |
-| `#4f46e5` | 7    | `cyber-600`, and indigo is fixed on purpose                                 |
-| `#0a0a0f` | 5    | Cytoscape label backgrounds, xterm's theme                                  |
+| `#22d3ee` | 12   | citation chips + Data Stash accents — **no token yet**, see the table below |
+| `#45b0b8` | 11   | Cytoscape node/edge styles (`neon-cyan`) — the canvas cannot read `var()`   |
+| `#f59e0b` | 8    | warning role — **no token yet**                                             |
+| `#52525b` | 8    | disabled/grayed affordances — **no token yet**                              |
+| `#b863c9` | 7    | `neon-magenta`, graph data colour                                           |
+| `#4f46e5` | 6    | `cyber-600`, and indigo is fixed on purpose                                 |
+| `#0f1115` | 6    | Cytoscape label backgrounds, the agent palette's ground                     |
 
 Counts are literal occurrences (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
 comments included — re-run it rather than trusting the number.
@@ -260,7 +265,7 @@ per-entity; do not invent a second one.
 Two collisions the confirmation has to settle, because a naive mapping breaks
 something real:
 
-1. **Two cyans, two jobs.** `neon-cyan` (`#00ffff`) is the _brand_ accent — graph
+1. **Two cyans, two jobs.** `neon-cyan` (`#45b0b8` since #1008) is the _brand_ accent — graph
    entities, prose links, LLM chips. `#22d3ee` (cyan-400) is _retrieval and run
    status_. They are not interchangeable and merging them would erase the
    distinction between "this is ours" and "this is a citation".
@@ -282,10 +287,12 @@ component re-deriving it slightly differently.
 
 ### R1 — Primary button: **use the `cyber-button` shortcut**
 
-`uno.config.ts` defines it and **nothing uses it**, while
-`ChatSidebar.tsx:1000-1010` hand-copies its declaration list verbatim and
-`ChatInterface.tsx:713-719` copies it minus the glow. That is the exact shape a
-shortcut exists to prevent.
+`uno.config.ts` defines it: the accent as the ground, `ui-on-accent` as the
+text (the page's near-black on dark's muted teal, white on light's deep teal),
+`ui-accent-deep` on hover, and **no glow** (#1008 removed every glow). Send and
+the Memory panel use it; **+ New Chat** (`ChatSidebar.tsx`) and Promote
+(`ChatInterface.tsx`) still restate its declarations inline, which is the exact
+shape a shortcut exists to prevent.
 
 ```tsx
 <button cyber-button p="2" text="sm">
@@ -296,14 +303,14 @@ shortcut exists to prevent.
 Valueless attributify resolves shortcuts — verified against this config, the
 attribute `cyber-button` matches and emits the full rule set. Add only what
 genuinely differs (padding, text size, `flex="1"`); do **not** restate
-`bg="cyber-700 hover:cyber-600"`, `text="white"`, `font="medium"`,
-`rounded="md"`, `transition="all"` or the hover glow — the shortcut is those.
+`bg="ui-accent hover:ui-accent-deep"`, `text="ui-on-accent"`, `font="medium"`,
+`rounded="md"` or `transition="all"` — the shortcut is those.
 
-If a variant needs a different glow or colour, change the shortcut or add a
-sibling shortcut in `uno.config.ts`. Do not fork it inline.
+If a variant needs a different colour, change the shortcut or add a sibling
+shortcut in `uno.config.ts`. Do not fork it inline, and do not add a glow back.
 
-`glass-panel` and `neon-border` are in the same state — defined, unused. Same
-rule: reach for them before hand-rolling a blurred panel or a glowing border.
+`glass-panel` is defined and unused. Same rule: reach for it before
+hand-rolling a blurred panel. (`neon-border` was deleted with the glows.)
 
 ### R2 — Panel header chrome
 
@@ -384,7 +391,7 @@ namespace, a document reference.
 
 ```tsx
 <span
-  text="xs ui-accent"
+  text="xs ui-accent-text"
   bg="ui-accent/10"
   p="x-1.5 y-0.5"
   rounded="sm"
@@ -395,11 +402,16 @@ namespace, a document reference.
 ```
 
 The shape is fixed — `x-1.5 y-0.5`, `rounded="sm"`, `font="mono"`, `text="xs"`
-— and **only the hue varies**, always as the `/10` tint of the same colour used
-for the text. In use today: `ui-accent`, `ui-success`, `neon-orange`,
-`neon-magenta`, `red-500`. A chip whose text colour and background tint
-disagree is a bug, and one whose hue is a `neon-*` will be unreadable in light
-mode — reach for a `ui-*` role first.
+— and **only the hue varies**, always as a tint (`/10` or lighter) of the same
+hue as the text. For the accent, the text is `ui-accent-text`, the accent's
+ink for a tint of itself (plain `ui-accent` on `ui-accent/10` is about 4:1 in
+light). Other hues in use: `ui-success`, the `--ui-evt-*` label colours as
+`[var(--ui-evt-…)]` (the sanitized chip: text, `/6` tint and border all on
+`--ui-evt-content-sanitized`), `neon-orange`, `neon-magenta`, `red-500`. A chip
+whose text colour and background tint disagree is a bug, one whose hue is a
+`neon-*` will be unreadable in light mode — reach for a `ui-*` role first —
+and a tint has to be measured over every ground the chip can sit on, the
+tertiary one included.
 
 The chat-message equivalent is the `doc-ref-chip` preflight class; do not
 re-implement it in attributify, and do not use this recipe inside sanitised

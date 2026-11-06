@@ -1866,8 +1866,10 @@ describe('extractPromptTemplates', () => {
     const cache: Record<string, string> = {}
     extractPromptTemplates(source, cache)
     const cpu = process.cpuUsage(start)
-    // CPU time excludes scheduler delays; the linear scanner has >10x headroom.
-    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(500)
+    // CPU time excludes scheduler delays. Measured (#998): 21 ms idle, 204 ms
+    // under coverage at load 13-16 on 8 cores, 112 s with `break` -> `continue`
+    // on an unclosed signature; 1 s is 4.9x the loaded run.
+    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(1_000)
     expect(cache).toEqual({})
   })
 

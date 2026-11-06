@@ -489,3 +489,183 @@ describe('reportRoutes', () => {
     expect(reportRoutesCheck(turns, []).pass).toBe(true)
   })
 })
+
+describe('resolvedIntent checks (#1006)', () => {
+  // A minimal base: no citation, index or route graders, so the assertions
+  // below read only the resolved-intent checks.
+  const base: ConversationScenario = {
+    ...scenario,
+    indexed: undefined,
+    citation: undefined,
+    expectedRoutes: [],
+    forbiddenTools: [],
+    answerIncludes: [],
+  }
+  const intentScenario: ConversationScenario = {
+    ...base,
+    intentExpect: {
+      turn: 2,
+      brief: 'Search again with the office route, this time for the Q3 figures and the Q4 plan.',
+      includes: ['Q3 figures', 'Q4 plan'],
+      route: 'office-data',
+    },
+  }
+  const intentEvent = (intent: string) =>
+    event('intent_compacted', { intent, latest: 'try again', historyLength: 2 })
+  const decisionWithState = (label: string, state: string) =>
+    ({
+      ...event('decision_made', { label, labels: [{ id: 'answer' }], abstained: false }),
+      llmCall: { functionName: 'JevDecide', variables: { state } },
+    }) as ContextEvent
+  const actionWithIntent = (intent: string) =>
+    ({
+      ...event('controller_action', {}),
+      llmCall: { functionName: 'ActorController', variables: { intent } },
+    }) as ContextEvent
+  const criticWithIntent = (intent: string) =>
+    ({
+      ...event('critic_result', { result: { is_sufficient: true } }),
+      llmCall: { functionName: 'Critic', variables: { intent } },
+    }) as ContextEvent
+
+  const passing = (): ConversationTrace => ({
+    ...successful(),
+    turns: [
+      ...successful().turns.slice(0, 1),
+      {
+        response: 'The Q3 figures are in the notes; the Q4 plan is a separate file.',
+        status: 'running',
+        events: [
+          intentEvent(
+            'Search again with the office route, this time for the Q3 figures and the Q4 plan.',
+          ),
+          decisionWithState(
+            'office-data',
+            'Resolved intent (this turn): "Search again with the office route, this time for the Q3 figures and the Q4 plan."',
+          ),
+          ...child('office-data'),
+          actionWithIntent(
+            'Search again with the office route, this time for the Q3 figures and the Q4 plan.',
+          ),
+          criticWithIntent(
+            'Search again with the office route, this time for the Q3 figures and the Q4 plan.\n\nSCOPE',
+          ),
+          decision('answer'),
+        ],
+      },
+    ],
+  })
+
+  it('passes a turn whose every surface carries the resolved intent', () => {
+    expect(failed(passing(), intentScenario)).toEqual([])
+  })
+
+  // The hermetic reds: a trace from today's main (no compact-intent step) or
+  // one that drops any single surface fails, never grades vacuously.
+  it('fails when no intent_compacted event exists (today’s main)', () => {
+    const t = passing()
+    t.turns[1]!.events = t.turns[1]!.events.filter((e) => e.type !== 'intent_compacted')
+    const names = failed(t, intentScenario)
+    // The brief checks fail; the decide-state check grades the state the run
+    // actually recorded, which this fixture still carries — the real main
+    // behaviour (no heading at all) is pinned by the next test.
+    expect(names).toContain('turn 2: resolved intent recorded')
+    expect(names).toContain('resolved intent names Q3 figures')
+  })
+  it('fails when the decide state lacks the heading or a fact', () => {
+    const t = passing()
+    const d = t.turns[1]!.events.find((e) => e.type === 'decision_made')!
+    ;(d.llmCall!.variables as { state: string }).state = 'Conversation (recent turns):'
+    expect(failed(t, intentScenario)).toContain(
+      'turn 2: decide state heads with the resolved intent',
+    )
+  })
+  it('fails when the decision dispatches another route', () => {
+    const t = passing()
+    const d = t.turns[1]!.events.find((e) => e.type === 'decision_made')!
+    ;(d.data as { label: string }).label = 'read-documents'
+    expect(failed(t, intentScenario)).toContain('turn 2: decision dispatches office-data')
+  })
+  it('fails when the actor task carries only the raw message', () => {
+    const t = passing()
+    const a = t.turns[1]!.events.find((e) => e.type === 'controller_action')!
+    ;(a.llmCall!.variables as { intent: string }).intent = 'try again'
+    expect(failed(t, intentScenario)).toContain('turn 2: actor task carries the resolved intent')
+  })
+  it('fails when the critic intent lacks the resolved intent', () => {
+    const t = passing()
+    const c = t.turns[1]!.events.find((e) => e.type === 'critic_result')!
+    ;(c.llmCall!.variables as { intent: string }).intent = 'raw message only'
+    expect(failed(t, intentScenario)).toContain('turn 2: critic intent carries the resolved intent')
+  })
+  // rv-1011 term 2: on main the raw follow-up already names every fact, so a
+  // facts-only grade passed there. Each surface is graded against the RECORDED
+  // brief. MUTATION: grade the actor / critic / state on `includes` alone — red.
+  it('fails the actor, the critic and the state when they carry a raw message naming every fact', () => {
+    const raw = 'Try again with the office route, this time for the Q3 figures and the Q4 plan.'
+    const t = passing()
+    const a = t.turns[1]!.events.find((e) => e.type === 'controller_action')!
+    ;(a.llmCall!.variables as { intent: string }).intent = raw
+    const c = t.turns[1]!.events.find((e) => e.type === 'critic_result')!
+    ;(c.llmCall!.variables as { intent: string }).intent = `${raw}\n\nSCOPE`
+    const d = t.turns[1]!.events.find((e) => e.type === 'decision_made')!
+    ;(d.llmCall!.variables as { state: string }).state =
+      `Resolved intent (this turn): ${JSON.stringify(raw)}`
+    const names = failed(t, intentScenario)
+    expect(names).toContain('turn 2: actor task carries the resolved intent')
+    expect(names).toContain('turn 2: critic intent carries the resolved intent')
+    expect(names).toContain('turn 2: decide state heads with the resolved intent')
+  })
+  it('fails every surface when no brief was recorded, however the surfaces read', () => {
+    const t = passing()
+    t.turns[1]!.events = t.turns[1]!.events.filter((e) => e.type !== 'intent_compacted')
+    const names = failed(t, intentScenario)
+    expect(names).toContain('turn 2: actor task carries the resolved intent')
+    expect(names).toContain('turn 2: critic intent carries the resolved intent')
+    expect(names).toContain('turn 2: decide state heads with the resolved intent')
+  })
+  it('grades the retriever query when the scenario asks for it', () => {
+    const s: ConversationScenario = {
+      ...intentScenario,
+      intentExpect: { ...intentScenario.intentExpect!, retriever: true },
+    }
+    const retrieverEvent = (query: string) =>
+      event('tool_result', { tool: 'retriever', result: { query, matches: [] }, success: true })
+    const good = passing()
+    good.turns[1]!.events.push(
+      retrieverEvent(
+        'Search again with the office route, this time for the Q3 figures and the Q4 plan.',
+      ),
+    )
+    expect(failed(good, s)).toEqual([])
+    const bad = passing()
+    bad.turns[1]!.events.push(retrieverEvent('try again'))
+    expect(failed(bad, s)).toContain('turn 2: retriever query is the resolved intent')
+    // No retriever result at all is a failure, never a vacuous pass.
+    expect(failed(passing(), s)).toContain('turn 2: retriever query is the resolved intent')
+    // A query that names every fact but is not the brief fails too.
+    const near = passing()
+    near.turns[1]!.events.push(retrieverEvent('the Q3 figures and the Q4 plan'))
+    expect(failed(near, s)).toContain('turn 2: retriever query is the resolved intent')
+  })
+  it('a retriever route runs no actor: the actor check is not required there', () => {
+    const s: ConversationScenario = {
+      ...intentScenario,
+      intentExpect: { ...intentScenario.intentExpect!, route: 'read-documents', retriever: true },
+    }
+    const brief =
+      'Search again with the office route, this time for the Q3 figures and the Q4 plan.'
+    const t = passing()
+    t.turns[1]!.events = [
+      intentEvent(brief),
+      decisionWithState('read-documents', `Resolved intent (this turn): ${JSON.stringify(brief)}`),
+      event('tool_result', {
+        tool: 'retriever',
+        result: { query: brief, matches: [] },
+        success: true,
+      }),
+      decision('answer'),
+    ]
+    expect(failed(t, s)).toEqual([])
+  })
+})

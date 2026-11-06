@@ -2121,6 +2121,7 @@ context), not the orchestrator ADR-0005 rules out. Design:
 ```typescript
 interface DecisionLoopRoute<T> {
   pattern: ConfiguredPattern<T>
+  withBudget?: (budget: number) => ConfiguredPattern<T> // opt into the post-route exhaustion question
   description: string // the ONLY text the decisions model sees for this option
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
@@ -2477,6 +2478,44 @@ withholding was removed carries `withheldEventIds` on a loop record's `tool_resu
 The loop reads them back as a pure filter, so every later child's context still
 omits those events (previews, `expandPreviousResult` and `siblingResults` cannot
 reach them); nothing writes new ones.
+
+**Opt-in route exhaustion (#1017).** A `simpleLoop` or `actorCritic` route with
+`withBudget` asks one blocking `route-budget` question after its completed
+record reports `stats.hitBound`. Other routes and other consumers retain the
+existing behavior. The loop must commit its route history and record its
+`controller_action` / `tool_result` projections. The factory rebuilds the same
+route with the supplied declared budget, preserving wrapper topology, ids,
+tools, views, guards and sibling visibility. Runtime defaults and shared
+pattern objects are never mutated.
+
+The options are `answer` (**Answer with what we have**, the default and only
+unattended-eligible option) and `continue` (**Continue with a larger budget**).
+The summary names the original and retry budgets and warns that continuation
+re-runs the route from scratch and may repeat file writes in the sandbox.
+The raised budget is `min(original effective bound + 3, runtime ceiling)`:
+10 attempts for actorCritic, 15 rounds for simpleLoop. At the ceiling,
+continue is unavailable with an explanation. The request uses
+`unattended: 'apply-default'`; unattended runs record answer immediately,
+never park or enlarge a budget, and keep their ordinary decision-loop flow.
+Outside an owned HITL run, or beneath a broken resumable path, the old behavior
+also remains.
+
+Interactive answer runs the synthesizer over the completed records. Continue
+allows one fresh dispatch of the same route, with the same task and filtered
+handoff including its exhausted record, then synthesis, even if that dispatch
+exhausts too. No new decisions or budget questions follow that extra dispatch. It is
+available after the last ordinary iteration without changing `maxIterations`.
+`DECISION_LOOP_EXTRA_DISPATCHES` exports its bound (1) for host timeout accounting.
+
+The pause belongs to the loop itself: its continuation ends with
+`phase: 'route-budget'`, route and iteration, with no child. A resumable
+capability's optional `terminal(segment)` explicitly permits this own boundary;
+without it, a path must still end at a leaf. Resume validates the request through
+`resumeHarness`, rebuilds every completed record from the committed brackets,
+and replays the answer. It never resumes the exhausted actorCritic or sandbox
+internally. A later pause inside the enlarged simpleLoop carries `retryBudget`
+on the loop's continuation, so another resume keeps that budget and finishes
+without granting another extra dispatch. Existing child-pause replay is unchanged.
 
 **Failure — never a silent fallback.**
 

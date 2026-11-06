@@ -43,6 +43,7 @@ import {
   PER_CALL_TIMEOUT_MINUTES,
   CHAIN_OVERHEAD_CALLS,
   DECISION_LOOP_MAX_ITERATIONS,
+  DECISION_LOOP_EXTRA_DISPATCHES,
   DECISION_LOOP_WORST_REQUESTS,
   ATTEMPTS_PER_CONTROLLER_CALL,
   TOOL_CALL_TIMEOUT_MINUTES,
@@ -172,10 +173,15 @@ describe('the reap statement', () => {
       SETTINGS_BOUNDS.maxRetries[1] * (ATTEMPTS_PER_CONTROLLER_CALL + 1),
     )
     const requests =
-      DECISION_LOOP_MAX_ITERATIONS * (1 + worstChild) + 1 + (CHAIN_OVERHEAD_CALLS + 1)
+      DECISION_LOOP_MAX_ITERATIONS * (1 + worstChild) +
+      DECISION_LOOP_EXTRA_DISPATCHES * worstChild +
+      1 +
+      (CHAIN_OVERHEAD_CALLS + 1)
     const llm = requests * PER_CALL_TIMEOUT_MINUTES
     const tools =
-      DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES
+      (DECISION_LOOP_MAX_ITERATIONS + DECISION_LOOP_EXTRA_DISPATCHES) *
+      SETTINGS_BOUNDS.maxToolTurns[1] *
+      TOOL_CALL_TIMEOUT_MINUTES
     return llm + tools + WAKE_ALLOWANCE_MINUTES
   }
 
@@ -205,6 +211,8 @@ describe('the reap statement', () => {
     const docCalls = 6 * 15 + 6 + 1
     expect(docCalls).toBe(97)
     expect(DECISION_LOOP_MAX_ITERATIONS).toBe(6)
+    expect(DECISION_LOOP_EXTRA_DISPATCHES).toBe(1)
+    expect(DECISION_LOOP_WORST_REQUESTS).toBe(223)
     expect(DECISION_LOOP_WORST_REQUESTS).toBeGreaterThanOrEqual(docCalls)
     expect(HUNG_TURN_BACKSTOP_MINUTES).toBeGreaterThan(docCalls * PER_CALL_TIMEOUT_MINUTES)
   })
@@ -218,7 +226,9 @@ describe('the reap statement', () => {
   it('counts non-LLM time: tool calls and the wake are inside the backstop', () => {
     const llmOnly = DECISION_LOOP_WORST_REQUESTS * PER_CALL_TIMEOUT_MINUTES
     const nonLlm =
-      DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES +
+      (DECISION_LOOP_MAX_ITERATIONS + DECISION_LOOP_EXTRA_DISPATCHES) *
+        SETTINGS_BOUNDS.maxToolTurns[1] *
+        TOOL_CALL_TIMEOUT_MINUTES +
       WAKE_ALLOWANCE_MINUTES
     expect(nonLlm).toBeGreaterThan(0)
     expect(HUNG_TURN_BACKSTOP_MINUTES).toBeGreaterThan(llmOnly + nonLlm)

@@ -103,9 +103,17 @@ import type {
   UnifiedContext,
   WarningEventData,
 } from '../types'
-import { createEvent, createScope, dropHitl, resolveConfig, trackEvent } from '../context.server'
+import {
+  createEvent,
+  createScope,
+  dropHitl,
+  resolveConfig,
+  shouldTrack,
+  trackEvent,
+} from '../context.server'
 import { getErrorHint } from '../error-hints'
-import { hitlPending } from '../hitl.server'
+import { askHuman, currentRunId, hitlPending } from '../hitl.server'
+import { RUNTIME_CONFIG_BOUNDS } from '../runtime-config'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import { onPath, resumableFingerprint, takeResume, type TakenResume } from '../resume.server'
@@ -161,6 +169,9 @@ assertServerOnImport()
  *  bound — the stuck-run reaper's arithmetic — can pin its copy to this one. */
 export const DECISION_LOOP_MAX_ITERATIONS = 6
 
+/** One fresh route dispatch per turn, only after a person's explicit choice. */
+export const DECISION_LOOP_EXTRA_DISPATCHES = 1
+
 /** The `data.decisions` key the loop records its latest decision under. */
 export const DECISION_LOOP_KEY = 'next_step'
 
@@ -179,6 +190,10 @@ const NO_EVENTS: ReadonlySet<string> = new Set()
 
 export interface DecisionLoopRoute<T> {
   readonly pattern: ConfiguredPattern<T>
+  /** Opt into the loop-owned exhaustion question. Rebuild the SAME wrapped
+   *  route with this declared round/attempt budget; all other config stays put.
+   *  Absent: the existing decision-loop behavior, including unattended runs. */
+  readonly withBudget?: (budget: number) => ConfiguredPattern<T>
   /** The only text the decisions model sees for this option. */
   readonly description: string
   /** One or two high-level capability lines for the planner's agent map. */
@@ -400,6 +415,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         `decisionLoop: route '${name}' sets allowReplan but is not a planner; there is nothing to replan (allowReplan is read only by a planner route)`,
       )
     }
+    if (routes[name].withBudget && kind !== 'simpleLoop' && kind !== 'actorCritic') {
+      throw new Error(`decisionLoop: withBudget requires a bounded loop route ('${name}')`)
+    }
     kinds.set(name, kind)
     leafIds.set(name, leaf.config.patternId ?? leaf.name)
   }
@@ -469,10 +487,120 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   // resume rebuilds the records from. The fingerprint covers what a re-entry
   // depends on: the routes it can re-enter and the names it gates.
   const resumable = resolved.commitStrategy === 'always' || resolved.commitStrategy === 'on-success'
+  const budgetRoutes = names.filter((name) => routes[name].withBudget !== undefined)
+  if (
+    budgetRoutes.length > 0 &&
+    (!resumable ||
+      !['controller_action', 'tool_result'].every((type) =>
+        shouldTrack(type as 'controller_action' | 'tool_result', resolved.trackHistory),
+      ))
+  ) {
+    throw new Error('decisionLoop: withBudget requires committed route history')
+  }
   const fingerprint = resumableFingerprint('decisionLoop', loopId, {
     routes: names,
     gatedTools: [...gatedTools].sort(),
+    ...(budgetRoutes.length > 0 ? { budgetRoutes } : {}),
   })
+
+  const children = names.map((n) => routes[n].pattern)
+  const retryPatterns = new Map<string, ConfiguredPattern<T>>()
+  const ceilingOf = (label: string): number =>
+    RUNTIME_CONFIG_BOUNDS[kinds.get(label) === 'actorCritic' ? 'maxRetries' : 'maxToolTurns'][1]
+  const retryPattern = (label: string, budget: number): ConfiguredPattern<T> => {
+    const build = routes[label]?.withBudget
+    if (!build || !Number.isInteger(budget) || budget < 1 || budget > ceilingOf(label)) {
+      throw new Error('decisionLoop: invalid recorded route retry budget')
+    }
+    const key = JSON.stringify([label, budget])
+    const cached = retryPatterns.get(key)
+    if (cached) return cached
+    const pattern = build(budget)
+    const original = routes[label].pattern
+    // The budget factory may change only the declared budget, never the
+    // route identity, wrapper topology or capability inventory.
+    const shape = (p: ConfiguredPattern<T>): unknown => [
+      p.name,
+      p.config.patternId,
+      p.config.viewConfig,
+      p.capabilities?.tools,
+      ownResumable(p)?.fingerprint,
+      p.children?.map(shape),
+    ]
+    if (JSON.stringify(shape(pattern)) !== JSON.stringify(shape(original))) {
+      throw new Error(`decisionLoop: withBudget changed the route composition ('${label}')`)
+    }
+    retryPatterns.set(key, pattern)
+    children.push(pattern)
+    return pattern
+  }
+
+  const isBudgetBoundary = (segment: ContinuationSegment): boolean =>
+    segment.phase === 'route-budget' &&
+    segment.child === undefined &&
+    segment.retryBudget === undefined &&
+    segment.route !== undefined &&
+    budgetRoutes.includes(segment.route) &&
+    Number.isInteger(segment.iteration) &&
+    segment.iteration! >= 1 &&
+    segment.iteration! <= maxIterations
+
+  /** Ask at the LOOP's own boundary, after the route has completed. A path
+   *  through a non-resumable wrapper cannot safely pause here. */
+  const askForBudget = async (record: RouteOutput) => {
+    if (!routes[record.route].withBudget || !record.stats.hitBound || !currentRunId()) return
+    const frame = currentRunFrame()
+    if (!frame || !resumable) return
+    const path = frame.continuation
+    if (
+      frame.continuationRoot !== fingerprint &&
+      (path[0]?.fingerprint !== frame.continuationRoot ||
+        path[path.length - 1]?.child !== fingerprint ||
+        path.some((s, i) => i < path.length - 1 && s.child !== path[i + 1].fingerprint))
+    )
+      return
+    const bound = record.stats.bound
+    if (!Number.isInteger(bound) || bound! < 1) {
+      throw new Error('decisionLoop: exhausted route recorded no valid budget')
+    }
+    const raised = Math.min(bound! + 3, ceilingOf(record.route))
+    const outcome = await onPath(
+      {
+        pattern: 'decisionLoop',
+        fingerprint,
+        route: record.route,
+        iteration: record.iteration,
+        phase: 'route-budget',
+      },
+      undefined,
+      () =>
+        askHuman({
+          kind: 'route-budget',
+          key: JSON.stringify([loopId, record.route, record.iteration, bound, raised]),
+          question: `${record.route} reached its attempt limit. How should we finish?`,
+          summary: {
+            route: record.route,
+            originalBudget: bound!,
+            retryBudget: raised,
+            continuation:
+              'Continuing re-runs the route from scratch and may repeat file writes in the sandbox. One extra dispatch is available per turn.',
+          },
+          options: [
+            { id: 'answer', label: 'Answer with what we have', unattended: true },
+            {
+              id: 'continue',
+              label: 'Continue with a larger budget',
+              ...(raised <= bound!
+                ? { unavailable: 'This route is already at its runtime budget ceiling.' }
+                : {}),
+            },
+          ],
+          defaultOption: 'answer',
+          unattended: 'apply-default',
+        }),
+    )
+    return { outcome, raised }
+  }
 
   // Visibility is decided PER patternId, so an id that two routes both emit
   // under — two routes given one id, one pattern object reused in two routes —
@@ -760,9 +888,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     // rebuilt from their children's committed brackets by `recordOf`, as live;
     // the paused iteration is re-entered with no decide call, its route handed
     // the rest of the path and the events its first half recorded.
-    const paused = taken ? replayIterations(taken) : undefined
-    if (paused) {
-      for (const done of paused.finished) {
+    const replay = taken ? replayIterations(taken) : undefined
+    const paused = replay?.boundary ? undefined : replay
+    let retry: { route: string; budget: number } | undefined =
+      taken?.segment.retryBudget !== undefined
+        ? { route: taken.segment.route!, budget: taken.segment.retryBudget }
+        : undefined
+    if (replay) {
+      for (const done of replay.finished) {
         const record = recordOf(
           done.route,
           done.iteration,
@@ -775,25 +908,37 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         rosterPayloads.push(done.events.filter((e) => e.type === 'tool_result').map((e) => e.data))
         if (record.plan) latestPlan = record.plan
       }
-      if (paused.decision) {
+      if (replay.decision) {
         scope.data = {
           ...scope.data,
-          decisions: { ...scope.data.decisions, [DECISION_LOOP_KEY]: paused.decision },
+          decisions: { ...scope.data.decisions, [DECISION_LOOP_KEY]: replay.decision },
         }
       }
     }
 
-    for (let iteration = paused?.iteration ?? 1; iteration <= maxIterations; iteration++) {
+    if (replay?.boundary) {
+      const record = records[records.length - 1]
+      const asked = await askForBudget(record)
+      if (!asked || asked.outcome.status === 'pending') return scope
+      if (asked.outcome.choice === 'answer') return scope
+      retry = { route: record.route, budget: asked.raised }
+    }
+
+    for (
+      let iteration = replay ? replay.iteration + (replay.boundary ? 1 : 0) : 1;
+      iteration <= maxIterations || retry !== undefined;
+      iteration++
+    ) {
       const resuming = paused !== undefined && iteration === paused.iteration
       let label: string
       // The decisions model's conversation lines; the child below gets the same
       // ones, minus the latest message. Read inside a try: a message the
       // builder cannot read is a non-decision like any other.
       let conversation: string[] = []
-      if (resuming) {
+      if (resuming || retry) {
         // Decided before the pause: the same route, with no model call. Its
         // child still reads the earlier conversation, as it did live.
-        label = paused.route
+        label = resuming ? paused.route : retry!.route
         try {
           conversation = conversationTurns(view)
         } catch (e) {
@@ -897,7 +1042,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
 
       // 2. Run the route in a child scope.
       const route = routes[label]
-      const pattern = route.pattern
+      const pattern = retry ? retryPattern(label, retry.budget) : route.pattern
       const childId = pattern.config.patternId ?? pattern.name
       const enter = createEvent('pattern_enter', childId, {
         pattern: pattern.name,
@@ -994,6 +1139,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           fingerprint,
           route: label,
           iteration,
+          ...(retry ? { retryBudget: retry.budget } : {}),
           child: ownResumable(pattern)?.fingerprint ?? null,
         }
         const slot =
@@ -1108,6 +1254,22 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         }
         return scope
       }
+      // The one authorized fresh dispatch is terminal, even if it exhausts
+      // again. A later nested pause carries retryBudget on its continuation.
+      if (retry) {
+        ended = 'answer'
+        break
+      }
+      const asked = await askForBudget(record)
+      if (asked?.outcome.status === 'pending') return scope
+      if (asked?.outcome.status === 'answered' && asked.outcome.by !== 'unattended') {
+        if (asked.outcome.choice === 'continue') {
+          retry = { route: label, budget: asked.raised }
+          continue
+        }
+        ended = 'answer'
+        break
+      }
     }
 
     if (ended === 'bound') {
@@ -1139,12 +1301,16 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
    */
   const replayIterations = (taken: TakenResume) => {
     const { route, iteration } = taken.segment
+    const boundary = taken.segment.phase === 'route-budget'
     if (
       route === undefined ||
       !Object.hasOwn(routes, route) ||
       !Number.isInteger(iteration) ||
       iteration! < 1 ||
-      iteration! > maxIterations
+      iteration! >
+        maxIterations +
+          (taken.segment.retryBudget !== undefined ? DECISION_LOOP_EXTRA_DISPATCHES : 0) ||
+      (boundary && !isBudgetBoundary(taken.segment))
     ) {
       throw new Error('decisionLoop: the recorded pause names no route and iteration of this loop')
     }
@@ -1201,7 +1367,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       wallMs: number
       thrown: string | undefined
     }[] = []
-    for (let i = 1; i < iteration!; i++) {
+    for (let i = 1; i < iteration! + (boundary ? 1 : 0); i++) {
       const of = halves.filter((h) => h.iteration === i)
       const last = of[of.length - 1]
       if (!last || last.exit?.status === 'paused' || of.some((h) => h.route !== last.route)) {
@@ -1218,20 +1384,22 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const halvesOfPaused = halves.filter((h) => h.iteration === iteration)
     const lastHalf = halvesOfPaused[halvesOfPaused.length - 1]
     if (
-      !lastHalf ||
-      lastHalf.exit?.status !== 'paused' ||
-      halvesOfPaused.some((h) => h.route !== route)
+      !boundary &&
+      (!lastHalf ||
+        lastHalf.exit?.status !== 'paused' ||
+        halvesOfPaused.some((h) => h.route !== route))
     ) {
       throw new Error(
         `decisionLoop: iteration ${iteration} of the recorded pause did not pause in '${route}'`,
       )
     }
     return {
+      boundary,
       route,
       iteration: iteration!,
       rest: taken.rest,
       finished,
-      childEvents: halvesOfPaused.flatMap((h) => h.events),
+      childEvents: boundary ? [] : halvesOfPaused.flatMap((h) => h.events),
       // By id, not by object: a copy of the events made above the loop must
       // not let the paused half back into the resumed child's view.
       own: new Set(halvesOfPaused.flatMap((h) => h.bracket.flatMap((e) => (e.id ? [e.id] : [])))),
@@ -1262,16 +1430,21 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     // show on the chain's progress, and projecting every route at its worst case
     // would size the bar for a run that never happens.
     estimateTurns: () => maxIterations,
-    children: names.map((n) => routes[n].pattern),
+    children,
     capabilities: {
       decisionKeys: [DECISION_LOOP_KEY],
       ...(resumable
         ? {
             resumable: {
               fingerprint,
+              terminal: isBudgetBoundary,
               next: (segment) =>
-                segment.route !== undefined && Object.hasOwn(routes, segment.route)
-                  ? routes[segment.route].pattern
+                segment.phase === undefined &&
+                segment.route !== undefined &&
+                Object.hasOwn(routes, segment.route)
+                  ? segment.retryBudget !== undefined
+                    ? retryPattern(segment.route, segment.retryBudget)
+                    : routes[segment.route].pattern
                   : undefined,
             },
           }

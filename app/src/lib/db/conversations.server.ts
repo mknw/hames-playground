@@ -21,7 +21,10 @@
  */
 
 import { normalizeStoredContextTiers } from '../inference/tier-value'
-import { DECISION_LOOP_MAX_ITERATIONS } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
+import {
+  DECISION_LOOP_EXTRA_DISPATCHES,
+  DECISION_LOOP_MAX_ITERATIONS,
+} from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import { randomBytes } from 'node:crypto'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -881,7 +884,7 @@ const WORST_LOOP_REQUESTS = Math.max(
  * tripwire that went red the day core exported `decisionLoop`
  * (`stuck-run-reaper.test.ts`). Re-exported under the same name.
  */
-export { DECISION_LOOP_MAX_ITERATIONS }
+export { DECISION_LOOP_EXTRA_DISPATCHES, DECISION_LOOP_MAX_ITERATIONS }
 
 /**
  * The wall-clock cap of one tool call: the MCP SDK's
@@ -911,8 +914,9 @@ export const WAKE_ALLOWANCE_MINUTES = 12
  *     per iteration  = 1 decision + the worst child loop
  *                    = 1 + max(15 rounds × 2 attempts, 10 attempts × (2 actor + 1 critic))
  *                    = 1 + 30 = 31 requests
- *     turn           = 6 iterations × 31 + 1 synthesis + (5 chain overhead + 1 planner retry)
- *                    = 193 requests
+ *     turn           = 6 iterations × 31 + 1 authorized extra child × 30
+ *                      + 1 synthesis + (5 chain overhead + 1 planner retry)
+ *                    = 223 requests (#1017: one fresh dispatch after a person chooses)
  *
  * The `decide` call is a single request (a systemone client with no parse
  * retry) and is counted at the same 3-minute budget, which is conservative.
@@ -922,11 +926,14 @@ export const WAKE_ALLOWANCE_MINUTES = 12
  * `simpleLoop` and no chain overhead: 6 × 15 + 6 decisions + 1 synthesis =
  * **97 calls**. This counts requests, in the worse child shape (`actorCritic`),
  * with the chain-overhead calls the bound it replaces already carried. Both
- * computations stand: 97 is pinned as a FLOOR the backstop must exceed, 193 is
+ * computations stand: 97 is pinned as a FLOOR the backstop must exceed, 223 is
  * the value used.
  */
 export const DECISION_LOOP_WORST_REQUESTS =
-  DECISION_LOOP_MAX_ITERATIONS * (1 + WORST_LOOP_REQUESTS) + 1 + (CHAIN_OVERHEAD_CALLS + 1)
+  DECISION_LOOP_MAX_ITERATIONS * (1 + WORST_LOOP_REQUESTS) +
+  DECISION_LOOP_EXTRA_DISPATCHES * WORST_LOOP_REQUESTS +
+  1 +
+  (CHAIN_OVERHEAD_CALLS + 1)
 
 /**
  * How long a row may sit at `status='running'` **while its turn lease is still
@@ -941,11 +948,11 @@ export const DECISION_LOOP_WORST_REQUESTS =
  * **Derived, not chosen** (G12 A1 on #507), for the PRIVATE tier:
  *
  *     LLM time     = DECISION_LOOP_WORST_REQUESTS × PER_CALL_TIMEOUT_MINUTES
- *                  = 193 requests × 3 min                       = 579 min
- *     tool time    = 6 iterations × 15 rounds × 1 min tool cap  =  90 min
+ *                  = 223 requests × 3 min                       = 669 min
+ *     tool time    = (6 + 1 extra) × 15 rounds × 1 min tool cap = 105 min
  *     wake         = WAKE_ALLOWANCE_MINUTES                     =  12 min
- *     worst turn                                                = 681 min
- *     backstop     = ceil(worst × MARGIN 1.2)                   = 818 min
+ *     worst turn                                                = 786 min
+ *     backstop     = ceil(worst × MARGIN 1.2)                   = 944 min
  *
  * **It is a bound on the private tier only.** The Anthropic tier declares no
  * `request_timeout_ms` on any leaf, and Haiku carries `retry_policy Constant`
@@ -971,7 +978,9 @@ export const DECISION_LOOP_WORST_REQUESTS =
 const STUCK_RUN_MARGIN = 1.2
 export const HUNG_TURN_BACKSTOP_MINUTES = Math.ceil(
   (DECISION_LOOP_WORST_REQUESTS * PER_CALL_TIMEOUT_MINUTES +
-    DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES +
+    (DECISION_LOOP_MAX_ITERATIONS + DECISION_LOOP_EXTRA_DISPATCHES) *
+      SETTINGS_BOUNDS.maxToolTurns[1] *
+      TOOL_CALL_TIMEOUT_MINUTES +
     WAKE_ALLOWANCE_MINUTES) *
     STUCK_RUN_MARGIN,
 )

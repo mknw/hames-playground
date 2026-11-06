@@ -183,6 +183,19 @@ row. `answer` is
 always offered, and when it is all that is left the loop answers. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
+A bounded route can opt into asking a person on exhaustion by declaring
+`withBudget: (budget) => makeTheSameWrappedRoute(budget)` alongside `pattern`.
+general-next enables this for its office and information routes. The loop asks
+**Answer with what we have** or **Continue with a larger budget** after the
+child finishes. Continue starts the route from scratch with three more rounds
+or attempts, clamped to the existing ceiling (15 or 10), and can repeat sandbox
+file writes. The summary makes that explicit. There is one extra dispatch per
+turn, even when the original exhausted the final ordinary iteration; both
+interactive choices finish with synthesis, with no further route decision.
+Unattended runs immediately record the default answer and retain their existing
+decision flow. Without `withBudget`, nothing changes. See SPEC for the
+loop-owned post-route continuation and the factory's contract.
+
 A host can also tell the decisions model which documents the conversation holds,
 through `documents` on the loop's config: a per-run source that returns the
 visible total and, only when the host decides that run may reveal them, a list

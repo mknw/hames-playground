@@ -49,13 +49,6 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
  *  swatch reads the same constant, so the two cannot disagree. */
 export const ADDED_COLOUR = '#d9822b'
 
-// The active-tab hues of three tabs (#1008). They were 400-level literals —
-// amber #f59e0b, cyan #22d3ee, green #10b981 — that cleared nowhere near 4.5:1
-// on the light panel; each is now a theme-aware value of the same family,
-// already held to AA in both themes (event-contrast.test.ts, uno-theme.test.ts).
-const STATS_TAB = 'var(--ui-evt-controller-action)'
-const DATA_TAB = 'var(--ui-evt-tool-result)'
-const SANDBOX_TAB = 'var(--ui-success)'
 const ADDED_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node[?added]',
@@ -262,8 +255,12 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'stats' ? STATS_TAB : 'transparent',
-                color: selectedTab() === 'stats' ? STATS_TAB : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'stats' ? 'var(--ui-evt-controller-action)' : 'transparent',
+                color:
+                  selectedTab() === 'stats'
+                    ? 'var(--ui-evt-controller-action)'
+                    : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-analytics-outline" w="4" h="4" aria-hidden="true" />
@@ -281,8 +278,12 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'data' ? DATA_TAB : 'transparent',
-                color: selectedTab() === 'data' ? DATA_TAB : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'data' ? 'var(--ui-evt-tool-result)' : 'transparent',
+                color:
+                  selectedTab() === 'data'
+                    ? 'var(--ui-evt-tool-result)'
+                    : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-dataset-outline" w="4" h="4" aria-hidden="true" />
@@ -306,8 +307,10 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'sandbox' ? SANDBOX_TAB : 'transparent',
-                color: selectedTab() === 'sandbox' ? SANDBOX_TAB : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'sandbox' ? 'var(--ui-success)' : 'transparent',
+                color:
+                  selectedTab() === 'sandbox' ? 'var(--ui-success)' : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />

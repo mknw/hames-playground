@@ -145,8 +145,11 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
           m="l-auto"
           p="x-2 y-1"
           text="xs ui-danger"
-          bg="ui-danger/10 hover:ui-danger/20"
-          border="1 ui-danger/30"
+          // The bar's ground is ui-bg-tertiary. A /20 hover wash took the label
+          // to 4.3:1 (dark) / 4.0:1 (light); /10 holds 5.1 / 4.7, so the hover
+          // is the border's step instead (#1008 fix round 1).
+          bg="ui-danger/10"
+          border="1 ui-danger/30 hover:ui-danger/60"
           rounded="md"
           cursor="pointer"
           transition="all"

@@ -286,34 +286,36 @@ export default defineConfig({
           --ui-code-bg: #0c0e11;
 
           /* Observability event-label colours (#1008 round 2): one muted pair
-             per event type, AA (>= 4.5:1) against every dark row ground.
+             per event type, AA (>= 4.5:1) against every dark row ground —
+             the hovered row (--ui-bg-hover) included, which is the lowest of
+             them and the one these were lifted for (fix round 1).
              Consumed as vars by lib/observability/event-styles.ts. */
-          --ui-evt-user-message: #7092c2;
-          --ui-evt-assistant-message: #5c9e77;
-          --ui-evt-tool-call: #9d81de;
-          --ui-evt-tool-result: #5f98a3;
+          --ui-evt-user-message: #7294c3;
+          --ui-evt-assistant-message: #5d9f78;
+          --ui-evt-tool-call: #9e82de;
+          --ui-evt-tool-result: #639ba5;
           --ui-evt-controller-action: #a1905d;
           --ui-evt-intent-compacted: #a1905d;
           --ui-evt-plan-created: #a1905d;
           --ui-evt-model-call: #a1905d;
-          --ui-evt-critic-result: #c9759f;
+          --ui-evt-critic-result: #ca78a1;
           --ui-evt-pattern-enter: #94a3b8;
           --ui-evt-pattern-exit: #94a3b8;
-          --ui-evt-approval-request: #b28768;
-          --ui-evt-approval-response: #5c9e77;
-          --ui-evt-error: #c97c75;
-          --ui-evt-reference-attached: #c073c7;
-          --ui-evt-content-sanitized: #b28768;
-          --ui-evt-warning: #a88b62;
+          --ui-evt-approval-request: #b3896a;
+          --ui-evt-approval-response: #5d9f78;
+          --ui-evt-error: #ca7d76;
+          --ui-evt-reference-attached: #c176c8;
+          --ui-evt-content-sanitized: #b3896a;
+          --ui-evt-warning: #aa8d65;
           --ui-evt-loop-recovery: #849959;
-          --ui-evt-hitl-request: #b28768;
-          --ui-evt-hitl-response: #5c9e77;
-          --ui-evt-decision-made: #8188de;
-          --ui-evt-memory-recalled: #5a9c93;
-          --ui-evt-memory-written: #5a9c93;
-          --ui-evt-egress-audit: #b28768;
-          --ui-evt-egress-refused: #b28768;
-          --ui-evt-egress-blocked: #b28768;
+          --ui-evt-hitl-request: #b3896a;
+          --ui-evt-hitl-response: #5d9f78;
+          --ui-evt-decision-made: #848bdf;
+          --ui-evt-memory-recalled: #5b9d94;
+          --ui-evt-memory-written: #5b9d94;
+          --ui-evt-egress-audit: #b3896a;
+          --ui-evt-egress-refused: #b3896a;
+          --ui-evt-egress-blocked: #b3896a;
 
           /* Per-pattern boundary labels, same treatment; the 6 percent tint
              wash itself lives in pattern-colors.json. */

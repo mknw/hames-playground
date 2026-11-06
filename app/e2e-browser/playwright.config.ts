@@ -78,7 +78,20 @@ export default defineConfig({
     video: 'off',
   },
 
-  outputDir: fileURLToPath(new URL('./.runtime/results', import.meta.url)),
+  // The `test-results` SEGMENT is load-bearing: it is the one name vite's file
+  // watcher ignores for Playwright out of the box (`**/test-results/**`, beside
+  // `.git` and `node_modules`), and this folder sits inside the dev server's
+  // watched root. As `.runtime/results` it was watched. Tracing is on for every
+  // test (`retain-on-failure` records, then discards), and a worker's trace
+  // resources share one folder that only grows: each page load adds ~600 files,
+  // one per module, and each addition made chokidar re-read and re-filter that
+  // whole folder. Measured on a quiet host (load ~2.5, 2026-11-06): the dev
+  // server held ~130% CPU between tests, 60% of it in the watcher's directory
+  // crawl, and `open()` grew 2.1s → 25s within one worker. It dropped back to
+  // 2.1s whenever a failure restarted the worker with an empty folder. So the
+  // first-paint timeouts in scenarios 7, 13, 14 and 18 were the suite slowing
+  // its own server, not a cold bundle (global setup already warms that).
+  outputDir: fileURLToPath(new URL('./.runtime/test-results', import.meta.url)),
 
   /**
    * Where the visual-regression baselines live (scenario 7).

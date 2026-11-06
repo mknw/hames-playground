@@ -105,7 +105,7 @@ for (const theme of THEMES) {
       await expect(region, {
         message:
           `${surface.name} in ${theme} no longer matches its committed baseline. Open the ` +
-          'diff image the runner just saved under e2e-browser/.runtime/results/ before ' +
+          'diff image the runner just saved under e2e-browser/.runtime/test-results/ before ' +
           'doing anything else: a red run here means something MOVED, which is either a ' +
           'regression or a design change you meant. If you meant it, re-record with ' +
           '`pnpm test:e2e:browser --update-snapshots` in a commit of its own.',

@@ -112,31 +112,37 @@ export default defineConfig({
         900: '#312e81',
         950: '#1e1b4b',
       },
+      // Graph-canvas DATA colours (#1008: same hues, toned down — saturated
+      // enough to stay distinguishable on the canvas, no longer neon).
       neon: {
-        cyan: '#00ffff',
-        magenta: '#ff00ff',
-        green: '#39ff14',
-        orange: '#ff6600',
-        purple: '#9d00ff',
-        blue: '#0080ff',
-        pink: '#ff007f',
+        cyan: '#45b0b8',
+        magenta: '#b863c9',
+        green: '#3fb950',
+        orange: '#d9822b',
+        purple: '#9a6bd8',
+        blue: '#4a9de0',
+        pink: '#d1609c',
       },
       dark: {
+        // Mirrors the dark `--ui-*` values above (#1008). No component uses
+        // these any more (theme-migration.test.ts keeps it that way); they
+        // stay in step so the graph-canvas data colours and the chrome never
+        // quietly diverge.
         bg: {
-          primary: '#0a0a0f',
-          secondary: '#12121a',
-          tertiary: '#1a1a24',
-          hover: '#22222f',
+          primary: '#0f1115',
+          secondary: '#16191e',
+          tertiary: '#1d2127',
+          hover: '#262b33',
         },
         border: {
-          primary: '#2a2a3a',
-          secondary: '#3a3a4a',
-          accent: '#4a4a5a',
+          primary: '#2b3038',
+          secondary: '#3a4048',
+          accent: '#4b525c',
         },
         text: {
-          primary: '#e4e4e7',
-          secondary: '#a1a1aa',
-          tertiary: '#71717a',
+          primary: '#e2e4e8',
+          secondary: '#9aa1ab',
+          tertiary: '#7b828c',
         },
       },
       // Theme-aware semantic palette (#226 B8). These are the SAME roles as
@@ -145,10 +151,11 @@ export default defineConfig({
       // and a component never needs a `dark:` / light branch of its own.
       //
       // The dark values of these variables are byte-identical to the `dark.*`
-      // hexes, `ui-accent`'s is `neon-cyan` and `ui-success`'s is `neon-green`
-      // — so migrating a component is a rename (`dark-bg-primary` →
-      // `ui-bg-primary`) with no visual change at all in dark mode.
-      // `uno-theme.test.ts` asserts that equality so it cannot silently drift.
+      // hexes above (#1008 re-pinned them together: the sober dark palette
+      // replaced the neon accent and the violet-cast neutrals in BOTH places,
+      // so migrating a component stays a rename, `dark-bg-primary` →
+      // `ui-bg-primary`). `uno-theme.test.ts` asserts that equality so it
+      // cannot silently drift.
       //
       // `dark.*` and the unmapped `neon.*` entries above are kept because the
       // graph canvas and the per-turn palettes still need fixed hexes: those
@@ -192,11 +199,12 @@ export default defineConfig({
     },
   },
   shortcuts: {
-    // Futuristic UI shortcuts
     'glass-panel': 'bg-ui-bg-secondary/50 backdrop-blur-lg border border-ui-border-primary',
-    'neon-border': 'border-2 border-neon-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]',
+    // The primary button. #1008 dropped its hover glow with the rest of the
+    // neon effects; the indigo itself stays (cyber-* is the one fixed chrome
+    // exception that reads on both grounds).
     'cyber-button':
-      'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]',
+      'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200',
   },
   preflights: [
     // Theme palette (#226 B8). `<html>` carries `dark` (UnoCSS's own dark
@@ -227,28 +235,31 @@ export default defineConfig({
           background-color: var(--ui-bg-primary);
         }
         :root {
-          --ui-bg-primary: #0a0a0f;
-          --ui-bg-secondary: #12121a;
-          --ui-bg-tertiary: #1a1a24;
-          --ui-bg-hover: #22222f;
-          --ui-border-primary: #2a2a3a;
-          --ui-border-secondary: #3a3a4a;
-          --ui-border-accent: #4a4a5a;
-          --ui-text-primary: #e4e4e7;
-          --ui-text-secondary: #a1a1aa;
-          --ui-text-tertiary: #71717a;
-          --ui-accent: #00ffff;
+          /* Sober dark neutrals (#1008): the same near-black steps as before,
+             with the violet cast dropped for flat blue-grey. */
+          --ui-bg-primary: #0f1115;
+          --ui-bg-secondary: #16191e;
+          --ui-bg-tertiary: #1d2127;
+          --ui-bg-hover: #262b33;
+          --ui-border-primary: #2b3038;
+          --ui-border-secondary: #3a4048;
+          --ui-border-accent: #4b525c;
+          --ui-text-primary: #e2e4e8;
+          --ui-text-secondary: #9aa1ab;
+          --ui-text-tertiary: #848b93;
+          /* A muted teal, not neon: 7.3:1 on --ui-bg-primary, 4.5:1 or better
+             on every surface it is written on. */
+          --ui-accent: #45b0b8;
           --ui-danger: #f87171;
-          --ui-success: #39ff14;
+          --ui-success: #3fb950;
 
           /* Tints of the accent. Written out per theme rather than mixed
-             from --ui-accent at use time: these are the exact rgba() the
-             hand-written CSS below carried as literals, so the dark render
-             is unchanged to the byte. */
-          --ui-accent-soft: rgba(0, 255, 255, 0.1);
-          --ui-accent-glow: rgba(0, 255, 255, 0.15);
-          --ui-accent-strong: rgba(0, 255, 255, 0.2);
-          --ui-accent-line: rgba(0, 255, 255, 0.4);
+             from --ui-accent at use time, for the same reason the values
+             themselves are: the hand-written CSS below reads them directly. */
+          --ui-accent-soft: rgba(69, 176, 184, 0.1);
+          --ui-accent-glow: rgba(69, 176, 184, 0.15);
+          --ui-accent-strong: rgba(69, 176, 184, 0.2);
+          --ui-accent-line: rgba(69, 176, 184, 0.4);
 
           /* Neutral washes over whatever surface they sit on. In dark they
              lighten (white at low alpha); in light they have to darken, and
@@ -262,7 +273,7 @@ export default defineConfig({
           /* Code blocks sit *below* the message surface, which is why this
              is not the tertiary background — in dark it goes darker than the
              page ground rather than lighter. */
-          --ui-code-bg: #0a0a0f;
+          --ui-code-bg: #0c0e11;
         }
         :root.light {
           /* Contrast-checked against the light grounds below: every text
@@ -277,10 +288,10 @@ export default defineConfig({
           --ui-border-accent: #a7aeba;
           --ui-text-primary: #14161a;
           --ui-text-secondary: #4a4f57;
-          --ui-text-tertiary: #6b7079;
+          --ui-text-tertiary: #5f656d;
           --ui-accent: #0e7490;
           --ui-danger: #b91c1c;
-          --ui-success: #15803d;
+          --ui-success: #166534;
 
           --ui-accent-soft: rgba(14, 116, 144, 0.1);
           --ui-accent-glow: rgba(14, 116, 144, 0.15);

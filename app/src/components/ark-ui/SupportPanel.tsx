@@ -33,10 +33,10 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node[touched]',
     style: {
-      'background-color': '#ff00ff',
-      'border-color': '#ff00ff',
+      'background-color': '#b863c9',
+      'border-color': '#b863c9',
       'border-width': 4,
-      'overlay-color': '#ff00ff',
+      'overlay-color': '#b863c9',
       'overlay-opacity': 0.3,
     },
   },
@@ -47,7 +47,7 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
  *  by the answer's elements and moved by the next acceptance (`graph-merge.ts`).
  *  A graph-data colour, because Cytoscape reads no CSS variable; the legend's
  *  swatch reads the same constant, so the two cannot disagree. */
-export const ADDED_COLOUR = '#ff6600'
+export const ADDED_COLOUR = '#d9822b'
 const ADDED_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node[?added]',

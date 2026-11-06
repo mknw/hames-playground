@@ -516,15 +516,6 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                               ? '1 amber-500/50'
                               : '1 ui-accent/50'
                       }
-                      shadow={
-                        message.role === 'user'
-                          ? '[0_0_10px_rgba(79,70,229,0.3)]'
-                          : message.role === 'error'
-                            ? '[0_0_10px_rgba(239,68,68,0.2)]'
-                            : message.role === 'warning'
-                              ? '[0_0_10px_rgba(245,158,11,0.2)]'
-                              : '[0_0_10px_rgba(0,255,255,0.2)]'
-                      }
                     >
                       {getInitials(message.role)}
                     </div>

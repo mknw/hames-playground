@@ -731,7 +731,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                       margin: '0 auto 4px',
                       'border-radius': '0.375rem',
                       border: isSelected()
-                        ? '1px solid rgba(0, 255, 255, 0.4)'
+                        ? '1px solid var(--ui-accent-line)'
                         : '1px solid transparent',
                       background: isSelected() ? 'rgba(67, 56, 202, 0.3)' : 'transparent',
                       cursor: 'pointer',

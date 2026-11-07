@@ -91,10 +91,7 @@ describe('effective route records', () => {
           return { value: 'Synthetic answer' }
         },
       })
-      await synth.fn(
-        createScope(synth.config.patternId, {}),
-        createEventView(ctx, synth.config.viewConfig),
-      )
+      await synth.fn(createScope('synth', {}), createEventView(ctx, synth.config.viewConfig))
       expect(seen?.hasError).toBe(unrelated)
       expect(seen?.errorMessage).toBe(unrelated ? 'Another route failed' : undefined)
       expect(seen?.loopHistory?.iterations.map((i) => i.result)).toEqual(

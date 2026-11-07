@@ -188,6 +188,17 @@ class SmallModelsBehaviour(unittest.TestCase):
         module = _load_modal_app("hames_small_models.py", HAMES_MODAL_SCALEDOWN_S="60")
         self.assertEqual(module.app.servers[0][1]["scaledown_window"], 60)
 
+    def test_startup_timeout_decorator_matches_pinned_app_default(self):
+        module = _load_modal_app("hames_small_models.py")
+        # A first boot after a deploy builds the memory snapshot; the longest
+        # measured one took ~9 min, which the earlier 600 s default would have
+        # killed and restarted from scratch (issue #921).
+        self.assertEqual(module.app.servers[0][1]["startup_timeout"], 1200)
+
+    def test_startup_timeout_override_reaches_decorator(self):
+        module = _load_modal_app("hames_small_models.py", HAMES_MODAL_STARTUP_TIMEOUT_S="900")
+        self.assertEqual(module.app.servers[0][1]["startup_timeout"], 900)
+
     def test_compute_region_small_box_falls_back_to_shared_when_only_shared_is_set(self):
         module = _load_modal_app("hames_small_models.py", HAMES_MODAL_COMPUTE_REGION="eu-test-region")
         self.assertEqual(module.app.servers[0][1]["compute_region"], "eu-test-region")

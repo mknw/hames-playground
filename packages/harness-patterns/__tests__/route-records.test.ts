@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { supersededRouteEventIds } from '../route-records'
-import type { ContextEvent, ToolResultEventData } from '../types'
+import type { CompactExecutionInput, ContextEvent, ToolResultEventData } from '../types'
+import { createContext, createScope } from '../context.server'
+import { createEventView } from '../patterns/event-view.server'
+import { compactExecution } from '../patterns/compactExecution.server'
 
 const fixture = (): ContextEvent[] => [
   { id: 'budget', ts: 1, type: 'error', patternId: 'work', data: { kind: 'budget_exhausted' } },
@@ -50,6 +53,56 @@ const fixture = (): ContextEvent[] => [
 ]
 
 describe('effective route records', () => {
+  it.each([false, true])(
+    'synthesis retains unrelated records and errors (%s)',
+    async (unrelated) => {
+      const ctx = createContext('Invented task', {})
+      ctx.events = fixture().filter((e) => unrelated || !e.id?.startsWith('other'))
+      // Real loop record pairs: the obsolete action becomes unpaired and is
+      // dropped, while another route's failed result keeps its own action.
+      ctx.events = ctx.events.flatMap((event) =>
+        event.type === 'tool_result'
+          ? [
+              {
+                type: 'controller_action' as const,
+                ts: event.ts,
+                patternId: event.patternId,
+                data: {
+                  action: {
+                    tool_name: (event.data as ToolResultEventData).tool,
+                    tool_args: '',
+                    reasoning: '',
+                    is_final: false,
+                  },
+                },
+              },
+              event,
+            ]
+          : [event],
+      )
+      const error = ctx.events.find((e) => e.id === 'other-error')
+      if (error) error.data = { kind: 'budget_exhausted', error: 'Another route failed' }
+      let seen: CompactExecutionInput | undefined
+      const synth = compactExecution({
+        mode: 'thread',
+        viewConfig: { fromPatterns: ['loop', 'work', 'other'] },
+        synthesize: async (input) => {
+          seen = input
+          return { value: 'Synthetic answer' }
+        },
+      })
+      await synth.fn(
+        createScope(synth.config.patternId, {}),
+        createEventView(ctx, synth.config.viewConfig),
+      )
+      expect(seen?.hasError).toBe(unrelated)
+      expect(seen?.errorMessage).toBe(unrelated ? 'Another route failed' : undefined)
+      expect(seen?.loopHistory?.iterations.map((i) => i.result)).toEqual(
+        unrelated ? [{ __error: 'Tool call failed' }, 'Invented output'] : ['Invented output'],
+      )
+    },
+  )
+
   it('supersedes only the explicitly linked failure, preserving other routes and history', () => {
     const events = fixture()
     const saved = JSON.stringify(events)

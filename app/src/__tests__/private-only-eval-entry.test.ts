@@ -136,8 +136,9 @@ it.each([
     }
     expect(exit).not.toHaveBeenCalled()
     expect(native).toHaveBeenCalledOnce()
-    expect(native.mock.calls[0][2]).toMatchObject(client ? { client } : {})
-    if (!client) expect(native.mock.calls[0][2]).not.toHaveProperty('client')
+    expect(native.mock.calls[0][2]).toBeNull() // no turn clock in the eval preflight
+    expect(native.mock.calls[0][3]).toMatchObject(client ? { client } : {})
+    if (!client) expect(native.mock.calls[0][3]).not.toHaveProperty('client')
     expect(writeReport).toHaveBeenCalledOnce()
   },
 )

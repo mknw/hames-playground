@@ -165,7 +165,7 @@ export function followContinuation<T>(
     const capability: ResumableCapability | undefined = node ? ownResumable(node) : undefined
     if (!node || !capability || capability.fingerprint !== segment.fingerprint) return false
     const last = i === continuation.length - 1
-    if (last) return capability.next === undefined
+    if (last) return capability.next === undefined || capability.terminal?.(segment) === true
     const next: ConfiguredPattern<T> | undefined = capability.next?.(segment)
     if (!next || !node.children?.includes(next)) return false
     node = next

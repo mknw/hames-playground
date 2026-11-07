@@ -1082,6 +1082,9 @@ export interface ResumableCapability {
    *  segment: a wrapper's inner pattern, a `decisionLoop`'s route. Absent on a
    *  pattern that raises or dispatches the gate itself, which ends the path. */
   readonly next?: (segment: ContinuationSegment) => ConfiguredPattern<any> | undefined
+  /** A pattern with children may also raise its OWN request at an explicitly
+   *  recorded boundary. Absent preserves the leaf-only continuation contract. */
+  readonly terminal?: (segment: ContinuationSegment) => boolean
 }
 
 /**
@@ -1096,6 +1099,11 @@ export interface ContinuationSegment {
   /** `decisionLoop` only: the route it ran and the iteration it ran in. */
   readonly route?: string
   readonly iteration?: number
+  /** decisionLoop's own pause AFTER a completed route, not inside that route. */
+  readonly phase?: 'route-budget'
+  /** The one authorized fresh dispatch's declared budget, including on a
+   *  later pause inside that dispatch. Never a runtime-config override. */
+  readonly retryBudget?: number
   /** The OWN resumable fingerprint of the child this step runs next, `null`
    *  when that child is not resumable; ABSENT on a step that dispatches the
    *  gate itself. What `canPauseHere()` reads to know, at run time, that no

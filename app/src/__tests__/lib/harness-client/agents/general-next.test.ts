@@ -41,6 +41,7 @@ import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
+import { DEFAULT_RUNTIME_CONFIG } from '@hames-ai/harness-patterns/runtime-config'
 // Package harness is deliberately used to exercise real ingest bytes independently of the host policy (pinned in stash-bridge).
 import { buildGraphHarness } from '../../../../../../packages/connectors/__tests__/graph/harness'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
@@ -443,6 +444,33 @@ async function run(
 }
 
 describe('general-next composition', () => {
+  it('opts only the two bounded routes into fresh dispatches with the same wrappers and tools', async () => {
+    await agent.createPatterns('synthetic-session', deps)
+    const routeMap = composition.routes as Record<
+      string,
+      {
+        pattern: ConfiguredPattern<AgentData>
+        withBudget?: (budget: number) => ConfiguredPattern<AgentData>
+      }
+    >
+    const shape = (p: ConfiguredPattern<AgentData>): unknown => [
+      p.name,
+      p.config.patternId,
+      p.capabilities?.tools,
+      p.children?.map(shape),
+    ]
+    for (const name of ['office-data', 'info-retrieval']) {
+      expect(routeMap[name].withBudget).toBeTypeOf('function')
+      const rebuilt = routeMap[name].withBudget!(9)
+      expect(shape(rebuilt)).toEqual(shape(routeMap[name].pattern))
+      const leaf = walk([rebuilt]).find(
+        (p) => p.name === (name === 'office-data' ? 'actorCritic' : 'simpleLoop'),
+      )!
+      expect(leaf.estimateTurns?.(DEFAULT_RUNTIME_CONFIG)).toBe(9)
+    }
+    expect(routeMap['read-documents'].withBudget).toBeUndefined()
+    expect(routeMap.think.withBudget).toBeUndefined()
+  })
   // #880 H2: these are the measured, synthetic-only labels on the actual
   // systemone request. MUTATIONS: delete any Tools group or the instruction
   // guide; either edit must turn this test red.

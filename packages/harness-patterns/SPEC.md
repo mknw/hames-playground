@@ -810,6 +810,31 @@ Nothing from outside the run enters the prompt this way: the excerpt is the
 model's own output from the round before, and any tool content it quotes was
 already in that round's prompt, in the form the turn log carried it.
 
+One tool failure gets its own fix appended to what the next round reads
+(#1018): when a tool error matches Python's single-line-string spellings
+(`unterminated string literal`, `EOL while scanning string literal`) and the
+DECODED arguments still show a raw line break inside a quoted (non-triple)
+string, the failure is the JSON-decoded-newline signature — the model wrote
+`'\n'` in its JSON, the decode turned it into a real break inside the code, and
+the bare `SyntaxError` says nothing about the cause, so the retry rewrote the
+same script and died the same way. `unterminatedStringFeedback`
+(`loop-recovery.server.ts`) recognises the pair and the loop appends the exact
+fix — write `\\n` in the JSON for a literal backslash-n in the code; strings
+that should genuinely span lines need triple quotes — to what the next round
+reads: the projected turn log (`simpleLoop`, including a released held call's
+re-dispatch), the attempt log (`actorCritic`), and the recovery's `feedback`,
+so a resume replays the same entry. The committed `tool_result` event keeps the
+error verbatim. Triple-quoted spans and `#` comments are masked before the
+scan, so a legitimate multi-line string never matches, and neither do the
+multi-line spellings of the failure (`unterminated triple-quoted string
+literal`, `EOF in multi-line string`). Heredocs split by what feeds them
+(fix round 1): the body of a heredoc NOT fed to Python (`cat > notes.txt
+<<'EOF'`) is masked — its lines are literal content, and quotes in them are
+text — while a heredoc FED to Python (`python3 - <<'PY'`, the shape the real
+incident ran) has its body kept and scanned like any other code, since the
+interpreter reads the script from stdin; a script-file argument or `-c` after
+the interpreter token makes the body data again, and it is masked.
+
 What stays **fatal**, deliberately:
 
 - **The gateway-outage refusal** (#276) before the loop starts — no round can
@@ -2121,6 +2146,7 @@ context), not the orchestrator ADR-0005 rules out. Design:
 ```typescript
 interface DecisionLoopRoute<T> {
   pattern: ConfiguredPattern<T>
+  withBudget?: (budget: number) => ConfiguredPattern<T> // opt into the post-route exhaustion question
   description: string // the ONLY text the decisions model sees for this option
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
@@ -2477,6 +2503,44 @@ withholding was removed carries `withheldEventIds` on a loop record's `tool_resu
 The loop reads them back as a pure filter, so every later child's context still
 omits those events (previews, `expandPreviousResult` and `siblingResults` cannot
 reach them); nothing writes new ones.
+
+**Opt-in route exhaustion (#1017).** A `simpleLoop` or `actorCritic` route with
+`withBudget` asks one blocking `route-budget` question after its completed
+record reports `stats.hitBound`. Other routes and other consumers retain the
+existing behavior. The loop must commit its route history and record its
+`controller_action` / `tool_result` projections. The factory rebuilds the same
+route with the supplied declared budget, preserving wrapper topology, ids,
+tools, views, guards and sibling visibility. Runtime defaults and shared
+pattern objects are never mutated.
+
+The options are `answer` (**Answer with what we have**, the default and only
+unattended-eligible option) and `continue` (**Continue with a larger budget**).
+The summary names the original and retry budgets and warns that continuation
+re-runs the route from scratch and may repeat file writes in the sandbox.
+The raised budget is `min(original effective bound + 3, runtime ceiling)`:
+10 attempts for actorCritic, 15 rounds for simpleLoop. At the ceiling,
+continue is unavailable with an explanation. The request uses
+`unattended: 'apply-default'`; unattended runs record answer immediately,
+never park or enlarge a budget, and keep their ordinary decision-loop flow.
+Outside an owned HITL run, or beneath a broken resumable path, the old behavior
+also remains.
+
+Interactive answer runs the synthesizer over the completed records. Continue
+allows one fresh dispatch of the same route, with the same task and filtered
+handoff including its exhausted record, then synthesis, even if that dispatch
+exhausts too. No new decisions or budget questions follow that extra dispatch. It is
+available after the last ordinary iteration without changing `maxIterations`.
+`DECISION_LOOP_EXTRA_DISPATCHES` exports its bound (1) for host timeout accounting.
+
+The pause belongs to the loop itself: its continuation ends with
+`phase: 'route-budget'`, route and iteration, with no child. A resumable
+capability's optional `terminal(segment)` explicitly permits this own boundary;
+without it, a path must still end at a leaf. Resume validates the request through
+`resumeHarness`, rebuilds every completed record from the committed brackets,
+and replays the answer. It never resumes the exhausted actorCritic or sandbox
+internally. A later pause inside the enlarged simpleLoop carries `retryBudget`
+on the loop's continuation, so another resume keeps that budget and finishes
+without granting another extra dispatch. Existing child-pause replay is unchanged.
 
 **Failure — never a silent fallback.**
 

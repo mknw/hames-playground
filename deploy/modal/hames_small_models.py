@@ -147,7 +147,11 @@ GPU = _gpu_request(_env("HAMES_MODAL_GPU", "L4"))
 CPU = float(_env("HAMES_MODAL_CPU", "2"))
 MEMORY_MIB = int(_env("HAMES_MODAL_MEMORY_MIB", "24576"))
 SCALEDOWN_S = int(_env("HAMES_MODAL_SCALEDOWN_S", "300"))
-STARTUP_TIMEOUT_S = int(_env("HAMES_MODAL_STARTUP_TIMEOUT_S", "600"))
+# The first boot after a deploy builds the memory snapshot; the longest measured
+# one took ~9 min in the container (552 s on 2026-11-02, 577 s on 2026-10-15),
+# which the earlier 600 s default would have killed and restarted from scratch
+# (issue #921). The 27B allows 1800 s for the same reason.
+STARTUP_TIMEOUT_S = int(_env("HAMES_MODAL_STARTUP_TIMEOUT_S", "1200"))
 MAX_CONTAINERS = int(_env("HAMES_MODAL_MAX_CONTAINERS", "1"))
 TARGET_CONCURRENCY = int(_env("HAMES_MODAL_TARGET_CONCURRENCY", "4"))
 # Read on both sides: locally from deploy.local.env, in the container from the

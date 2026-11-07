@@ -59,6 +59,8 @@ Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`,
 
 With `HAMES_MODAL_SNAPSHOT=0` the same steps run in one `@modal.enter`, with no sleep. That is the baseline `measure.py` compares against.
 
+**Startup timeout.** `HAMES_MODAL_STARTUP_TIMEOUT_S` (1200 s by default) is the budget for the first boot after a deploy, which builds the memory snapshot: the longest measured full boot took ~9 min in the container (issue #921), which the earlier 600 s default would have killed and restarted from scratch. Redeploying the small box — `uv run --env-file deploy.local.env modal deploy hames_small_models.py`, the same command as the first deploy — obsoletes every snapshot, so the first cold starts after a redeploy are full boots again, now inside that budget. That redeploy also re-reads the live scaledown window from `HAMES_MODAL_SCALEDOWN_S` in `deploy.local.env` — 1800 s live against the code's 300 s default — so redeploying without that file, or with the variable already exported in the shell (which beats `--env-file`), shortens it.
+
 GPU snapshots are a Modal **alpha** feature. vLLM 0.30's source keeps a LoRA through level-1 sleep, but hybrid linear-attention models (Qwen3.5 is one) are listed as a coverage gap in vLLM's own sleep/wake tracking — which is why step 3 re-checks the distribution instead of trusting `/health`.
 
 ## GPU fallbacks

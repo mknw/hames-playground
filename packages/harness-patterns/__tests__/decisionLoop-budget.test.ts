@@ -9,10 +9,13 @@ import { configurePattern, runChain } from '../patterns/chain.server'
 import { actorCritic } from '../patterns/actorCritic.server'
 import { decisionLoop, type DecisionLoopRoute } from '../patterns/decisionLoop.server'
 import { simpleLoop } from '../patterns/simpleLoop.server'
+import { compactExecution } from '../patterns/compactExecution.server'
+import { supersededRouteEventIds } from '../route-records'
 import { withInjectionGuard } from '../patterns/withInjectionGuard.server'
 import { withRunFrame, type RunFrame } from '../run-frame.server'
 import type {
   ActorInput,
+  CompactExecutionInput,
   ConfiguredPattern,
   ControllerInput,
   DecideInput,
@@ -126,7 +129,10 @@ function fixture(
       .ofType('tool_result')
       .get()
       .filter((e) => e.patternId === 'orchestrator')
-      .map((e) => JSON.stringify(e.data))
+      .map((e) => {
+        const { tool, result, success, error } = e.data as ToolResultEventData
+        return JSON.stringify({ tool, result, success, error })
+      })
       .join('\n')
     trackEvent(scope, 'assistant_message', { content: scope.data.response, final: true }, true)
     return scope
@@ -168,6 +174,66 @@ const start = (f: ReturnType<typeof fixture>, attended = true) =>
   })
 
 describe('route exhaustion asks the person (#1017)', () => {
+  it.each([
+    ['continue', true],
+    ['continue', false],
+    ['answer', true],
+  ] as const)(
+    'projects effective synthesis records for %s (retry succeeds: %s)',
+    async (choice, succeeds) => {
+      const f = fixture({ retrySucceeds: succeeds })
+      const inputs: CompactExecutionInput[] = []
+      const synth = compactExecution<Data>({
+        mode: 'thread',
+        viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+        threadTurns: 2,
+        synthesize: async (input) => {
+          inputs.push(input)
+          return { value: 'Synthetic answer' }
+        },
+      })
+      const patterns = [f.loop, synth]
+      const paused = await harness<Data>(...patterns)(
+        'Synthetic task',
+        'test-session',
+        undefined,
+        undefined,
+        {
+          ...f.frame,
+          hitl: { attended: true },
+        },
+      )
+      const [q] = readHitl(paused.context).pending
+      const original = JSON.parse(paused.serialized).events
+      const done = await resumeHarness(
+        paused.serialized,
+        patterns,
+        { [q.requestId]: choice },
+        { frame: f.frame },
+      )
+      const input = inputs[0]
+      const recovered = choice === 'continue' && succeeds
+      expect(input.loopHistory?.iterations).toHaveLength(recovered || choice === 'answer' ? 1 : 2)
+      expect(JSON.stringify(input.loopHistory)).toContain(
+        recovered ? 'INVENTED-RESULT' : 'Max retries',
+      )
+      if (recovered) expect(JSON.stringify(input)).not.toContain('Max retries')
+      expect(supersededRouteEventIds(done.context.events).size).toBe(recovered ? 2 : 0)
+      // Persistence remains append-only, including the exhausted child and record.
+      for (const event of original) expect(done.context.events).toContainEqual(event)
+
+      // A later turn's wider thread sees the effective successful record only;
+      // old failures remain historical, and old errors do not poison this turn.
+      const ctx = createContext<Data>('Follow up', {})
+      ctx.events.unshift(...done.context.events)
+      await withRunFrame({}, () => runChain(ctx, [synth]))
+      const later = inputs.at(-1)!
+      expect(later.hasError).toBe(false)
+      expect(JSON.stringify(later)).not.toContain('Max retries')
+      expect(later.loopHistory?.iterations.length ?? 0).toBe(recovered ? 1 : 0)
+    },
+  )
+
   // MUTATION: suppress askForBudget after record creation.
   it('pauses after the finished actor route with the two choices and a loop-owned continuation', async () => {
     const f = fixture()

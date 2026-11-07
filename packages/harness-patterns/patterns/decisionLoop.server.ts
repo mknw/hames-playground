@@ -99,6 +99,7 @@ import type {
   PatternConfig,
   PatternExitEventData as PatternExitData,
   PatternScope,
+  ToolResultEventData,
   PlanResult,
   UnifiedContext,
   WarningEventData,
@@ -1215,6 +1216,31 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
 
       // The record as events: the controller_action / tool_result pair
       // `compactExecution`'s thread mode already reads, under THIS loop's id.
+      const budgetErrorId = iterationEvents.find(
+        (e) => e.type === 'error' && (e.data as ErrorEventData).kind === 'budget_exhausted',
+      )?.id
+      // Resume may have rebuilt the failed iteration from its child brackets.
+      // Its persisted record remains the identity to replace, including after
+      // a second pause inside the enlarged route. Never link ordinary repeats.
+      const previous = retry
+        ? [...outerCtx.events, ...scope.events].findLast(
+            (e) =>
+              e.patternId === loopId &&
+              e.type === 'tool_result' &&
+              (e.data as ToolResultEventData).tool === label &&
+              (e.data as ToolResultEventData).success === false &&
+              (e.data as ToolResultEventData).routeRecord?.iteration === iteration - 1,
+          )
+        : undefined
+      const previousBudgetError = (previous?.data as ToolResultEventData | undefined)?.routeRecord
+        ?.budgetErrorId
+      const routeRecord: NonNullable<ToolResultEventData['routeRecord']> = {
+        iteration,
+        ...(budgetErrorId ? { budgetErrorId } : {}),
+        ...(record.status === 'succeeded' && previous?.id && previousBudgetError
+          ? { supersedes: { recordId: previous.id, budgetErrorId: previousBudgetError } }
+          : {}),
+      }
       trackEvent(
         scope,
         'controller_action',
@@ -1235,12 +1261,13 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         scope,
         'tool_result',
         record.status === 'succeeded'
-          ? { tool: label, result: record.result, success: true }
+          ? { tool: label, result: record.result, success: true, routeRecord }
           : {
               tool: label,
               result: null,
               success: false,
               error: record.result || record.failure,
+              routeRecord,
             },
         resolved.trackHistory,
       )

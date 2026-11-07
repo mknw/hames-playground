@@ -453,6 +453,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const progress = registry.progress(runSessionId)
     return {
       appendMessage: (message) => registry.appendMessage(runSessionId, message),
+      removeMessages: (ids) =>
+        registry.setMessages(runSessionId, (prev) => prev.filter((m) => !ids.has(m.id))),
       pushEvents: (events) => registry.appendEvents(runSessionId, events),
       pushGraph: (elements) => pushGraph(runSessionId, elements),
       setContext: (context) => props.onContextUpdate?.(runSessionId, context),

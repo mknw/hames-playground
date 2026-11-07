@@ -34,10 +34,10 @@ beforeAll(async () => {
     createPatterns: async () => {
       const make = (maxTurns: number) =>
         core.simpleLoop<SessionData>(
-          async () => ({
+          async ({ turn }) => ({
             action: {
-              tool_name: 'get_neo4j_schema',
-              tool_args: '{}',
+              tool_name: maxTurns > 1 && turn === 1 ? 'Return' : 'get_neo4j_schema',
+              tool_args: maxTurns > 1 && turn === 1 ? 'INVENTED-COMPLETE-LOOKUP' : '{}',
               reasoning: 'Invented lookup with no final answer',
               is_final: false,
             },
@@ -116,6 +116,16 @@ describe.runIf(IS_HERMETIC)('route budget pause and both answers (#1017)', () =>
       expect(row?.status).toBe('done')
       expect(budgets).toEqual(choice === 'continue' ? [4] : [])
       expect(app.fakeLlm.calls.slice(before).filter((c) => c.endpoint)).toEqual([])
+      const synthesis = app.fakeLlm.calls.slice(before).find((c) => c.fn === 'Synthesize')
+      expect(synthesis).toBeDefined()
+      if (choice === 'continue') {
+        expect(synthesis!.prompt).toContain('INVENTED-COMPLETE-LOOKUP')
+        expect(synthesis!.prompt).not.toContain('exhausted')
+        expect(synthesis!.prompt).not.toContain('Max turns')
+        expect(synthesis!.prompt).not.toContain('__error')
+      } else {
+        expect(synthesis!.prompt).toContain('__error')
+      }
       const finished = await actions.loadConversation(sessionId)
       expect(eventsOfType(finished.serialized, 'hitl_request')).toHaveLength(1)
       expect(eventsOfType(finished.serialized, 'hitl_response')).toEqual([
@@ -123,7 +133,7 @@ describe.runIf(IS_HERMETIC)('route budget pause and both answers (#1017)', () =>
       ])
       expect(
         eventsOfType(finished.serialized, 'tool_call').filter((c) => c.tool === 'get_neo4j_schema'),
-      ).toHaveLength(choice === 'continue' ? 5 : 1)
+      ).toHaveLength(choice === 'continue' ? 2 : 1)
       expect(eventsOfType(finished.serialized, 'decision_made')).toHaveLength(1)
     },
   )

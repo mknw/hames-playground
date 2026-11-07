@@ -1153,6 +1153,15 @@ function BlockingDialog(props: BlockingDialogProps) {
  *  rev 6, presentation) feeds its own reason through the same prop. */
 export const DEFAULT_LINK_REVIEW_REASON = 'This address is not on the recognised host list'
 
+/** The image-open path's reason (#901 owner ruling 2026-11-04, comment
+ *  6618793027, fix round 1): a trusted-shape image is own-origin by
+ *  construction, so the LINK default would state a falsehood — own origin IS
+ *  recognised in the link classification (`link-verdicts.ts`). The merged
+ *  design's copy rule is that the reason is factual; ChatMessages passes this
+ *  through the same `reason` prop when the review target is an image. */
+export const IMAGE_LINK_REVIEW_REASON =
+  'This image is in the answer but was not loaded automatically; reviewing its address before you open it'
+
 /** How the reason is presented and how hard the open action is to reach.
  *  `unverified` is #901's own review (the default): the reason reads as a
  *  plain summary and the open action is a real anchor. `detected` is what
@@ -1178,14 +1187,22 @@ export interface LinkReviewDialogProps {
   address: string
   /** The factual reason read on open. Defaults to the #901-only copy. */
   reason?: string
+  /** What is under review: 'link' (the default) keeps this body's link copy;
+   *  'image' is ChatMessages' blocked-image open path (fix round 1), which
+   *  retitles the dialog and its address intro for an image — the SAME body
+   *  serves both, and the image reason rides the `reason` prop above. */
+  target?: 'link' | 'image'
   /** How the reason is presented and how hard the open action is to reach.
    *  Defaults to `unverified`. */
   severity?: LinkReviewSeverity
-  /** "Cancel and mark unsafe": replace the chosen anchor with inert text and
-   *  record the persisted mark (ruling Q5 as overridden — issue #901 comment
-   *  6618793027, 2026-11-04; the mark is persisted, not rendering-only, and
-   *  no session state beyond the mark). The mount (ChatMessages) owns the
-   *  DOM mechanism and the mark; this dialog only asks for it. */
+  /** "Cancel and mark unsafe" (links) / "Cancel and hide" (images, owner
+   *  ruling N111 2026-11-07: the image path stays rendering-only, so the
+   *  image copy does not claim a mark): replace the chosen anchor with inert
+   *  text and — links only — record the persisted mark (ruling Q5 as
+   *  overridden — issue #901 comment 6618793027, 2026-11-04; the mark is
+   *  persisted, not rendering-only, and no session state beyond the mark).
+   *  The mount (ChatMessages) owns the DOM mechanism and the mark; this
+   *  dialog only asks for it. */
   onDefang: () => void
 }
 
@@ -1195,6 +1212,9 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
   const [armed, setArmed] = createSignal(false)
   const detected = () => (props.severity ?? 'unverified') === 'detected'
   const reason = () => visibleFormatChars(props.reason ?? DEFAULT_LINK_REVIEW_REASON)
+  // The image open path retitles the review and its address intro: "link"
+  // copy would describe a different thing than the placeholder being reviewed.
+  const image = () => (props.target ?? 'link') === 'image'
   // Every review starts disarmed: a greyed open action never carries over
   // from a previous one.
   createEffect(
@@ -1213,7 +1233,7 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
       onClose={props.onClose}
       testId="link-review-dialog"
       maxWidth="34rem"
-      title="Review this link"
+      title={image() ? 'Review this image' : 'Review this link'}
       // Under the detected severity the reason rides the warning band, whose
       // id is already in aria-describedby — the Description stays absent so
       // opening does not read the same words twice.
@@ -1226,7 +1246,9 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
       body={
         <div flex="~ col" gap="2">
           <p text="xs ui-text-secondary" m="0">
-            The complete address this link would open:
+            {image()
+              ? 'The complete address this image would open:'
+              : 'The complete address this link would open:'}
           </p>
           {/* Selectable text: one click selects the whole address, so it can
               be copied without dragging across a wrap. A format or bidi
@@ -1359,7 +1381,7 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
               ring="2 transparent focus:ui-accent/40"
               cursor="pointer"
             >
-              Cancel and mark unsafe
+              {image() ? 'Cancel and hide' : 'Cancel and mark unsafe'}
             </button>
           </div>
         </div>

@@ -103,6 +103,20 @@ describe('the link-review body', () => {
     expect(summary!.textContent).not.toContain(ADDRESS)
   })
 
+  // The image open path (ChatMessages' blocked-image branch, fix round 1):
+  // the SAME body retitles and reads the image reason through the `reason`
+  // prop — the props, not a second dialog.
+  // MUTATION: ignore `target` in the title/intro → the link copy comes back → red.
+  it("target='image' retitles the dialog and the address intro", async () => {
+    mount({ target: 'image', reason: 'a factual image reason' })
+    await tick()
+    const dialog = q('link-review-dialog')!
+    expect(dialog.textContent).toContain('Review this image')
+    expect(dialog.textContent).toContain('The complete address this image would open:')
+    expect(dialog.textContent).not.toContain('Review this link')
+    expect(description()!.textContent).toBe('a factual image reason')
+  })
+
   // MUTATION: drop `visibleFormatChars` from the address render (or run the
   // address through `displayText` instead) → the bidi control is applied to
   // the shown text rather than shown → red. The shell's untrusted-text rule
@@ -154,6 +168,25 @@ describe('the link-review body', () => {
     fireEvent.click(q('link-review-defang')!)
     expect(onDefang).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // The image kind's action copy is the owner's N111 ruling (2026-11-07,
+  // option A/i): the image path stays rendering-only, so its button reads
+  // "Cancel and hide" while a link's still reads "Cancel and mark unsafe".
+  // Both kinds are mounted in THIS test, so one mutation — the label branch
+  // collapsed to a single literal — turns both assertions red, whichever
+  // literal survives. Auto-cleanup only runs between tests, so the two trees
+  // coexist and each button is addressed by its own node.
+  it("the action reads 'Cancel and hide' for an image review, 'Cancel and mark unsafe' for a link", async () => {
+    mount({ target: 'image' })
+    await tick(80)
+    mount()
+    await tick(80)
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-testid="link-review-defang"]'),
+    ]
+    expect(buttons).toHaveLength(2)
+    expect(buttons.map((b) => b.textContent)).toEqual(['Cancel and hide', 'Cancel and mark unsafe'])
   })
 
   // MUTATION: hard-code the reason inside the body → the prop is dead and the

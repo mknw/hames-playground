@@ -396,6 +396,88 @@ describe('sanitizeMarkdownHtml — the image sources that still load, and why', 
   })
 })
 
+describe('sanitizeMarkdownHtml — the blocked-image placeholder’s open path (#901 override)', () => {
+  // Owner ruling 2026-11-04 (issue #901 comment 6618793027): the user CAN open
+  // images from trusted sources — the placeholder carries the link-review
+  // dialog's open path for trusted-source images. "Trusted source" is judged
+  // here as the source SHAPE the sanitizer already trusts (own origin + the
+  // stash document route, resolved as the browser would) — a refused image is
+  // one whose `download` param is missing or whose spelling escapes the shape.
+  // Nothing wider (any own-origin GET would carry the path) and nothing for a
+  // data: URL, which has no address to open.
+  const TRUSTED = '/api/stash/document/abc?sessionId=s1'
+
+  // MUTATION: widen `isTrustedImageSource` to "own origin at large" (drop the
+  // STASH_DOWNLOAD_PATH test) → the inert pin below goes red. The dest
+  // carries the `download` param set — the exact URL `isAllowedImageSource`
+  // would have allowed to load — because the route's non-download branch
+  // answers the document record as JSON, not the image bytes.
+  it('carries the open path on a trusted-shape placeholder, as a focusable activatable element', () => {
+    const out = sanitizeMarkdownHtml(`<img src="${TRUSTED}" alt="chart">`)
+    const span = parse(out).querySelector('span.blocked-image')!
+
+    expect(span.getAttribute('data-img-dest')).toBe(`${window.location.origin}${TRUSTED}&download`)
+    expect(span.getAttribute('role')).toBe('button')
+    expect(span.getAttribute('tabindex')).toBe('0')
+    // Still inert text — no child markup — and the title now names the action.
+    expect(span.children).toHaveLength(0)
+    expect(span.getAttribute('title')).toMatch(/Activate to review/)
+  })
+
+  it('stays inert — no open path — for a source outside the trusted shape', () => {
+    const out = sanitizeMarkdownHtml(
+      `<img src="https://${ATTACKER}/p.png">` +
+        `<img src="/api/auth/logout">` +
+        `<img src="/api/stash/document/abc/def?download">` +
+        `<img src="/api/stash/document/../../auth/logout?download">`,
+    )
+    const spans = Array.from(parse(out).querySelectorAll('span.blocked-image'))
+
+    expect(spans).toHaveLength(4)
+    for (const span of spans) {
+      expect(span.getAttribute('data-img-dest')).toBeNull()
+      expect(span.getAttribute('role')).toBeNull()
+      expect(span.getAttribute('tabindex')).toBeNull()
+    }
+  })
+
+  it('keeps the open path off a refused data: URL — inline bytes have no address', () => {
+    const pastCap = `data:image/png;base64,${'A'.repeat(256 * 1024)}`
+    const span = parse(sanitizeMarkdownHtml(`<img src="${pastCap}">`)).querySelector(
+      'span.blocked-image',
+    )!
+
+    expect(span.getAttribute('data-img-dest')).toBeNull()
+  })
+
+  it('stamps the resolved destination the browser would fetch, not the spelling', () => {
+    // Dot-segments that stay INSIDE the stash route resolve to the same
+    // trusted path; the attribute records the resolved form — what the
+    // dialog shows and what a reviewed open navigates to — with the
+    // `download` param set and the resolved params' spelling kept.
+    const out = sanitizeMarkdownHtml('<img src="/api/stash/document/x/../abc?sessionId=s1">')
+    const span = parse(out).querySelector('span.blocked-image')!
+
+    expect(span.getAttribute('data-img-dest')).toBe(
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1&download`,
+    )
+  })
+
+  it('carries format/bidi characters in the address as the browser resolves them', () => {
+    // The URL parser percent-encodes a bidi control in the query, so the
+    // resolved destination carries its encoded form; what the DIALOG does with
+    // the address it is handed (show every format/bidi character visibly) is
+    // pinned in HitlDialog.link-review.test.tsx, and the image path feeds that
+    // same dialog unchanged.
+    const withBidi = '/api/stash/document/abc?sessionId=s\u202E1'
+    const span = parse(sanitizeMarkdownHtml(`<img src="${withBidi}">`)).querySelector(
+      'span.blocked-image',
+    )!
+
+    expect(span.getAttribute('data-img-dest')).toContain('%E2%80%AE')
+  })
+})
+
 describe('sanitizeMarkdownHtml — the other auto-loading channels stay shut', () => {
   // Each of these fetches with no click in a browser. They are closed by the
   // tag/attribute allowlists rather than by the image rule, so these cases are

@@ -169,38 +169,41 @@ async function createPatterns(
     // Graph-only work (mail, file metadata) must not need a container engine.
     lazy: true,
   }
-  const office = deps.withSandbox(officeAttach)(
-    actorCritic<AgentData>(
-      createActorControllerAdapter({
-        fewShots: OFFICE_FEW_SHOTS.filter(
-          (s) => s.tool.startsWith('sandbox_') || officeTools.includes(s.tool),
-        ),
-        contextPrefix:
-          'Work on Microsoft 365 mail, calendar and files with the supplied Graph tools. ' +
-          'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +
-          'Inspect uploaded inputs in /work/in; save deliverables in /work/out so they are kept. ' +
-          'A requested file exists only once it has been saved under /work/out (by a command or with sandbox_write): ' +
-          'never paste or print its content in place of saving it, and set is_final only after a tool result confirmed the saved path. ' +
-          (deps.graphFileIngest === true
-            ? 'To read a OneDrive or SharePoint file, first find it with graph_files_search, graph_files_recent, graph_files_shared or graph_files_list; then, in a later action, call graph_file_ingest with the item_id and drive_id copied exactly from that result. Never guess an id, and never batch the find and the ingest in one action. ' +
-              'The original file is copied into /work/in; list /work/in with a sandbox tool and open it by the name shown there. That name can differ from the filename in the result, so never build the path yourself. ' +
-              'Report a refusal rather than trying another download path; do not retry it this turn. ' +
-              'When the user wants quoted, cited excerpts, finish once indexStatus is indexed and say the copy is searchable; cited excerpts come from a later step, not from your tools. Treat pending as not yet searchable; report failed or not_indexed copies as not searchable. '
-            : 'Graph file ingestion is unavailable. ') +
-          'Run code for computations. ' +
-          'Use quoted heredocs for multiline Python; append when continuing a large file.',
-      }),
-      createCriticAdapter(),
-      officeTools,
-      {
-        patternId: 'doc',
-        liveEvents: true,
-        maxRetries: 6,
-        criticCadence: 3,
-        multiToolCalls: 'sequential',
-      },
-    ),
-  )
+  const attachOffice = deps.withSandbox(officeAttach)
+  const officeWithBudget = (maxRetries = 6) =>
+    attachOffice(
+      actorCritic<AgentData>(
+        createActorControllerAdapter({
+          fewShots: OFFICE_FEW_SHOTS.filter(
+            (s) => s.tool.startsWith('sandbox_') || officeTools.includes(s.tool),
+          ),
+          contextPrefix:
+            'Work on Microsoft 365 mail, calendar and files with the supplied Graph tools. ' +
+            'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +
+            'Inspect uploaded inputs in /work/in; save deliverables in /work/out so they are kept. ' +
+            'A requested file exists only once it has been saved under /work/out (by a command or with sandbox_write): ' +
+            'never paste or print its content in place of saving it, and set is_final only after a tool result confirmed the saved path. ' +
+            (deps.graphFileIngest === true
+              ? 'To read a OneDrive or SharePoint file, first find it with graph_files_search, graph_files_recent, graph_files_shared or graph_files_list; then, in a later action, call graph_file_ingest with the item_id and drive_id copied exactly from that result. Never guess an id, and never batch the find and the ingest in one action. ' +
+                'The original file is copied into /work/in; list /work/in with a sandbox tool and open it by the name shown there. That name can differ from the filename in the result, so never build the path yourself. ' +
+                'Report a refusal rather than trying another download path; do not retry it this turn. ' +
+                'When the user wants quoted, cited excerpts, finish once indexStatus is indexed and say the copy is searchable; cited excerpts come from a later step, not from your tools. Treat pending as not yet searchable; report failed or not_indexed copies as not searchable. '
+              : 'Graph file ingestion is unavailable. ') +
+            'Run code for computations. ' +
+            'Use quoted heredocs for multiline Python; append when continuing a large file.',
+        }),
+        createCriticAdapter(),
+        officeTools,
+        {
+          patternId: 'doc',
+          liveEvents: true,
+          maxRetries,
+          criticCadence: 3,
+          multiToolCalls: 'sequential',
+        },
+      ),
+    )
+  const office = officeWithBudget()
   // The sandbox host declares its in-VM names through capabilities.tools.
   // They are exact tool keys, never the unverifiable 'sandbox' namespace.
   const sandboxTools = collectToolNames(office).filter((name) => name.startsWith('sandbox_'))
@@ -281,53 +284,57 @@ async function createPatterns(
     ingressGuard,
   }
   const doc = withInjectionGuard(docGuard)(office)
-  const infoLoop = withInfoDocumentReferences(
-    withReferences<AgentData>(
-      simpleLoop<AgentData>(
-        createLoopControllerAdapter(
-          NEO4J_READ_ONLY_CONTEXT +
-            '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
-            'alongside the facts they support. Copy each source URL verbatim from the ' +
-            'tool results or from the url argument of a successful fetch; never invent or ' +
-            'construct a URL. If none of the sources you used has a URL (for example a ' +
-            'graph or library-docs lookup), include no link. ' +
-            'Your Return is the source record used to write the final answer, so URLs ' +
-            'left only in tool calls will not reach that answer.',
+  const infoWithBudget = (maxTurns?: number) => {
+    const infoLoop = withInfoDocumentReferences(
+      withReferences<AgentData>(
+        simpleLoop<AgentData>(
+          createLoopControllerAdapter(
+            NEO4J_READ_ONLY_CONTEXT +
+              '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
+              'alongside the facts they support. Copy each source URL verbatim from the ' +
+              'tool results or from the url argument of a successful fetch; never invent or ' +
+              'construct a URL. If none of the sources you used has a URL (for example a ' +
+              'graph or library-docs lookup), include no link. ' +
+              'Your Return is the source record used to write the final answer, so URLs ' +
+              'left only in tool calls will not reach that answer.',
+          ),
+          infoTools,
+          {
+            patternId: 'info',
+            maxTurns,
+            schema,
+            liveEvents: true,
+            returnStyle: 'answer',
+            rememberPriorTurns: false,
+            // The Neo4j tab draws a graph read inside its 1-hop neighbourhood,
+            // which the host's enricher attaches here. The few-shots return
+            // scalar columns (`c.name AS name`), so without it a graph answer
+            // gives the tab nothing to draw. The neighbourhood is for the tab:
+            // the controller's turn log leaves it out, the event keeps it.
+            onToolResult: deps.enrichNeo4jResult,
+            resultOmit: { read_neo4j_cypher: ['_neighborhood', '_touched'] },
+          },
         ),
-        infoTools,
         {
           patternId: 'info',
-          schema,
+          selector: baml.selector,
+          source: ['retriever', 'info'],
+          // simpleLoop reads user_message from this view, so keep the task
+          // alongside the allowed siblings rather than the last pattern alone.
+          viewConfig: { fromLast: false, fromLastNTurns: 1 },
           liveEvents: true,
-          returnStyle: 'answer',
-          rememberPriorTurns: false,
-          // The Neo4j tab draws a graph read inside its 1-hop neighbourhood,
-          // which the host's enricher attaches here. The few-shots return
-          // scalar columns (`c.name AS name`), so without it a graph answer
-          // gives the tab nothing to draw. The neighbourhood is for the tab:
-          // the controller's turn log leaves it out, the event keeps it.
-          onToolResult: deps.enrichNeo4jResult,
-          resultOmit: { read_neo4j_cypher: ['_neighborhood', '_touched'] },
         },
       ),
-      {
-        patternId: 'info',
-        selector: baml.selector,
-        source: ['retriever', 'info'],
-        // simpleLoop reads user_message from this view, so keep the task
-        // alongside the allowed siblings rather than the last pattern alone.
-        viewConfig: { fromLast: false, fromLastNTurns: 1 },
-        liveEvents: true,
-      },
-    ),
-  )
-  // K5 is composed only when the host supplies a filter (the app's explicit
-  // GUARD_PSEUDONYMISE=on). Default/off omits the wrapper; an absent filter
-  // passed INTO the wrapper would withhold earlier content on either tier.
-  // The egress gate judges what leaves either way (boundary guards slice 15).
-  const pseudonymise = deps.guards?.pseudonymiseForWeb
-  const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
-  const info = withInjectionGuard(infoGuard)(infoRoute)
+    )
+    // K5 is composed only when the host supplies a filter (the app's explicit
+    // GUARD_PSEUDONYMISE=on). Default/off omits the wrapper; an absent filter
+    // passed INTO the wrapper would withhold earlier content on either tier.
+    // The egress gate judges what leaves either way (boundary guards slice 15).
+    const pseudonymise = deps.guards?.pseudonymiseForWeb
+    const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
+    return withInjectionGuard(infoGuard)(infoRoute)
+  }
+  const info = infoWithBudget()
   // The documents guard declares `ingressGuard` and NOT `screen` (revision 6):
   // the citation chip is the marking surface (O39), so the retriever's hits
   // carry a classification — one Decide call per hit, where the screen would
@@ -415,6 +422,7 @@ async function createPatterns(
         {
           'office-data': {
             pattern: doc,
+            withBudget: (budget) => withInjectionGuard(docGuard)(officeWithBudget(budget)),
             description:
               'Read mail, calendar date ranges and files; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
               (deps.graphFileIngest === true
@@ -430,6 +438,7 @@ async function createPatterns(
           },
           'info-retrieval': {
             pattern: info,
+            withBudget: infoWithBudget,
             description:
               'Look things up in the knowledge graph, on the public web and in library docs' +
               (pmTools.length ? ", and in Lenny's Data's product-management archive" : '') +

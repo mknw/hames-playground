@@ -42,6 +42,7 @@
 import { describe, expect, it, beforeAll } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
 import { bootApp } from '../lib/app'
 import {
   ALL_BAML_FUNCTIONS,
@@ -325,6 +326,30 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
 })
 
 describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
+  // A synchronous fresh-host test blocks this worker longer than the server's
+  // idle keep-alive lifetime. The FIN is queued while the worker is blocked;
+  // reusing that pooled socket for the next drain produces ECONNRESET.
+  // MUTATION: remove { agent: false } from takeEgressAttempts -> socket hang up.
+  it('opens a fresh control connection after a blocked event loop', async () => {
+    const previous = http.globalAgent
+    const pooled = new http.Agent({
+      keepAlive: true,
+      timeout: 60_000,
+      agentKeepAliveTimeoutBuffer: 0,
+    })
+    http.globalAgent = pooled
+    try {
+      await takeEgressAttempts()
+      await new Promise(setImmediate)
+      // Default server idle lifetime: 5s plus Node's 1s server buffer.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 7_000)
+      expect(await takeEgressAttempts()).toEqual([])
+    } finally {
+      http.globalAgent = previous
+      pooled.destroy()
+    }
+  })
+
   it('afterEach fails on a recorded refusal even when fetch rejection was swallowed', async () => {
     await fetch('https://hermetic-enforce.invalid/').catch(() => {})
     await expect(checkAfterEach()).rejects.toThrow('CONNECT hermetic-enforce.invalid:443')

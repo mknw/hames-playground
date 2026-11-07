@@ -1306,6 +1306,14 @@ export interface ToolCallEventData {
 
 /** Data payload for tool_result event */
 export interface ToolResultEventData {
+  /** decisionLoop's route record identity and the budget error it represents.
+   * A successful authorized re-dispatch may replace that exact record/error
+   * pair. Historical events stay immutable; readers project the replacement. */
+  routeRecord?: {
+    iteration: number
+    budgetErrorId?: string
+    supersedes?: { recordId: string; budgetErrorId: string }
+  }
   /** Correlation ID linking this result to its call */
   callId?: string
   /** Shared ID grouping the sub-calls of one multi-call turn (see ToolCallEventData). */

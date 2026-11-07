@@ -196,6 +196,13 @@ Unattended runs immediately record the default answer and retain their existing
 decision flow. Without `withBudget`, nothing changes. See SPEC for the
 loop-owned post-route continuation and the factory's contract.
 
+When that extra dispatch succeeds, its route result explicitly names the failed
+record and budget error it supersedes. Synthesis drops that obsolete failure,
+and transcript readers can use the client-safe `route-records` module's
+`supersededRouteEventIds(events)` to clear the corresponding warning by event
+id, live and on reload. Historical events remain intact; failed retries and
+unrelated errors remain visible.
+
 A host can also tell the decisions model which documents the conversation holds,
 through `documents` on the loop's config: a per-run source that returns the
 visible total and, only when the host decides that run may reveal them, a list

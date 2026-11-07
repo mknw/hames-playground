@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { replayMessages, errorBubble, warningBubble } from '@hames-ai/agents/replay'
 import type { ContextEvent, ErrorEventData, WarningEventData } from '@hames-ai/harness-patterns'
+import { routeRecoveryEvents } from '../route-recovery-fixture'
 
 const userMsg = (content: string, ts: number, id: string): ContextEvent => ({
   id,
@@ -34,6 +35,19 @@ const assistantMsg = (
 const wrap = (events: ContextEvent[]) => JSON.stringify({ events })
 
 describe('replayMessages', () => {
+  it.each(['success', 'failure', 'answer', 'later-turn'] as const)(
+    'reconciles only the replaced budget warning (%s)',
+    (outcome) => {
+      const events = routeRecoveryEvents(outcome)
+      const before = JSON.stringify(events)
+      const warnings = replayMessages(wrap(events)).filter((m) => m.role === 'warning')
+      expect(warnings.map((m) => m.id)).toEqual(
+        outcome === 'success' ? ['unrelated'] : ['budget', 'unrelated'],
+      )
+      expect(JSON.stringify(events)).toBe(before)
+    },
+  )
+
   it('returns [] for non-JSON input', () => {
     expect(replayMessages('not json')).toEqual([])
   })

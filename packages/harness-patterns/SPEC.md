@@ -2564,6 +2564,15 @@ exhausts too. No new decisions or budget questions follow that extra dispatch. I
 available after the last ordinary iteration without changing `maxIterations`.
 `DECISION_LOOP_EXTRA_DISPATCHES` exports its bound (1) for host timeout accounting.
 
+Each projected route result carries `routeRecord.iteration` and, when exhausted,
+the exact `budgetErrorId`. A successful authorized extra dispatch records
+`routeRecord.supersedes: { recordId, budgetErrorId }` for the earlier failed
+record. `supersededRouteEventIds` (`route-records`, client-safe) projects those
+two events as obsolete only within the same turn, loop and route. Synthesis
+omits the obsolete failed record and budget error; transcript readers clear its
+warning. The stored events remain unchanged. An unsuccessful retry, choosing
+answer, ordinary repeated routes and unrelated errors retain their failures.
+
 The pause belongs to the loop itself: its continuation ends with
 `phase: 'route-budget'`, route and iteration, with no child. A resumable
 capability's optional `terminal(segment)` explicitly permits this own boundary;

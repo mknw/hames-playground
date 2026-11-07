@@ -28,6 +28,7 @@ import type {
   LLMCallRecord,
   LoopRecoveryEventData,
   SimpleLoopConfig,
+  ToolResultEventData,
 } from '@hames-ai/harness-patterns/types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -48,6 +49,9 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
 
 const TOOLS = ['read_neo4j_cypher']
 const RAW = '{"reasoning": "query the graph", "tool_name": "read_neo4j_cypher"'
+/** #1018: what the executed script reports when a JSON-decoded newline left a
+ *  quoted string literal open — an error that names nothing about the cause. */
+const SYNTAX_ERROR = 'SyntaxError: unterminated string literal (detected at line 1)'
 
 /** A parse failure as the BAML adapters throw it: the model ANSWERED. */
 async function parseFailure(record: Partial<LLMCallRecord> = {}) {
@@ -245,6 +249,123 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     const errors = ofType(events, 'error')
     expect(errors).toHaveLength(1)
     expect(errors[0].data).toMatchObject({ kind: 'budget_exhausted', maxTurns: 3 })
+  })
+
+  // #1018: the JSON-decoded-newline signature gets the exact fix appended to
+  // what the next round reads — the turn log here, the recovery's `feedback`
+  // for a resume — while the committed tool_result event stays verbatim.
+  // Mutation: hand `resultData` straight to the turn log (drop `seenResult`)
+  // → the next round reads the bare syntax error and rewrites the same
+  // script, as in the captured run.
+  it('a tool error with a decoded newline in a quoted string carries the fix', async () => {
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: SYNTAX_ERROR })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch(JSON.stringify({ code: "text = '\n'.join(rows)" })))
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns[0]
+    expect(seen.tool_result?.error).toContain('unterminated string literal')
+    expect(seen.tool_result?.error).toContain('escape the backslash')
+    const recovery = recoveries(events)[0]
+    expect(recovery).toMatchObject({ failure: 'tool_error', error: SYNTAX_ERROR })
+    expect(recovery.feedback).toContain('escape the backslash')
+    const resultEvent = ofType(events, 'tool_result')[0].data as ToolResultEventData
+    expect(resultEvent.error).toBe(SYNTAX_ERROR)
+  })
+
+  // #1018: a resume rebuilds the SAME turn-log entry from the recovery's
+  // `feedback`, so the guidance survives the pause too (the exact-replay
+  // invariant). Mutation: drop the `recovery?.feedback ??` preference in
+  // `projectRound` → the resumed entry shows the bare error, red.
+  it('a resumed run replays the guidance from the recovery record', async () => {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { ownResumable } = await import('@hames-ai/harness-patterns/pattern-capabilities')
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: SYNTAX_ERROR })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch(JSON.stringify({ code: "text = '\n'.join(rows)" })))
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+    const pattern = simpleLoop(controller as never, TOOLS, { patternId: 'rec', maxTurns: 4 })
+    const view = createEventView({
+      sessionId: 'rec',
+      createdAt: 1,
+      events: [{ type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } }],
+      status: 'running',
+      data: {},
+      input: 'q',
+    })
+    const uninterrupted = await withRunFrame({}, () =>
+      pattern.fn(createScope('rec', { intent: 'q' }) as never, view as never),
+    )
+    const replay = (controller.mock.calls[1][0] as ControllerInput).turns[0]
+    expect(replay.tool_result?.error).toContain('escape the backslash')
+
+    // The failed round only: its controller_action, tool_call, tool_result and
+    // loop_recovery, all turn 0 — the tool events carry no turn of their own.
+    const checkpoint = uninterrupted.events.filter(
+      (e) =>
+        ['controller_action', 'tool_call', 'tool_result', 'loop_recovery'].includes(e.type) &&
+        ((e.data as { turn?: number }).turn ?? 0) === 0,
+    )
+    controller.mockClear()
+    controller.mockResolvedValueOnce({ action: mockFinalAction('done') })
+    const resumed = await withRunFrame(
+      {
+        resume: {
+          continuation: [
+            { pattern: 'simpleLoop', fingerprint: ownResumable(pattern)!.fingerprint },
+          ],
+          events: checkpoint,
+        },
+      },
+      () => pattern.fn(createScope('rec', { intent: 'q' }) as never, view as never),
+    )
+    const input = controller.mock.calls[0][0] as ControllerInput
+    expect(resumed.data.returnText).toContain('done')
+    expect(input.turns[0].tool_result?.error).toEqual(replay.tool_result?.error)
+    expect(input.turns[0].tool_result?.error).toContain('escape the backslash')
+  })
+
+  // Fix round 1, term 1 (review): the DECORATED error is bounded at
+  // maxResultChars exactly like the bare error it replaces (#440) — the
+  // default is 8000, so a matching failure with a long stderr must not ride
+  // into every later controller prompt unbounded. Mutation: return the
+  // feedback untruncated from `projectRound` → red.
+  it('the decorated error is truncated at maxResultChars like the bare error', async () => {
+    const longError = `${SYNTAX_ERROR}\n${'e'.repeat(20_000)}`
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: longError })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch(JSON.stringify({ code: "text = '\n'.join(rows)" })))
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    await loop(controller)
+
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns[0]
+    expect(seen.tool_result?.error).toContain('unterminated string literal')
+    expect(seen.tool_result?.error).toMatch(/…\[truncated\]$/)
+    expect(seen.tool_result?.error!.length).toBeLessThanOrEqual(8000 + '…[truncated]'.length)
+  })
+
+  // Mutation: return the fix on EVERY failed tool call (drop the argument
+  // scan in `unterminatedStringFeedback`) → this goes red, alongside the
+  // exact-shape 'row limit' recovery test above.
+  it('an ordinary tool error is not decorated with the fix', async () => {
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: 'row limit' })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch())
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    await loop(controller)
+
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns[0]
+    expect(seen.tool_result?.error).toBe('row limit')
   })
 })
 
@@ -473,6 +594,28 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
       turn: 0,
       maxTurns: 3,
     })
+  })
+
+  // #1018: the JSON-decoded-newline signature reaches the actor's NEXT attempt
+  // through `previousAttempts`, the channel every other feedback rides.
+  // Mutation: record the bare error on the attempt (drop the `seenScriptError`
+  // append) → the actor rewrites the same script, as in the captured run.
+  it('the next attempt reads the newline-escape fix in the attempt log', async () => {
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: SYNTAX_ERROR })
+    const actor = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch(JSON.stringify({ script: "text = '\n'.join(rows)" })))
+      .mockResolvedValueOnce(dispatch())
+    const critic = accept()
+
+    const events = await loop(actor, critic)
+
+    const input = actor.mock.calls[1][0] as unknown as ActorInput
+    expect(input.previousAttempts[0].error).toContain('unterminated string literal')
+    expect(input.previousAttempts[0].error).toContain('escape the backslash')
+    const recovery = recoveries(events)[0]
+    expect(recovery).toMatchObject({ failure: 'tool_error', error: SYNTAX_ERROR })
+    expect(recovery.feedback).toContain('escape the backslash')
   })
 
   // The multi-call attempt always continued here when every call failed;

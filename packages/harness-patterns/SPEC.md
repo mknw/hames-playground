@@ -810,6 +810,31 @@ Nothing from outside the run enters the prompt this way: the excerpt is the
 model's own output from the round before, and any tool content it quotes was
 already in that round's prompt, in the form the turn log carried it.
 
+One tool failure gets its own fix appended to what the next round reads
+(#1018): when a tool error matches Python's single-line-string spellings
+(`unterminated string literal`, `EOL while scanning string literal`) and the
+DECODED arguments still show a raw line break inside a quoted (non-triple)
+string, the failure is the JSON-decoded-newline signature — the model wrote
+`'\n'` in its JSON, the decode turned it into a real break inside the code, and
+the bare `SyntaxError` says nothing about the cause, so the retry rewrote the
+same script and died the same way. `unterminatedStringFeedback`
+(`loop-recovery.server.ts`) recognises the pair and the loop appends the exact
+fix — write `\\n` in the JSON for a literal backslash-n in the code; strings
+that should genuinely span lines need triple quotes — to what the next round
+reads: the projected turn log (`simpleLoop`, including a released held call's
+re-dispatch), the attempt log (`actorCritic`), and the recovery's `feedback`,
+so a resume replays the same entry. The committed `tool_result` event keeps the
+error verbatim. Triple-quoted spans and `#` comments are masked before the
+scan, so a legitimate multi-line string never matches, and neither do the
+multi-line spellings of the failure (`unterminated triple-quoted string
+literal`, `EOF in multi-line string`). Heredocs split by what feeds them
+(fix round 1): the body of a heredoc NOT fed to Python (`cat > notes.txt
+<<'EOF'`) is masked — its lines are literal content, and quotes in them are
+text — while a heredoc FED to Python (`python3 - <<'PY'`, the shape the real
+incident ran) has its body kept and scanned like any other code, since the
+interpreter reads the script from stdin; a script-file argument or `-c` after
+the interpreter token makes the body data again, and it is masked.
+
 What stays **fatal**, deliberately:
 
 - **The gateway-outage refusal** (#276) before the loop starts — no round can

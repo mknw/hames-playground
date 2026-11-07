@@ -219,3 +219,170 @@ export function trackLoopRecovery(
 ): void {
   trackEvent(scope, 'loop_recovery', data, true, llmCall)
 }
+
+// ---------------------------------------------------------------------------
+// The JSON-decoded-newline signature (#1018).
+//
+// A sandbox actor writing Python inside a JSON `tool_args` wrote `'\n'` where
+// the code needed the two characters `\n`: JSON decoding turned the escape
+// into a REAL line break inside a quoted string literal, and the executed
+// script died with `SyntaxError: unterminated string literal` — an error that
+// says nothing about the cause, so the retry rewrote the same script and died
+// the same way (two of six attempts in the captured run). {@link
+// unterminatedStringFeedback} recognises that signature on a tool ERROR —
+// Python's two spellings of a single-line string literal left open at a line
+// break — plus a decoded argument whose code still shows the raw break inside
+// a quoted (non-triple) string, and returns the exact fix to append to the
+// next attempt's context, the way the truncation guidance above does.
+//
+// Deliberately narrow:
+//   - Triple-quoted spans (`'''` / `"""`) are masked before scanning, so a
+//     legitimate multi-line string never matches — a raw break inside one is
+//     legal Python, and the triple-quoted spellings of the failure
+//     ("unterminated triple-quoted string literal", "EOF in multi-line
+//     string") do not match the error regex either.
+//   - The body of a heredoc NOT fed to Python (`cat > notes.txt <<'EOF'` …)
+//     is masked: its lines are literal content, and quotes in them (an
+//     apostrophe in prose, most commonly) are text. A heredoc FED to Python —
+//     `python3 - <<'PY'`, the shape the real incident ran — is the opposite:
+//     its body IS the script, so it is kept and scanned like any other code,
+//     with the same triple-quote masking. Anything after the interpreter
+//     token beyond flags (a script-file argument, `-c`) makes the body data
+//     again, and it is masked.
+//   - Everything else errs toward advice the model does not need — but only
+//     on a round that ALREADY failed with the matching error, so a false
+//     positive costs one redundant sentence, never a different route.
+//
+// Wired at the two loops' single-call tool-error paths (and simpleLoop's
+// re-dispatch of a released held call, the same single-call shape). A
+// multi-call batch reports its per-call errors inside one combined map, where
+// per-call advice would have to address a call the map names only by index.
+
+const UNTERMINATED_STRING_ERROR_RE = /unterminated string literal|EOL while scanning string literal/
+
+/** The exact fix, in the same voice as the truncation guidance above. */
+const NEWLINE_ESCAPE_GUIDANCE =
+  'Your tool_args are JSON, so a \\n you wrote decoded to a REAL line break inside a ' +
+  'quoted string in the code — that is the unterminated string literal above. To put the ' +
+  'two characters \\n inside a quoted string, escape the backslash: write \\\\n in the ' +
+  'JSON (it decodes to \\n). A string that should genuinely span several lines needs ' +
+  'triple quotes (\'\'\' or """), which a line break inside them does not terminate.'
+
+/** Every string in `args`, however nested — the code-bearing argument is
+ *  whichever one the tool executes, and the loop cannot know its key. */
+function* stringValuesOf(value: unknown): Generator<string> {
+  if (typeof value === 'string') {
+    yield value
+  } else if (Array.isArray(value)) {
+    for (const item of value) yield* stringValuesOf(item)
+  } else if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) yield* stringValuesOf(item)
+  }
+}
+
+/** Does this text BEFORE a heredoc's `<<` feed the heredoc to Python, so its
+ *  body is the script itself? `python3 -` and a bare `python3` read the script
+ *  from stdin, so flags only — including the `-` that names stdin — still make
+ *  the body code. A script-file argument or `-c` means the body is DATA the
+ *  interpreter reads, and it is masked like any other heredoc body. */
+function heredocFeedsPython(head: string): boolean {
+  const m = /(?:^|[\s/])python3?(?![\w-])\s*([^\n]*)$/.exec(head)
+  if (!m) return false
+  const rest = m[1].trim()
+  return rest === '' || rest.split(/\s+/).every((token) => token.startsWith('-'))
+}
+
+/** Blank out heredoc BODY lines — from the line after a `<<[-]DELIM` start to
+ *  the line that is DELIM alone (`<<-` allows leading whitespace before it) —
+ *  EXCEPT when the heredoc is fed to Python ({@link heredocFeedsPython}): its
+ *  body IS the script, so those lines are kept and scanned like any other
+ *  code. The start and terminator lines are always kept — they are code. */
+function maskHeredocBodies(text: string): string {
+  const out: string[] = []
+  let delim: string | undefined
+  let python = false
+  for (const line of text.split('\n')) {
+    if (delim !== undefined) {
+      if (line.trim() === delim) {
+        delim = undefined
+        python = false
+        out.push(line)
+      } else if (python) {
+        out.push(line)
+      }
+      continue
+    }
+    const start = /<<-?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line)
+    out.push(line)
+    if (start) {
+      delim = start[2]
+      python = heredocFeedsPython(line.slice(0, start.index))
+    }
+  }
+  return out.join('\n')
+}
+
+/** Does a raw line break fall inside a quoted (non-triple) string literal?
+ *  A scanner rather than a regex, because the falsifiable shapes cross: an
+ *  apostrophe inside a double-quoted string (`print("it's here")`) closes that
+ *  string on its own line, a `#` comment's apostrophe is not a string at all,
+ *  and only a single- or double-quoted literal still OPEN at the break is the
+ *  signature. */
+function opensLiteralAcrossNewline(code: string): boolean {
+  let quote: "'" | '"' | null = null
+  let triple = false
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i]
+    if (triple) {
+      if (ch === quote && code.startsWith(quote + quote + quote, i)) {
+        triple = false
+        quote = null
+        i += 2
+      }
+      continue
+    }
+    if (quote !== null) {
+      if (ch === '\\') {
+        i++
+      } else if (ch === quote) {
+        quote = null
+      } else if (ch === '\n') {
+        return true
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      if (code.startsWith(ch + ch + ch, i)) {
+        triple = true
+        quote = ch
+        i += 2
+        continue
+      }
+      quote = ch
+      continue
+    }
+    if (ch === '#') {
+      while (i < code.length && code[i] !== '\n') i++
+    }
+  }
+  return false
+}
+
+/**
+ * The appended fix for a tool failure that is the JSON-decoded-newline
+ * signature, or undefined when it is not. `error` is the tool's own error
+ * text; `args` are the DECODED arguments the call ran with. The caller appends
+ * the return value to what the next round reads — the projected turn-log
+ * entry, the recovery's `feedback` — while the committed `tool_result` event
+ * keeps the error verbatim.
+ */
+export function unterminatedStringFeedback(
+  args: Record<string, unknown>,
+  error: string | null | undefined,
+): string | undefined {
+  if (!error || !UNTERMINATED_STRING_ERROR_RE.test(error)) return undefined
+  for (const value of stringValuesOf(args)) {
+    if (opensLiteralAcrossNewline(maskHeredocBodies(value))) return NEWLINE_ESCAPE_GUIDANCE
+  }
+  return undefined
+}

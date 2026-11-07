@@ -1,5 +1,71 @@
 # @hames-ai/harness-baml
 
+## 0.7.0
+
+### Minor Changes
+
+- 69c4cf8: `general-next` answers "what can you do?", "help" and "how do I start?" from a capability guide. `Synthesize` gains a trailing optional `guide`, rendered in its leading system block; a null guide leaves the request byte-identical. `@hames-ai/harness-baml` exports `createSynthesizer({ guide })`, a `compactExecution` synthesizer that carries it. `@hames-ai/agents` exports `capabilityGuide()`, which builds the guide from the tools a composition holds, so a deployment without a tool is never told it has one. `AgentDeps` gains `examplesPage: { href, label }`, the host's page of example questions, which the answer links; the reference app passes its `/use-cases` page. The guide rides only a turn that ran no route: `compactExecution`'s `thread` input gains `stepsThisTurn` (`@hames-ai/harness-patterns`), the number of steps the current turn authored, and `general-next` passes the guide only when it is 0.
+- c89ca36: The organizational-knowledge draft loop now runs on the private tier's 27B (`orgDraft` maps to `LargeQwen`), and asks for its verdict through a new `returnStyle: 'json'`: the loop's `Return` carries the one JSON object its context specifies, and the prompt no longer tells the model to answer in plain prose. The draft's schema gains `ORG_NEAR_MATCH_RULE`: before proposing a node as new, search its class for a near-match (case-insensitive `CONTAINS` on the name's distinctive word) and link to a node it finds; only a search that finds nothing makes a node new, unless its class is link-only.
+- bc83e31: Add the organizational-knowledge hook: `settleOrgKnowledge` (a post-reply proposal over a Decide gate, a read-only draft loop and the ontology validator; it never writes), `applyOrgProposal`, `createOrgDraftLoop`, `parseOrgDraft`, the `orgKnowledge.confirm` request and payload parser, and `withOrgKnowledge` with the `harnessUsesOrgKnowledge` probe. `@hames-ai/harness-baml` gains the `orgDraft` role (the small box on the private tier, the controller chain on the Anthropic tier), `createLoopControllerAdapter`'s `role` option, and a private-only check that accepts the private client of any role listing the called function.
+- d06a4c6: The agent knows the current date and time in the user's time zone. One breaking change to the generated client: a direct `b.Router` / `b.LoopController` / `b.ControllerThinking` / `b.ActorController` / `b.Planner` / `b.PlannerThinking` / `b.Synthesize` caller that passes an options bag must now pass `null` (or a time block) before it; a cast caller otherwise throws `BamlInvalidArgumentError`. No behaviour change for a run with no clock.
+  
+  - **harness-patterns.** New `clock` module (`TurnClock`, `validTimeZone`, `formatTimeBlock`, `localDate`) and a `clock` slot on the run frame (`RunFrame.clock`, read by `currentClock()`), supplied once per turn by the host. It replaces on amend, like the other single-value slots. The org-knowledge hook's default `today()` is the clock's local date, not the UTC one; with no clock it keeps the UTC day.
+  - **harness-baml.** Those seven functions take a trailing optional `current_time`, rendered (when non-null) in per-turn user-role content after the last #122 cache marker, never in a system block. The adapters, the router and the synthesizer pass the frame clock's block (`time-block.server.ts`), rendered once per clock.
+  - **connectors.** `graph_calendar_today` reads the user's day from the turn's clock and sends offset-carrying bounds (`…T00:00:00+01:00`); its naive bounds were read by Graph as UTC, shifting the day by the user's offset. `graph_calendar_range` reads its dates in the turn's zone ahead of `GRAPH_TIMEZONE`. `graph_mail_attachments`' `since` starts at the date's local midnight in the turn's zone (UTC midnight outside a turn, as before). `localDayBounds` is replaced by `localCalendarDay`.
+
+### Patch Changes
+
+- d48accd: `createActorControllerAdapter` keeps `ActorController` on the non-thinking private client when the `controller` pattern is reasoning-configured (`PRIVATE_REASONING_ROLES`). The actor shares the `controller` role but has no reasoning twin, so it used to be sent on the thinking leaf and refused after the call, failing every actorCritic attempt. Routing with the setting unset is unchanged.
+- a30f690: A thinking loop-controller attempt that falls back no longer disappears. When a `ControllerThinking` attempt hits its output cap or produces no answer, the adapter retries it once without thinking. It now also prices the failed attempt and hands its record, with the parser trace, to the controller seam's new optional second argument, `ControllerHooks.onRetry` (`ControllerFn(input, hooks?)`; the input stays plain data). `simpleLoop` records that record as a `warning`, and `WarningTask` gains `'controller'`. This is the planner's existing `onRetry` contract. **Breaking for exhaustive consumers** of `WarningTask`: an exhaustive switch over it must handle the new member.
+- cd993fc: Opt-in support for a hosted third-party knowledge-archive MCP server (Lenny's Data, #986).
+  
+  - `@hames-ai/connectors`: the MCP catalog maps the `lennys_` tool-name prefix to a new `lennys` namespace (`LENNYS_NAMESPACE`, `LENNYS_TOOL_PREFIX`). The host's transport discovers the names and pins them; the namespace is a fixed point of `inferServer`, so a guard can declare it.
+  - `@hames-ai/agents`: `general-next` offers `lennys` tools on its info route only when the host's catalog holds them. The info guard and the egress gate's address sources then declare the namespace, and the tools get web search's default egress detector pair, because each call carries free-text query text to a third party.
+  - `@hames-ai/harness-baml`: the adapters' process-wide tool-description cache re-reads, throttled, when a caller's allowlist holds a tool that a process transport owns but the cache lacks. A cache filled in another request's scope, or during that transport's outage, no longer hides the tool's description from the caller who holds it for the life of the process.
+- 8e878b3: Clarify the cold-start comment in the large client.
+- cb38253: **One resolved intent per turn (#1006).** A chain that runs `compactIntent` before a `decisionLoop` now has the loop read the brief off the `intent_compacted` event THIS turn emitted (never a `scope.data` value carried across turns): it heads the decisions model's state as `Resolved intent (this turn): "…"` and is written into every route child's `data.intent`. A skipped (first-turn) event threads nothing, so a first turn is unchanged. The `retriever` treats a present, non-empty `data.intent` as its query and skips its `RetrieveQuery` rewrite; absent or empty, the previous ladder applies. `actorCritic`'s critic receives the earlier conversation as the same labelled data block the actor reads, after the task and route scope. Data fencing in the intent path is tightened (`formatPlanContext`'s conversation block; `CompactIntent`'s history and `createCompactIntentAdapter` in `@hames-ai/harness-baml`). In `@hames-ai/agents`, `general-next` runs `compactIntent` first; its synthesizer keeps the user's own message as `intent`.
+- bbdb4c3: Guide loop controllers to use public terms for outside searches and fetches, keeping private people's names out unless named in the user's request or referring to a public figure in their public role.
+- eea3036: Tell the synthesizer that nothing it writes saves anything for a later conversation, so a reply never claims to have saved or to remember something across conversations, and names a file saved in the conversation as a file.
+- Updated dependencies [22fc71d]
+- Updated dependencies [9b4a8bc]
+- Updated dependencies [439ea4f]
+- Updated dependencies [e59e993]
+- Updated dependencies [a30f690]
+- Updated dependencies [0538d36]
+- Updated dependencies [b8d2090]
+- Updated dependencies [15e7432]
+- Updated dependencies [481f557]
+- Updated dependencies [a77515a]
+- Updated dependencies [69c4cf8]
+- Updated dependencies [9b0f08e]
+- Updated dependencies [1ea8d93]
+- Updated dependencies [cb38253]
+- Updated dependencies [c89ca36]
+- Updated dependencies [32424d4]
+- Updated dependencies [264b17d]
+- Updated dependencies [22f8cf4]
+- Updated dependencies [8166f8f]
+- Updated dependencies [bc83e31]
+- Updated dependencies [541b10d]
+- Updated dependencies [e149866]
+- Updated dependencies [c384ffe]
+- Updated dependencies [c5d0902]
+- Updated dependencies [09d3e3b]
+- Updated dependencies [a50fedc]
+- Updated dependencies [f1e289b]
+- Updated dependencies [d9d069a]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+- Updated dependencies [4cd3f85]
+- Updated dependencies [d06a4c6]
+- Updated dependencies [6dac094]
+- Updated dependencies [e2c49d5]
+- Updated dependencies [7b6c517]
+- Updated dependencies [1b31461]
+- Updated dependencies [0a4ec50]
+- Updated dependencies [5c8cdef]
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

@@ -1,5 +1,66 @@
 # @hames-ai/connectors
 
+## 0.7.0
+
+### Minor Changes
+
+- 4bad485: Add a bounded Microsoft Graph calendar date-range reader with local-time boundaries, and make it available in general-next's office route (#905).
+- 65f0c93: Expose Exa's hosted `web_search_exa` and `web_fetch_exa` tools through the existing `web` namespace (#874). Search and retrieval routes apply the shared web egress policy and untrusted-result screening, while the connector catalog names both tools for namespace routing.
+- cd993fc: Opt-in support for a hosted third-party knowledge-archive MCP server (Lenny's Data, #986).
+  
+  - `@hames-ai/connectors`: the MCP catalog maps the `lennys_` tool-name prefix to a new `lennys` namespace (`LENNYS_NAMESPACE`, `LENNYS_TOOL_PREFIX`). The host's transport discovers the names and pins them; the namespace is a fixed point of `inferServer`, so a guard can declare it.
+  - `@hames-ai/agents`: `general-next` offers `lennys` tools on its info route only when the host's catalog holds them. The info guard and the egress gate's address sources then declare the namespace, and the tools get web search's default egress detector pair, because each call carries free-text query text to a third party.
+  - `@hames-ai/harness-baml`: the adapters' process-wide tool-description cache re-reads, throttled, when a caller's allowlist holds a tool that a process transport owns but the cache lacks. A cache filled in another request's scope, or during that transport's outage, no longer hides the tool's description from the caller who holds it for the life of the process.
+- 8166f8f: Canvas graph edits adhere to the ontology. `@hames-ai/connectors`' `createGraphNode`, `linkGraphNodes` and `setGraphNodeProperty` now take the host's ontology and an actor: they admit only the ontology's labels, relation types and declared properties, merge a repeated name onto one node, refuse member and pillar creation and a second edge of a bounded relation, and stamp `createdBy` / `lastEditedBy`. **Breaking** for callers of the old signatures. `@hames-ai/harness-patterns`' `org-knowledge-ontology` gains `propertyRefusal`, `canvasCreateRefusal`, `canvasCreatableLabels`, `canvasLinkRefusal` and `isIsoDay`, which the validator's V2 now shares.
+- d06a4c6: The agent knows the current date and time in the user's time zone. One breaking change to the generated client: a direct `b.Router` / `b.LoopController` / `b.ControllerThinking` / `b.ActorController` / `b.Planner` / `b.PlannerThinking` / `b.Synthesize` caller that passes an options bag must now pass `null` (or a time block) before it; a cast caller otherwise throws `BamlInvalidArgumentError`. No behaviour change for a run with no clock.
+  
+  - **harness-patterns.** New `clock` module (`TurnClock`, `validTimeZone`, `formatTimeBlock`, `localDate`) and a `clock` slot on the run frame (`RunFrame.clock`, read by `currentClock()`), supplied once per turn by the host. It replaces on amend, like the other single-value slots. The org-knowledge hook's default `today()` is the clock's local date, not the UTC one; with no clock it keeps the UTC day.
+  - **harness-baml.** Those seven functions take a trailing optional `current_time`, rendered (when non-null) in per-turn user-role content after the last #122 cache marker, never in a system block. The adapters, the router and the synthesizer pass the frame clock's block (`time-block.server.ts`), rendered once per clock.
+  - **connectors.** `graph_calendar_today` reads the user's day from the turn's clock and sends offset-carrying bounds (`…T00:00:00+01:00`); its naive bounds were read by Graph as UTC, shifting the day by the user's offset. `graph_calendar_range` reads its dates in the turn's zone ahead of `GRAPH_TIMEZONE`. `graph_mail_attachments`' `since` starts at the date's local midnight in the turn's zone (UTC midnight outside a turn, as before). `localDayBounds` is replaced by `localCalendarDay`.
+
+### Patch Changes
+
+- c384ffe: Select outgoing detectors per tool and tool-type tag, record metadata-only shadow decisions, and refuse active Decide outages with a visible error. Pass host guard settings and tool tags into the general-next composition.
+- Updated dependencies [22fc71d]
+- Updated dependencies [9b4a8bc]
+- Updated dependencies [439ea4f]
+- Updated dependencies [e59e993]
+- Updated dependencies [a30f690]
+- Updated dependencies [0538d36]
+- Updated dependencies [b8d2090]
+- Updated dependencies [15e7432]
+- Updated dependencies [481f557]
+- Updated dependencies [a77515a]
+- Updated dependencies [69c4cf8]
+- Updated dependencies [9b0f08e]
+- Updated dependencies [1ea8d93]
+- Updated dependencies [cb38253]
+- Updated dependencies [c89ca36]
+- Updated dependencies [32424d4]
+- Updated dependencies [264b17d]
+- Updated dependencies [22f8cf4]
+- Updated dependencies [8166f8f]
+- Updated dependencies [bc83e31]
+- Updated dependencies [541b10d]
+- Updated dependencies [e149866]
+- Updated dependencies [c384ffe]
+- Updated dependencies [c5d0902]
+- Updated dependencies [09d3e3b]
+- Updated dependencies [a50fedc]
+- Updated dependencies [f1e289b]
+- Updated dependencies [d9d069a]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+- Updated dependencies [4cd3f85]
+- Updated dependencies [d06a4c6]
+- Updated dependencies [6dac094]
+- Updated dependencies [e2c49d5]
+- Updated dependencies [7b6c517]
+- Updated dependencies [1b31461]
+- Updated dependencies [0a4ec50]
+- Updated dependencies [5c8cdef]
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

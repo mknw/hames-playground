@@ -1195,11 +1195,14 @@ export interface LinkReviewDialogProps {
   /** How the reason is presented and how hard the open action is to reach.
    *  Defaults to `unverified`. */
   severity?: LinkReviewSeverity
-  /** "Cancel and mark unsafe": replace the chosen anchor with inert text and
-   *  record the persisted mark (ruling Q5 as overridden — issue #901 comment
-   *  6618793027, 2026-11-04; the mark is persisted, not rendering-only, and
-   *  no session state beyond the mark). The mount (ChatMessages) owns the
-   *  DOM mechanism and the mark; this dialog only asks for it. */
+  /** "Cancel and mark unsafe" (links) / "Cancel and hide" (images, owner
+   *  ruling N111 2026-11-07: the image path stays rendering-only, so the
+   *  image copy does not claim a mark): replace the chosen anchor with inert
+   *  text and — links only — record the persisted mark (ruling Q5 as
+   *  overridden — issue #901 comment 6618793027, 2026-11-04; the mark is
+   *  persisted, not rendering-only, and no session state beyond the mark).
+   *  The mount (ChatMessages) owns the DOM mechanism and the mark; this
+   *  dialog only asks for it. */
   onDefang: () => void
 }
 
@@ -1378,7 +1381,7 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
               ring="2 transparent focus:ui-accent/40"
               cursor="pointer"
             >
-              Cancel and mark unsafe
+              {image() ? 'Cancel and hide' : 'Cancel and mark unsafe'}
             </button>
           </div>
         </div>

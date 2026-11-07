@@ -170,6 +170,25 @@ describe('the link-review body', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  // The image kind's action copy is the owner's N111 ruling (2026-11-07,
+  // option A/i): the image path stays rendering-only, so its button reads
+  // "Cancel and hide" while a link's still reads "Cancel and mark unsafe".
+  // Both kinds are mounted in THIS test, so one mutation — the label branch
+  // collapsed to a single literal — turns both assertions red, whichever
+  // literal survives. Auto-cleanup only runs between tests, so the two trees
+  // coexist and each button is addressed by its own node.
+  it("the action reads 'Cancel and hide' for an image review, 'Cancel and mark unsafe' for a link", async () => {
+    mount({ target: 'image' })
+    await tick(80)
+    mount()
+    await tick(80)
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-testid="link-review-defang"]'),
+    ]
+    expect(buttons).toHaveLength(2)
+    expect(buttons.map((b) => b.textContent)).toEqual(['Cancel and hide', 'Cancel and mark unsafe'])
+  })
+
   // MUTATION: hard-code the reason inside the body → the prop is dead and the
   // slice-18 copy has no seam → red.
   it('carries the #901-only default reason', async () => {

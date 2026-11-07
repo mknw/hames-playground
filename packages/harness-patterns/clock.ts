@@ -12,6 +12,7 @@
  * Client-safe on purpose: it is pure `Intl` arithmetic, no I/O, so the host
  * validates a browser-sent zone with the same function the server formats with.
  */
+import type { UnifiedContext } from './types'
 
 /** One turn's clock. Built by the host at turn start; read, never written, below it. */
 export interface TurnClock {
@@ -22,6 +23,21 @@ export interface TurnClock {
   /** True when no zone was known for the user and `timeZone` is the UTC
    *  fallback. The time block then says so, so the answer can too. */
   readonly zoneUnknown?: boolean
+}
+
+/** The host's resume clock. Older blobs have no recorded zone: keep their
+ * latest user-message instant (session creation if absent) and explicitly
+ * assume UTC, rather than inventing a historical zone from today's preference. */
+export function pausedTurnClock(
+  ctx: Pick<UnifiedContext, 'turnClock' | 'events' | 'createdAt'>,
+): TurnClock {
+  return (
+    ctx.turnClock ?? {
+      instant: ctx.events.findLast((event) => event.type === 'user_message')?.ts ?? ctx.createdAt,
+      timeZone: 'UTC',
+      zoneUnknown: true,
+    }
+  )
 }
 
 // `Area/Location` (one or two slashes) or the bare `UTC`. Shape first, because
@@ -77,6 +93,7 @@ function localParts(instant: number, timeZone: string): LocalParts {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hourCycle: 'h23',
     timeZoneName: 'longOffset',
   }).formatToParts(new Date(instant))
@@ -87,8 +104,8 @@ function localParts(instant: number, timeZone: string): LocalParts {
   return {
     weekday: get('weekday'),
     date: `${get('year')}-${get('month')}-${get('day')}`,
-    time: `${get('hour')}:${get('minute')}`,
-    offset: `UTC${gmt || '+00:00'}`,
+    time: `${get('hour')}:${get('minute')}:${get('second')}`,
+    offset: gmt || '+00:00',
   }
 }
 
@@ -97,20 +114,31 @@ export function localDate(clock: TurnClock): string {
   return localParts(clock.instant, clock.timeZone).date
 }
 
+const timeBlocks = new WeakMap<TurnClock, string>()
+
 /**
  * The block every time-reasoning prompt carries: weekday, ISO date, local time,
  * UTC offset and zone name, plus the one instruction that makes it useful.
- * Deterministic for one clock, so a turn's calls all render it byte-identically.
+ * Memoized per clock for decisions and BAML calls alike. The host holds one
+ * clock per turn, so every call sees the same rendering even across midnight.
  */
 export function formatTimeBlock(clock: TurnClock): string {
+  const cached = timeBlocks.get(clock)
+  if (cached !== undefined) return cached
   const p = localParts(clock.instant, clock.timeZone)
   const header = clock.zoneUnknown
     ? "CURRENT TIME (when this turn started; the user's time zone is unknown, so this is UTC):"
     : "CURRENT TIME (when this turn started, in the user's time zone):"
-  const rule = clock.zoneUnknown
-    ? 'Read "now", "today", "tomorrow", "this afternoon", "recent" and similar against this time, and when an answer depends on the local time, say that you assumed UTC.'
-    : 'Read "now", "today", "tomorrow", "this afternoon", "recent" and similar against this time.'
-  return [header, `${p.weekday}, ${p.date}, ${p.time} ${p.offset} (${clock.timeZone})`, rule].join(
-    '\n',
-  )
+  const rule =
+    "Use this time to resolve relative dates in the current request only, unless the user gives an explicit reference date; use that reference date instead. Preserve the temporal context of dated quotations: relative dates inside them refer to the quotation's date. This is not the date of documents or events."
+  const block = [
+    header,
+    `${p.weekday}, ${p.date}T${p.time}${p.offset} (${clock.timeZone})`,
+    rule,
+    ...(clock.zoneUnknown
+      ? ['When an answer depends on the local time, say that you assumed UTC.']
+      : []),
+  ].join('\n')
+  timeBlocks.set(clock, block)
+  return block
 }

@@ -159,7 +159,7 @@ export const criticAcceptScenario: Scenario = {
   run: async (ctx) => {
     const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-critic-accept')
-    const result = await b.Critic(INTENT, [GOOD_ATTEMPT], ctx.opts('critic', collector))
+    const result = await b.Critic(INTENT, [GOOD_ATTEMPT], null, ctx.opts('critic', collector))
     return {
       collectors: [collector],
       checks: [
@@ -192,7 +192,7 @@ export const criticRejectAndReviseScenario: Scenario = {
     //    wrong question. Exit status is not sufficiency.
     const criticCollector = new Collector('eval-critic-reject')
     collectors.push(criticCollector)
-    const verdict = await b.Critic(INTENT, [BAD_ATTEMPT], ctx.opts('critic', criticCollector))
+    const verdict = await b.Critic(INTENT, [BAD_ATTEMPT], null, ctx.opts('critic', criticCollector))
     checks.push(
       check(
         'rejected the wrong-but-successful attempt',

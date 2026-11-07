@@ -139,7 +139,7 @@ beforeAll(async () => {
       rq('LoopController')('m', 'i', tools, [], null, null, null, null, null, null, null, via),
     ActorController: () =>
       rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, null, via),
-    Critic: () => rq('Critic')('i', [attempt], via),
+    Critic: () => rq('Critic')('i', [attempt], null, via),
     // Eight positional parameters (the last, `guide`, since #985), then the bag.
     Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
@@ -148,7 +148,7 @@ beforeAll(async () => {
         [{ id: '1', tool: 'search', tool_args: '{}', reasoning: 'r', result: 'rows' }],
         via,
       ),
-    CompactIntent: () => rq('CompactIntent')([], 'latest', via),
+    CompactIntent: () => rq('CompactIntent')([], 'latest', null, via),
     Planner: () => rq('Planner')('m', 'i', tools, null, null, via),
     PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, null, via),
     // The reasoning twins: same positional shapes as their originals, then the
@@ -169,7 +169,7 @@ beforeAll(async () => {
         null,
         viaThink,
       ),
-    CriticThinking: () => rq('CriticThinking')('i', [attempt], viaThink),
+    CriticThinking: () => rq('CriticThinking')('i', [attempt], null, viaThink),
     // `boundary` (the markers' per-call code) sits before the bag (slice 8).
     ScreenUntrustedContent: () =>
       rq('ScreenUntrustedContent')('web', 'content', '0123456789abcdef', via),

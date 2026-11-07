@@ -2279,6 +2279,38 @@ constant within the turn, so the append-only property and provider prefix reuse
 are unchanged. A first turn has none (its compact-intent call is skipped, and a
 skipped event is not a resolved intent), so its state is exactly as before.
 
+**The turn clock (#1029).** When the host supplies `RunFrame.clock`, the state
+opens with `formatTimeBlock(clock)`: an ISO date-time with offset, weekday and
+IANA zone, explicitly naming an unknown-zone UTC fallback. The host captures
+the instant once before the turn's first await and resolves the user's zone;
+core never reads the wall clock to build this block. The renderer memoizes by
+clock object, shared with harness-baml's `currentTimeBlock()` adapter helper.
+The block is fixed within the run and included in the state budget, never trimmed.
+A state override receives it as optional `DecisionLoopStateInput.currentTime`
+and owns its placement. With no clock the block is absent.
+
+The harness stamps `UnifiedContext.turnClock` on each new user message, so JSON
+serialization retains the full `TurnClock`, including `zoneUnknown`.
+`resumeHarness` restores that clock on the run frame before resolving answers
+and re-entering patterns, overriding any ambient resume-request clock.
+`continueSession` captures the new message's frame clock, clearing the old one
+if none is supplied. Resume expiry checks use actual wall time, not turn time.
+For older blobs without `turnClock`, core retains the host-supplied clock (or
+none). The app's `pausedTurnClock` compatibility policy uses the last
+`user_message.ts`, else `createdAt`, with `timeZone: 'UTC', zoneUnknown: true`:
+it cannot recover a historical zone from a newly changed preference. That
+compatibility clock is persisted on a subsequent pause.
+
+The shared directive resolves relative dates in the current request only,
+defers to an explicit reference date, and preserves the temporal context of
+dated quotations. It says "This is not the date of documents or events."
+
+The BAML adapters pass this same rendering to the router, compact-intent call,
+loop controller, actor, planner, critic and synthesizer (reasoning variants
+included). It renders in user-role content after stable system content and,
+where present, after the last cache breakpoint. No timestamp enters the cached
+prefix; all existing cache blocks keep their contents. Routing is unchanged.
+
 **The documents block (#507).** With `documents` configured, the state gains one
 block between the conversation and **This turn so far**, constant within a turn.
 Core never reads a tier and never reads a stash: the host's source returns the

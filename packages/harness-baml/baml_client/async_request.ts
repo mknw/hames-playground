@@ -76,7 +76,7 @@ env?: Record<string, string | undefined>
       }
       
   async CompactIntent(
-  history: types.Message[],latest: string,
+  history: types.Message[],latest: string,current_time?: string | null,
   __baml_options__?: BamlCallOptions<never>
   ): Promise<HTTPRequest> {
     try {
@@ -95,7 +95,7 @@ env?: Record<string, string | undefined>
       return await this.runtime.buildRequest(
       "CompactIntent",
       {
-      "history": history,"latest": latest
+      "history": history,"latest": latest,"current_time": current_time?? null
       },
       this.ctxManager.cloneContext(),
       __baml_options__?.tb?.__tb(),
@@ -175,7 +175,7 @@ env?: Record<string, string | undefined>
       }
       
   async Critic(
-  intent: string,attempts: types.Attempt[],
+  intent: string,attempts: types.Attempt[],current_time?: string | null,
   __baml_options__?: BamlCallOptions<never>
   ): Promise<HTTPRequest> {
     try {
@@ -194,7 +194,7 @@ env?: Record<string, string | undefined>
       return await this.runtime.buildRequest(
       "Critic",
       {
-      "intent": intent,"attempts": attempts
+      "intent": intent,"attempts": attempts,"current_time": current_time?? null
       },
       this.ctxManager.cloneContext(),
       __baml_options__?.tb?.__tb(),
@@ -208,7 +208,7 @@ env?: Record<string, string | undefined>
       }
       
   async CriticThinking(
-  intent: string,attempts: types.Attempt[],
+  intent: string,attempts: types.Attempt[],current_time?: string | null,
   __baml_options__?: BamlCallOptions<never>
   ): Promise<HTTPRequest> {
     try {
@@ -227,7 +227,7 @@ env?: Record<string, string | undefined>
       return await this.runtime.buildRequest(
       "CriticThinking",
       {
-      "intent": intent,"attempts": attempts
+      "intent": intent,"attempts": attempts,"current_time": current_time?? null
       },
       this.ctxManager.cloneContext(),
       __baml_options__?.tb?.__tb(),
@@ -676,7 +676,7 @@ env?: Record<string, string | undefined>
           }
           
       async CompactIntent(
-      history: types.Message[],latest: string,
+      history: types.Message[],latest: string,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
       ): Promise<HTTPRequest> {
         try {
@@ -695,7 +695,7 @@ env?: Record<string, string | undefined>
           return await this.runtime.buildRequest(
           "CompactIntent",
           {
-          "history": history,"latest": latest
+          "history": history,"latest": latest,"current_time": current_time?? null
           },
           this.ctxManager.cloneContext(),
           __baml_options__?.tb?.__tb(),
@@ -775,7 +775,7 @@ env?: Record<string, string | undefined>
           }
           
       async Critic(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
       ): Promise<HTTPRequest> {
         try {
@@ -794,7 +794,7 @@ env?: Record<string, string | undefined>
           return await this.runtime.buildRequest(
           "Critic",
           {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
           },
           this.ctxManager.cloneContext(),
           __baml_options__?.tb?.__tb(),
@@ -808,7 +808,7 @@ env?: Record<string, string | undefined>
           }
           
       async CriticThinking(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
       ): Promise<HTTPRequest> {
         try {
@@ -827,7 +827,7 @@ env?: Record<string, string | undefined>
           return await this.runtime.buildRequest(
           "CriticThinking",
           {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
           },
           this.ctxManager.cloneContext(),
           __baml_options__?.tb?.__tb(),

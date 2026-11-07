@@ -163,7 +163,7 @@ vi.mock('@hames-ai/harness-patterns', async () => {
 type OpenedFrame = {
   config?: { maxResultForSummary?: number }
   inference?: { tier?: string }
-  clock?: { instant: number; timeZone: string }
+  clock?: { instant: number; timeZone: string; zoneUnknown?: boolean }
   live?: unknown
   /** The host's one `hitl` slot (#433 F7/m8): supplied around the main run
    *  only, carrying the turn's `attended`. */
@@ -3000,3 +3000,64 @@ describe('the turn clock', () => {
     expect(openedFrames[0].clock?.timeZone).toBe('Europe/Brussels')
   })
 })
+
+// Independent #1030 evidence: a resume continues the same user turn.
+// The original clock must survive the wait, including a change of local day.
+it('review: a paused turn resumes with its original now across midnight', async () => {
+  const original = Date.parse('2026-11-04T22:30:12Z')
+  const blob = pausedBlob({
+    createdAt: original,
+    events: [
+      {
+        id: 'u1',
+        type: 'user_message',
+        ts: original,
+        patternId: 'harness',
+        data: { content: 'Find records from yesterday' },
+      },
+      {
+        id: 'h1',
+        type: 'hitl_request',
+        ts: original + 1,
+        patternId: 'harness',
+        data: pendingRequest(),
+      },
+    ],
+  })
+  claimSession.mockResolvedValue(claimedPaused(blob))
+  loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'approve')])
+  closeHitlRows.mockResolvedValue(1)
+  vi.useFakeTimers({ now: original + 86_400_000, toFake: ['Date'] })
+  try {
+    await runTurnAndPersist(resume())
+    expect(resumeHarness).toHaveBeenCalledOnce()
+    expect(openedFrames[0].clock?.instant).toBe(original)
+    expect(openedFrames[0].clock).toEqual({ instant: original, timeZone: 'UTC', zoneUnknown: true })
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it.each([{ timeZone: 'Europe/Brussels' }, { timeZone: 'UTC', zoneUnknown: true }])(
+  'resume retains the stored $timeZone despite a new browser/preference zone',
+  async (zone) => {
+    const original = { instant: Date.parse('2026-11-04T23:30:12Z'), ...zone }
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({ turnClock: original })))
+    loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'approve')])
+    closeHitlRows.mockResolvedValue(1)
+    // The resolver represents today's stored preference. A resume must not ask
+    // it to reconstruct yesterday's zone from that new preference.
+    resolveTurnClock.mockResolvedValueOnce({
+      clock: { instant: original.instant + 86_400_000, timeZone: 'America/New_York' },
+      source: 'stored',
+    })
+    vi.useFakeTimers({ now: original.instant + 86_400_000, toFake: ['Date'] })
+    try {
+      await runTurnAndPersist({ ...resume(), browserTimeZone: 'America/New_York' })
+      expect(openedFrames[0].clock).toEqual(original)
+      expect(resolveTurnClock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  },
+)

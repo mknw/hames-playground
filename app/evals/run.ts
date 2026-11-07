@@ -128,7 +128,7 @@ async function preflight(client: string | undefined): Promise<void> {
   const collector = new Collector('eval-preflight')
   const opts = { collector, ...(client ? { client } : {}) }
   const t0 = Date.now()
-  await b.Critic('say the attempt is fine', [], opts)
+  await b.Critic('say the attempt is fine', [], null, opts)
   const calls = (collector.last?.calls ?? []) as Array<{
     selected?: boolean
     clientName?: string

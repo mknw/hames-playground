@@ -4,6 +4,7 @@
  * Pure TypeScript interfaces plus the LLM call-envelope error class. Safe to
  * import from client and server.
  */
+import type { TurnClock } from './clock'
 
 /**
  * The data types the harness patterns exchange with their LLM layer.
@@ -375,6 +376,9 @@ export interface UnifiedContext<T = Record<string, unknown>> {
   sessionId: string
   /** When the session was created */
   createdAt: number
+  /** The current user turn's captured clock. Serialized across pauses;
+   *  replaced from the run frame when a new user message starts a turn. */
+  turnClock?: TurnClock
   /** Full event stream */
   events: ContextEvent[]
   /** Current execution status */

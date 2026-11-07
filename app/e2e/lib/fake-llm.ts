@@ -736,6 +736,10 @@ export const FAKE_ANSWER_MARK = 'E2E-FAKE-ANSWER'
 /** The tool call the fake controller makes on turn 0, before returning. */
 export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
 
+/** #1029: a deterministic date-relative request. The fake resolves only from
+ * the clock block it actually receives, never the host clock or fixture dates. */
+export const FAKE_DATE_RANGE_QUESTION = 'Find Project nodes created in the last two weeks.'
+
 /** The org-knowledge scenario's turn (slice 4) and the draft the fake's
  *  draft loop returns for it: one new Project, its evidence copied from the
  *  message, as the validator requires. Recognised by the ontology schema the
@@ -840,6 +844,29 @@ function replyForBase(fn: BamlFunctionName, prompt: string): string {
           tool_name: 'read_neo4j_cypher',
           tool_args: FAKE_GRAPH_LOOKUP_ARGS,
           status: 'Querying the graph',
+          is_final: false,
+        })
+      }
+      if (prompt.includes(FAKE_DATE_RANGE_QUESTION)) {
+        const local = prompt.match(/CURRENT TIME[^\n]*\n\s*\w+, (\d{4}-\d{2}-\d{2})T/)
+        if (!local) {
+          return JSON.stringify({
+            reasoning: 'No clock',
+            tool_name: 'Return',
+            tool_args: 'No current time supplied.',
+            is_final: true,
+          })
+        }
+        const since = new Date(`${local[1]}T00:00:00Z`)
+        since.setUTCDate(since.getUTCDate() - 14)
+        return JSON.stringify({
+          reasoning: 'Resolve the last two weeks against the supplied local date.',
+          tool_name: 'read_neo4j_cypher',
+          tool_args: JSON.stringify({
+            query:
+              'MATCH (p:Project) WHERE date(p.createdAt) >= date($since) AND date(p.createdAt) <= date($until) RETURN p.name AS project',
+            params: { since: since.toISOString().slice(0, 10), until: local[1] },
+          }),
           is_final: false,
         })
       }

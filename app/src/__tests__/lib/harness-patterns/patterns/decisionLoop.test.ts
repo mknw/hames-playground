@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame, currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
+import { formatTimeBlock, type TurnClock } from '@hames-ai/harness-patterns/clock'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -86,6 +87,47 @@ type Data = DecisionLoopData & Record<string, unknown>
 type Route = DecisionLoopRoute<Data>
 
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
+
+// #1029. Mutation: omit currentTime from the rendered state, or read Date.now()
+// instead of the turn clock. Both must fail even when time advances in a route.
+describe('decision state current time', () => {
+  it.each([{ timeZone: 'Europe/Brussels' }, { timeZone: 'UTC', zoneUnknown: true }])(
+    'keeps one now across iterations ($timeZone)',
+    async (zone) => {
+      const clock: TurnClock = { instant: Date.parse('2026-11-04T23:30:00Z'), ...zone }
+      const d = scriptedDecide(['lookup', 'answer'])
+      const wall = vi.spyOn(Date, 'now').mockReturnValue(clock.instant)
+      try {
+        const child = returning('lookup', 'done')
+        const original = child.fn
+        child.fn = async (scope, view) => {
+          wall.mockReturnValue(clock.instant + 86_400_000)
+          return original(scope, view)
+        }
+        await withRunFrame({ clock }, async () => {
+          const ctx = createContext<Data>('Find projects from the last two weeks', {})
+          await runChain(ctx, [
+            decisionLoop(
+              { lookup: route(child) },
+              {
+                decide: d.decide,
+                answer: 'Answer',
+                patternId: 'clock-loop',
+              },
+            ),
+          ])
+        })
+        expect(d.states).toHaveLength(2)
+        for (const state of d.states) {
+          expect(state.startsWith(formatTimeBlock(clock))).toBe(true)
+          expect(state.match(/CURRENT TIME/g)).toHaveLength(1)
+        }
+      } finally {
+        wall.mockRestore()
+      }
+    },
+  )
+})
 
 // ============================================================================
 // Fixtures
@@ -3526,4 +3568,55 @@ describe('decisionLoop — the turn’s resolved intent (#1006)', () => {
     await runInFrame(() => runChain(ctx, [build({ retriever: route(retrieverRoute) }, decide)]))
     expect(queries).toEqual(['Search the notes again, this time for the Q3 figures'])
   })
+})
+
+// Independent #1030 evidence: the documented state override seam carries
+// the same clock block as the default state, with no fresh wall-clock read.
+it('review: custom decision state receives the shared currentTime block', async () => {
+  const clock: TurnClock = {
+    instant: Date.parse('2026-11-04T23:30:12Z'),
+    timeZone: 'Europe/Brussels',
+  }
+  const d = scriptedDecide(['answer'])
+  const supplied: Array<string | undefined> = []
+  await withRunFrame({ clock }, async () => {
+    const ctx = createContext<Data>('What day is it?', {})
+    await runChain(ctx, [
+      decisionLoop(
+        { lookup: route(returning('lookup', 'done')) },
+        {
+          decide: d.decide,
+          answer: 'Answer',
+          patternId: 'custom-clock-loop',
+          state: (input) => {
+            supplied.push(input.currentTime)
+            return input.currentTime ?? 'MISSING CLOCK'
+          },
+        },
+      ),
+    ])
+  })
+  expect(supplied).toEqual([formatTimeBlock(clock)])
+  expect(d.states).toEqual([formatTimeBlock(clock)])
+})
+
+it('review: a cached decision pattern reads each new turns clock at execution', async () => {
+  const d = scriptedDecide(['answer', 'answer'])
+  const pattern = decisionLoop(
+    { lookup: route(returning('lookup', 'done')) },
+    { decide: d.decide, answer: 'Answer', patternId: 'cached-clock-loop' },
+  )
+  const clocks = [
+    { instant: Date.parse('2026-11-04T23:30:12Z'), timeZone: 'Europe/Brussels' },
+    { instant: Date.parse('2026-11-05T23:30:12Z'), timeZone: 'Europe/Brussels' },
+  ]
+  for (const clock of clocks) {
+    await withRunFrame({ clock }, async () => {
+      await runChain(createContext<Data>('What day is it?', {}), [pattern])
+    })
+  }
+  expect(d.states).toHaveLength(2)
+  clocks.forEach((clock, index) =>
+    expect(d.states[index].startsWith(formatTimeBlock(clock))).toBe(true),
+  )
 })

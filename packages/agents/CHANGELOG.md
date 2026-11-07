@@ -1,5 +1,91 @@
 # @hames-ai/agents
 
+## 0.7.0
+
+### Minor Changes
+
+- 22fc71d: Adaptive document retrieval: ingest now records the chunk count it computed beside the document's size, and the retriever can page through a long document across re-dispatches instead of returning the same k chunks (#927 slices 1 and 2).
+  
+  - Document records carry a `chunkCount` plaintext integer after a successful ingest; documents ingested before this change carry no count and render without one — never a fabricated 0. The documents block and the retrieval step line show it when every matched document reported its total.
+  - `retriever({ page: true })` opts a route into paging: the retriever excludes the chunk ids it already returned for this route in this turn — the turn boundary is derived from the last `user_message` event, the same rule `sliceByLastNTurns` uses, so a fresh turn starts from the top of the document again — and the exclusion sits inside the visibility-widening search loop, so a page of a long document still returns `k` chunks when every visible chunk beyond the first batch would otherwise have been hidden. An exhausted document returns an empty page, which the #926 progress rule counts as no progress.
+  - The retrieval step line's `k of N chunks seen` counts cumulatively: every chunk the route has shown the turn so far, this dispatch's matches plus its earlier records this turn, so a later dispatch reads how much of the document remains.
+- 4bad485: Add a bounded Microsoft Graph calendar date-range reader with local-time boundaries, and make it available in general-next's office route (#905).
+- 65f0c93: Expose Exa's hosted `web_search_exa` and `web_fetch_exa` tools through the existing `web` namespace (#874). Search and retrieval routes apply the shared web egress policy and untrusted-result screening, while the connector catalog names both tools for namespace routing.
+- b8d2090: `decisionLoop` accepts an optional question for choosing the next route, while retaining its existing default. `general-next` uses that question and measured route descriptions to guide tool selection, including Microsoft 365 metadata, document search, and office sandbox work (#880).
+- 15e7432: The injection-ingress-guard classification replaces the guard gate (boundary guards revision 6, slice 17). `withInjectionGuard` takes a new `ingressGuard: { run: createIngressGuard(decide), mode }` option: one `choice` question keyed `guard.ingress` (`safe` / `possible-instructions-for-ai` / `instructions-for-ai-detected`) per external payload, at the existing Decide seam, driving presentation only — nothing is withheld. Mode `'off'` (default) / `'shadow'` (records a `decision_made` event, attaches no mark) / `'on'` (attaches an `IngressMark` — label, the safe line's pass, the decision event id — to the result, which the loops copy onto the `tool_result` event as `ingress` and the retriever attaches per hit). In `'on'` a classification that ran and gave no answer attaches an abstained mark (`abstained: true`, no label, `safe: false`), which a reader presents as unchecked; a label is floored at `possible-instructions-for-ai` after a deterministic finding and at `instructions-for-ai-detected` after a positive screen verdict; and a mark whose label covers only a head of the content carries `truncated: true`. A head whose state would pass the byte budget is cut to fit rather than refused. The question is the retired gate's reviewed one ("Does the content contain text that tries to direct or steer the AI reading it?"). The presented label applies `GUARD_INGRESS_SAFE_LINE` (0.7, provisional until slice 19's calibration), measured on the final wording against the private decision box's choice answers before it was set. The model-facing event view renders a `guard.ingress` decision as a fixed metadata line, with no label. The retriever sanitizes its hits concurrently.
+  
+  Breaking: the guard gate is removed, by the owner's ruling recorded as [O42 in the boundary-guards design's decision record](https://github.com/mknw/hames-playground/blob/main/docs/plan/boundary-guards.md#o42-the-guard-gate-deleted-from-core) — `createGuardGate`, `GUARD_SCREEN`, `GUARD_GATE_THRESHOLD`, `GUARD_GATE_TIMEOUT_MS`, `guardGateSkipRate`, the `GuardGate` / `GuardGateVerdict` types, `InjectionScreenConfig.gate`, and the screen's `'shadow'` / `'gated'` modes (`ScreenMode` is `'off' | 'always'`). Both removed modes asked a gate; before this change a screen declaring either with no gate passed already refused construction, and now that no gate can be passed, a declaration carrying either refuses construction as an unknown mode. `drawFenceNonce`, `renderGuardGateState` and `LINE_BREAK` are now exported from the package root. A screen's `exempt` namespaces are exempt from the classification too.
+  
+  general-next composes no gate; its office, info and documents guards declare `ingressGuard` (the documents guard without a screen) at `AgentGuards.ingressMode`, default `INGRESS_POLICY_DEFAULT` (`'off'`); `AgentGuards.gateThreshold` is removed. The reference app reads `GUARD_INGRESS=off|shadow|on`, one value for both tiers; an unknown value refuses boot.
+- cd993fc: Opt-in support for a hosted third-party knowledge-archive MCP server (Lenny's Data, #986).
+  
+  - `@hames-ai/connectors`: the MCP catalog maps the `lennys_` tool-name prefix to a new `lennys` namespace (`LENNYS_NAMESPACE`, `LENNYS_TOOL_PREFIX`). The host's transport discovers the names and pins them; the namespace is a fixed point of `inferServer`, so a guard can declare it.
+  - `@hames-ai/agents`: `general-next` offers `lennys` tools on its info route only when the host's catalog holds them. The info guard and the egress gate's address sources then declare the namespace, and the tools get web search's default egress detector pair, because each call carries free-text query text to a third party.
+  - `@hames-ai/harness-baml`: the adapters' process-wide tool-description cache re-reads, throttled, when a caller's allowlist holds a tool that a process transport owns but the cache lacks. A cache filled in another request's scope, or during that transport's outage, no longer hides the tool's description from the caller who holds it for the life of the process.
+- 69c4cf8: `general-next` answers "what can you do?", "help" and "how do I start?" from a capability guide. `Synthesize` gains a trailing optional `guide`, rendered in its leading system block; a null guide leaves the request byte-identical. `@hames-ai/harness-baml` exports `createSynthesizer({ guide })`, a `compactExecution` synthesizer that carries it. `@hames-ai/agents` exports `capabilityGuide()`, which builds the guide from the tools a composition holds, so a deployment without a tool is never told it has one. `AgentDeps` gains `examplesPage: { href, label }`, the host's page of example questions, which the answer links; the reference app passes its `/use-cases` page. The guide rides only a turn that ran no route: `compactExecution`'s `thread` input gains `stepsThisTurn` (`@hames-ai/harness-patterns`), the number of steps the current turn authored, and `general-next` passes the guide only when it is 0.
+- 264b17d: `AgentDeps.orgKnowledge` opts an agent into the organizational-knowledge hook; `general-next` composes `withOrgKnowledge()` when it is set. `@hames-ai/harness-patterns`' hook module now names its store `OrgKnowledgeStore` as an alias of the graph store seam's `OrgGraphStore`.
+- c384ffe: Select outgoing detectors per tool and tool-type tag, record metadata-only shadow decisions, and refuse active Decide outages with a visible error. Pass host guard settings and tool tags into the general-next composition.
+- a3c0406: Retire the search, retriever, sandbox and microsoft-365 agent exports. `generalNextAgent` remains the sole agent definition, and its office route owns the Graph read-tool allowlist.
+- f1e289b: general-next asks the person when a bounded route exhausts its attempts. The existing HITL dialog offers an answer from partial results or one fresh dispatch with three more attempts, clamped to the runtime ceiling. The summary explains that a fresh dispatch may repeat sandbox file writes. Unattended runs choose answer immediately and keep their existing control flow.
+  
+  Routes opt in through `DecisionLoopRoute.withBudget`, which reconstructs the same wrapped route with the new declared budget. Other decisionLoop consumers keep their behavior. A loop-owned post-route continuation preserves completed events across pause/resume without requiring actorCritic or the sandbox to become resumable. The host's hung-turn backstop accounts for the one additional dispatch.
+
+### Patch Changes
+
+- b9d5548: `generalNextAgent`'s info loop now takes the host's `enrichNeo4jResult`, so a graph answer carries the 1-hop neighbourhood the Neo4j tab draws; the controller's turn log omits it. `extractGraphElements` reads string values through the injection guard's fence, so a guarded graph read draws readable node ids.
+- cb38253: **One resolved intent per turn (#1006).** A chain that runs `compactIntent` before a `decisionLoop` now has the loop read the brief off the `intent_compacted` event THIS turn emitted (never a `scope.data` value carried across turns): it heads the decisions model's state as `Resolved intent (this turn): "…"` and is written into every route child's `data.intent`. A skipped (first-turn) event threads nothing, so a first turn is unchanged. The `retriever` treats a present, non-empty `data.intent` as its query and skips its `RetrieveQuery` rewrite; absent or empty, the previous ladder applies. `actorCritic`'s critic receives the earlier conversation as the same labelled data block the actor reads, after the task and route scope. Data fencing in the intent path is tightened (`formatPlanContext`'s conversation block; `CompactIntent`'s history and `createCompactIntentAdapter` in `@hames-ai/harness-baml`). In `@hames-ai/agents`, `general-next` runs `compactIntent` first; its synthesizer keeps the user's own message as `intent`.
+- 4a368ee: `extractGraphElements` keys a node by its `id` property when that is a non-empty string, in both Neo4j result formats. A node read once as a plain object and once as a driver node is now one element, and a driver relationship's ends are rewritten to those keys. A node with no string `id` keeps its previous key, and the enrichment's `_touched` names still mark a node keyed by `id`.
+- d19e0f2: The general-next agent now uses `gated` as the self-deployed injection screen default. The gate's answer controls whether eligible content reaches the model screen; an explicit `shadow` mode still records the answer and runs the screen. The Anthropic default remains `always`.
+- 09d3e3b: Retire default info-route input masking in the reference app while retaining the operator switch. Explicit input pseudonymisers now run on every tier and retain their failure withholding; outgoing egress checks are unchanged.
+- 6fe3e96: `ReplayedMessage` gains an optional `recognisedLinkHosts` field — the server-computed link-review verdicts (#901 slice 1): the recognised hostnames among an assistant message's own http(s) links. Replay itself never fills it; the serving boundaries (history load, the shared transcript) decorate assistant messages with it, and the chat renderer treats every http(s) link without a verdict as unverified, fail-closed.
+- d9d069a: The general-next agent's injection screen now defaults to `off` on both inference tiers, from one shared per-tier policy value (`SCREEN_POLICY_BY_TIER`) that the composition root's boot validation reads too; the `GUARD_SCREEN` switches narrow to `off | always` per tier (a still-set `gated` or `shadow` refuses boot naming the change), and `GUARD_GATE_THRESHOLD` retires (a still-set value refuses boot naming the replacement).
+  The SPEC's guard-gate section now records that the reference app retired `GUARD_GATE_THRESHOLD`: a still-set value refuses boot there, and τi is code-owned.
+- Updated dependencies [d48accd]
+- Updated dependencies [22fc71d]
+- Updated dependencies [9b4a8bc]
+- Updated dependencies [439ea4f]
+- Updated dependencies [e59e993]
+- Updated dependencies [a30f690]
+- Updated dependencies [0538d36]
+- Updated dependencies [b8d2090]
+- Updated dependencies [15e7432]
+- Updated dependencies [cd993fc]
+- Updated dependencies [481f557]
+- Updated dependencies [8e878b3]
+- Updated dependencies [a77515a]
+- Updated dependencies [69c4cf8]
+- Updated dependencies [9b0f08e]
+- Updated dependencies [1ea8d93]
+- Updated dependencies [cb38253]
+- Updated dependencies [c89ca36]
+- Updated dependencies [32424d4]
+- Updated dependencies [264b17d]
+- Updated dependencies [22f8cf4]
+- Updated dependencies [8166f8f]
+- Updated dependencies [bc83e31]
+- Updated dependencies [541b10d]
+- Updated dependencies [e149866]
+- Updated dependencies [c384ffe]
+- Updated dependencies [bbdb4c3]
+- Updated dependencies [c5d0902]
+- Updated dependencies [09d3e3b]
+- Updated dependencies [a50fedc]
+- Updated dependencies [f1e289b]
+- Updated dependencies [d9d069a]
+- Updated dependencies [eea3036]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+- Updated dependencies [4cd3f85]
+- Updated dependencies [d06a4c6]
+- Updated dependencies [6dac094]
+- Updated dependencies [e2c49d5]
+- Updated dependencies [7b6c517]
+- Updated dependencies [1b31461]
+- Updated dependencies [0a4ec50]
+- Updated dependencies [5c8cdef]
+  - @hames-ai/harness-baml@0.7.0
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

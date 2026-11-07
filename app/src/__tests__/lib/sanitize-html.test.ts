@@ -408,12 +408,15 @@ describe('sanitizeMarkdownHtml — the blocked-image placeholder’s open path (
   const TRUSTED = '/api/stash/document/abc?sessionId=s1'
 
   // MUTATION: widen `isTrustedImageSource` to "own origin at large" (drop the
-  // STASH_DOWNLOAD_PATH test) → the inert pin below goes red.
+  // STASH_DOWNLOAD_PATH test) → the inert pin below goes red. The dest
+  // carries the `download` param set — the exact URL `isAllowedImageSource`
+  // would have allowed to load — because the route's non-download branch
+  // answers the document record as JSON, not the image bytes.
   it('carries the open path on a trusted-shape placeholder, as a focusable activatable element', () => {
     const out = sanitizeMarkdownHtml(`<img src="${TRUSTED}" alt="chart">`)
     const span = parse(out).querySelector('span.blocked-image')!
 
-    expect(span.getAttribute('data-img-dest')).toBe(`${window.location.origin}${TRUSTED}`)
+    expect(span.getAttribute('data-img-dest')).toBe(`${window.location.origin}${TRUSTED}&download`)
     expect(span.getAttribute('role')).toBe('button')
     expect(span.getAttribute('tabindex')).toBe('0')
     // Still inert text — no child markup — and the title now names the action.
@@ -450,12 +453,13 @@ describe('sanitizeMarkdownHtml — the blocked-image placeholder’s open path (
   it('stamps the resolved destination the browser would fetch, not the spelling', () => {
     // Dot-segments that stay INSIDE the stash route resolve to the same
     // trusted path; the attribute records the resolved form — what the
-    // dialog shows and what a reviewed open navigates to.
+    // dialog shows and what a reviewed open navigates to — with the
+    // `download` param set and the resolved params' spelling kept.
     const out = sanitizeMarkdownHtml('<img src="/api/stash/document/x/../abc?sessionId=s1">')
     const span = parse(out).querySelector('span.blocked-image')!
 
     expect(span.getAttribute('data-img-dest')).toBe(
-      `${window.location.origin}/api/stash/document/abc?sessionId=s1`,
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1&download`,
     )
   })
 

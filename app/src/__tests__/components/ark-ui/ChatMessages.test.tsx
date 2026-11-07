@@ -12,6 +12,10 @@ import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { fireEvent, render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import { ChatMessages, type Message } from '~/components/ark-ui/ChatMessages'
+import {
+  DEFAULT_LINK_REVIEW_REASON,
+  IMAGE_LINK_REVIEW_REASON,
+} from '~/components/ark-ui/HitlDialog'
 import { createLinkAcceptanceStore } from '~/lib/link-acceptance'
 import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import { installDomObservers } from '../../mocks/dom-observers'
@@ -654,15 +658,18 @@ describe('ChatMessages — the blocked-image placeholder’s open path (#901 ove
       '.prose-chat .blocked-image[data-img-dest]',
     )!
     expect(placeholder).toBeTruthy()
+    // The dest carries the `download` param set — the exact URL the
+    // auto-load path would have allowed to load — so the reviewed open
+    // retrieves the image file, not the route's JSON document record.
     expect(placeholder.getAttribute('data-img-dest')).toBe(
-      `${window.location.origin}/api/stash/document/abc?sessionId=s1`,
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1&download`,
     )
 
     placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await tick()
     expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
     expect(document.querySelector('[data-testid="link-review-address"]')!.textContent).toBe(
-      `${window.location.origin}/api/stash/document/abc?sessionId=s1`,
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1&download`,
     )
     // The open action is the dialog's reviewed anchor, stamped exactly as the
     // sanitizer stamps every rendered link.
@@ -677,6 +684,88 @@ describe('ChatMessages — the blocked-image placeholder’s open path (#901 ove
     await tick()
     noDialog()
     expect(container.querySelector('.blocked-image[data-img-dest]')).toBe(placeholder)
+  })
+
+  // The dialog is a consent mechanism and the merged design's copy rule is
+  // that the reason is factual: every trusted image is own-origin by
+  // construction, and own origin IS recognised in the link classification, so
+  // the link default would state a falsehood about why the review exists.
+  // MUTATION: drop the image `reason`/`target` pass-through in ChatMessages'
+  // dialog mount → the link default reason and link title come back → red.
+  it('an image review states the image reason and copy, never the link default', async () => {
+    const { container } = render(() => <ChatMessages messages={[trustedImageMessage()]} />)
+    const placeholder = container.querySelector<HTMLElement>('.blocked-image[data-img-dest]')!
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    const dialog = document.querySelector('[data-testid="link-review-dialog"]')!
+    expect(dialog.textContent).toContain(IMAGE_LINK_REVIEW_REASON)
+    expect(dialog.textContent).not.toContain(DEFAULT_LINK_REVIEW_REASON)
+    expect(dialog.textContent).toContain('Review this image')
+    expect(dialog.textContent).toContain('The complete address this image would open:')
+  })
+
+  // The link review keeps its own copy: the image branch rides props on the
+  // SAME body; it does not retitle the body for every caller.
+  it('a link review keeps the link copy and the default reason', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          msg({ role: 'assistant', content: 'See [the docs](https://external.example/guide).' }),
+        ]}
+      />
+    ))
+    const anchor = container.querySelector<HTMLAnchorElement>('a[data-link-review="unverified"]')!
+    anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    const dialog = document.querySelector('[data-testid="link-review-dialog"]')!
+    expect(dialog.textContent).toContain(DEFAULT_LINK_REVIEW_REASON)
+    expect(dialog.textContent).not.toContain(IMAGE_LINK_REVIEW_REASON)
+    expect(dialog.textContent).toContain('Review this link')
+  })
+
+  // The nested case: a trusted-shape placeholder inside an unverified anchor.
+  // The intercept ORDER (link before image, in handleClick) is load-bearing
+  // and this pin is what protects it — swapping the order left both suites
+  // green at the review, silently moving nested-placeholder clicks to the
+  // image review. The click/keyboard split is principled, and the pin pins
+  // BOTH halves: the CLICK gates the anchor (that click would navigate it),
+  // while KEYBOARD activates the placeholder's own affordance (Enter on a
+  // nested focusable does not activate the anchor around it).
+  // MUTATION: swap the intercept order (image branch before link) in
+  // handleClick → the click below opens the image review instead → red.
+  it('a placeholder nested in an unverified anchor: click reviews the anchor, keyboard the image', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          msg({
+            role: 'assistant',
+            content:
+              '[![chart](/api/stash/document/abc?sessionId=s1)](https://external.example/page)',
+          }),
+        ]}
+      />
+    ))
+    const placeholder = container.querySelector<HTMLElement>('.blocked-image[data-img-dest]')!
+    expect(placeholder).toBeTruthy()
+    expect(placeholder.closest('a[data-link-review="unverified"]')).toBeTruthy()
+
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(document.querySelector('[data-testid="link-review-address"]')!.textContent).toBe(
+      'https://external.example/page',
+    )
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-cancel"]')!,
+    )
+    await tick()
+    noDialog()
+
+    placeholder.focus()
+    fireEvent.keyDown(placeholder, { key: 'Enter' })
+    await tick()
+    expect(document.querySelector('[data-testid="link-review-address"]')!.textContent).toBe(
+      `${window.location.origin}/api/stash/document/abc?sessionId=s1&download`,
+    )
   })
 
   // MUTATION: widen `isTrustedImageSource` in the sanitizer to "own origin at

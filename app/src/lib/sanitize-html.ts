@@ -290,7 +290,19 @@ function blockedImagePlaceholder(img: Element, src: string): Element {
   // on it; the defang is also DOM-side, in ChatMessages. The AUTO-LOAD
   // refusal above is unchanged — this is a user-reviewed, user-initiated open.
   if (trusted) {
-    placeholder.setAttribute('data-img-dest', new URL(src, window.location.href).href)
+    // The dest carries the `download` search param SET — the exact URL
+    // `isAllowedImageSource` would have allowed to load (`stashDocumentDownloadUrl`'s
+    // shape, `api-client.ts`): the route's non-download branch answers the
+    // document record as `application/json`, so without it the reviewed open
+    // would deliver JSON, never the image the ruling's motivating case needs.
+    // The param is appended to the RESOLVED query textually, so the params the
+    // browser resolved keep their own spelling (URLSearchParams re-encodes).
+    // A trusted-shape placeholder never already carries the param — carrying
+    // it is exactly what makes `isAllowedImageSource` allow the source — so
+    // the append cannot duplicate one.
+    const dest = new URL(src, window.location.href)
+    dest.search = dest.search ? `${dest.search}&download` : '?download'
+    placeholder.setAttribute('data-img-dest', dest.href)
     placeholder.setAttribute('role', 'button')
     placeholder.setAttribute('tabindex', '0')
   }

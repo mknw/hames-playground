@@ -103,6 +103,20 @@ describe('the link-review body', () => {
     expect(summary!.textContent).not.toContain(ADDRESS)
   })
 
+  // The image open path (ChatMessages' blocked-image branch, fix round 1):
+  // the SAME body retitles and reads the image reason through the `reason`
+  // prop — the props, not a second dialog.
+  // MUTATION: ignore `target` in the title/intro → the link copy comes back → red.
+  it("target='image' retitles the dialog and the address intro", async () => {
+    mount({ target: 'image', reason: 'a factual image reason' })
+    await tick()
+    const dialog = q('link-review-dialog')!
+    expect(dialog.textContent).toContain('Review this image')
+    expect(dialog.textContent).toContain('The complete address this image would open:')
+    expect(dialog.textContent).not.toContain('Review this link')
+    expect(description()!.textContent).toBe('a factual image reason')
+  })
+
   // MUTATION: drop `visibleFormatChars` from the address render (or run the
   // address through `displayText` instead) → the bidi control is applied to
   // the shown text rather than shown → red. The shell's untrusted-text rule

@@ -18,7 +18,7 @@ import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 import { annotateLinkVerdicts, type RecognisedLinkHosts } from '~/lib/link-verdicts'
 import { createLinkAcceptanceStore, type LinkAcceptanceStore } from '~/lib/link-acceptance'
 import { Menu } from '@ark-ui/solid/menu'
-import { HitlDialog } from './HitlDialog'
+import { HitlDialog, IMAGE_LINK_REVIEW_REASON } from './HitlDialog'
 
 // Rendering options only — marked passes raw HTML in the source through
 // untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
@@ -1028,6 +1028,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
         open={reviewTarget() !== null}
         onClose={() => setReviewTarget(null)}
         address={reviewTarget()?.dest ?? ''}
+        // The image open path retitles the dialog and carries a FACTUAL
+        // reason: every trusted image is own-origin by construction, so the
+        // link default ("not on the recognised host list") would state a
+        // falsehood about why the review exists. The copy rule — the reason
+        // is factual — is the merged design's, and `reason` is the seam
+        // slice 18 already rides.
+        target={reviewTarget()?.kind ?? 'link'}
+        reason={reviewTarget()?.kind === 'image' ? IMAGE_LINK_REVIEW_REASON : undefined}
         onDefang={() => {
           const target = reviewTarget()
           if (!target) return

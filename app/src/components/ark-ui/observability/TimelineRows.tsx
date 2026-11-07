@@ -390,6 +390,7 @@ const FAMILY_EVENT: Record<PatternFamily, EventType> = {
   guard: 'content_sanitized',
   memory: 'memory_written',
   planner: 'plan_created',
+  retrieval: 'tool_result',
 }
 
 /**
@@ -423,6 +424,9 @@ export const PatternSection = (props: {
       if (item.kind !== 'event') return false
       return (
         item.event.type === 'loop_recovery' ||
+        // A guard's marked error folded into the section: the header flags
+        // what the error row inside it records (rv-1027 term 2).
+        item.event.type === 'error' ||
         (item.event.type === 'tool_result' &&
           (item.event.data as ToolResultEventData).success === false)
       )

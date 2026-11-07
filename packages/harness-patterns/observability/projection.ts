@@ -321,10 +321,11 @@ const CONTROLLER_RUN_TYPES: ReadonlySet<EventType> = new Set([
  * control's record into the run it interrupted. An event of no family — an
  * `error` or `warning` row, the interface events, the enter/exit dividers, a
  * `model_call` of an unknown role — stays visible in the timeline and splits
- * any run it sits in.
+ * any run it sits in. (A guard's marked error is family `guard`, and its
+ * section flags it.)
  */
 export type PatternFamily =
-  'controller' | 'critic' | 'summariser' | 'decision' | 'guard' | 'memory' | 'planner'
+  'controller' | 'critic' | 'summariser' | 'decision' | 'guard' | 'memory' | 'planner' | 'retrieval'
 
 export function familyOf(type: EventType, data: unknown): PatternFamily | undefined {
   switch (type) {
@@ -333,9 +334,15 @@ export function familyOf(type: EventType, data: unknown): PatternFamily | undefi
       return undefined
     case 'controller_action':
     case 'tool_call':
-    case 'tool_result':
     case 'loop_recovery':
       return 'controller'
+    case 'tool_result':
+      // The retriever's own result event: it runs no controller action, so
+      // #1010's run qualifier would never fold it. Its consecutive results
+      // form a run of their own family (#1025 retrieval).
+      return (data as Partial<ToolResultEventData> | undefined)?.tool === 'retriever'
+        ? 'retrieval'
+        : 'controller'
     case 'critic_result':
       return 'critic'
     case 'decision_made':
@@ -354,6 +361,10 @@ export function familyOf(type: EventType, data: unknown): PatternFamily | undefi
     case 'plan_created':
       return 'planner'
     default:
+      // A guard's marked error (`egress_decide_unavailable`) is a guard
+      // family record: it folds into the guard section with its refusal,
+      // and the collapsed header flags it — the marked-error row folded into
+      // an unflagged header is the failure the grouping must not produce.
       return guardOf(type, data) ? 'guard' : undefined
   }
 }
@@ -492,10 +503,17 @@ export function sectionSummary(section: GroupSection): string {
           ? `abstained${last.reason ? ` (${last.reason})` : ''}`
           : (last.label ?? 'no route')
         : undefined
+      // The real choice producers record the chosen label's probability in
+      // `probs` (typedDecision; an absent `type` is a legacy/default choice) —
+      // the noul path keeps its own `pTrue`. An abstained event names no label,
+      // so it keeps its abstain reason without odds.
+      const chosen = typeof last?.label === 'string' ? last?.probs?.[last.label] : undefined
       const odds =
         last?.type === 'noul' && typeof last.pTrue === 'number'
           ? ` (p=${last.pTrue.toFixed(2)})`
-          : ''
+          : typeof chosen === 'number'
+            ? ` (p=${chosen.toFixed(2)})`
+            : ''
       const n = decisions.length
       return `${n} decision${n === 1 ? '' : 's'}${verdict ? ` · ${verdict}${odds}` : ''}`
     }
@@ -506,6 +524,18 @@ export function sectionSummary(section: GroupSection): string {
       )
       const checks = items.length
       return `${checks} check${checks === 1 ? '' : 's'} · ${findings} finding${findings === 1 ? '' : 's'}`
+    }
+    case 'retrieval': {
+      const results = eventsOfType(items, 'tool_result')
+      const matches = results.reduce(
+        (sum, event) =>
+          sum +
+          (((event.data as ToolResultEventData).result as { matches?: unknown[] } | undefined)
+            ?.matches?.length ?? 0),
+        0,
+      )
+      const n = results.length
+      return `${n} retrieval${n === 1 ? '' : 's'} · ${matches} match${matches === 1 ? '' : 'es'}`
     }
     case 'memory': {
       const written = countEventType(items, 'memory_written')

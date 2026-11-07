@@ -11,6 +11,7 @@ import type {
   ContextEvent,
   EventType,
   ToolCallEventData,
+  CriticResultEventData,
   ToolResultEventData,
   ControllerActionEventData,
   ErrorEventData,
@@ -296,12 +297,13 @@ export function buildTimelineItems(events: ContextEvent[]): TimelineItem[] {
 }
 
 // ============================================================================
-// Controller-run sections (#1007)
+// Pattern-run sections (#1007 controller runs, #1025 every pattern)
 // ============================================================================
 
 /** The event types a controller run records under its own pattern id — the
- *  same set simpleLoop's round reconstruction reads (`ROUND_EVENTS`), which is
- *  what makes a collapsible section hold exactly one controller run. */
+ *  same set simpleLoop's round reconstruction reads (`ROUND_EVENTS`). A run
+ *  holding any of them is a loop's work, and only a `controller_action` makes
+ *  it a controller run (#1007). */
 const CONTROLLER_RUN_TYPES: ReadonlySet<EventType> = new Set([
   'controller_action',
   'tool_call',
@@ -309,61 +311,249 @@ const CONTROLLER_RUN_TYPES: ReadonlySet<EventType> = new Set([
   'loop_recovery',
 ])
 
+/**
+ * Which pattern family an event belongs to — the generic grouping key
+ * (#1025), and the collapsed section header's summary line. The family is
+ * read from the event ITSELF — its type, and for the types that carry a
+ * marker, that marker (a `model_call`'s role, a `decision_made`'s guard key) —
+ * never from wording, and never from the `patternId` alone: a guard's events
+ * ride the WRAPPED pattern's id, so keying the group on the id would fold a
+ * control's record into the run it interrupted. An event of no family — an
+ * `error` or `warning` row, the interface events, the enter/exit dividers, a
+ * `model_call` of an unknown role — stays visible in the timeline and splits
+ * any run it sits in. (A guard's marked error is family `guard`, and its
+ * section flags it.)
+ */
+export type PatternFamily =
+  'controller' | 'critic' | 'summariser' | 'decision' | 'guard' | 'memory' | 'planner' | 'retrieval'
+
+export function familyOf(type: EventType, data: unknown): PatternFamily | undefined {
+  switch (type) {
+    case 'pattern_enter':
+    case 'pattern_exit':
+      return undefined
+    case 'controller_action':
+    case 'tool_call':
+    case 'loop_recovery':
+      return 'controller'
+    case 'tool_result':
+      // The retriever's own result event: it runs no controller action, so
+      // #1010's run qualifier would never fold it. Its consecutive results
+      // form a run of their own family (#1025 retrieval).
+      return (data as Partial<ToolResultEventData> | undefined)?.tool === 'retriever'
+        ? 'retrieval'
+        : 'controller'
+    case 'critic_result':
+      return 'critic'
+    case 'decision_made':
+      return guardOf(type, data) ? 'guard' : 'decision'
+    case 'model_call':
+      // `screen` is the guard's own role, and the guard's classifier names it;
+      // a role of no family (unknown, future) stays visible and splits runs.
+      return (data as Partial<ModelCallEventData> | undefined)?.role === 'describe'
+        ? 'summariser'
+        : guardOf(type, data)
+          ? 'guard'
+          : undefined
+    case 'memory_recalled':
+    case 'memory_written':
+      return 'memory'
+    case 'plan_created':
+      return 'planner'
+    default:
+      // A guard's marked error (`egress_decide_unavailable`) is a guard
+      // family record: it folds into the guard section with its refusal,
+      // and the collapsed header flags it — the marked-error row folded into
+      // an unflagged header is the failure the grouping must not produce.
+      return guardOf(type, data) ? 'guard' : undefined
+  }
+}
+
 export type TimelineSection =
   | { kind: 'controller'; patternId: string; items: TimelineItem[] }
+  | {
+      kind: 'pattern'
+      family: Exclude<PatternFamily, 'controller'>
+      patternId: string
+      items: TimelineItem[]
+    }
   | { kind: 'single'; item: TimelineItem }
+
+export type PatternSection = Extract<TimelineSection, { kind: 'pattern' }>
+export type GroupSection = Extract<TimelineSection, { kind: 'controller' }> | PatternSection
 
 /**
  * Group the timeline into display sections: one collapsible section per
- * controller run (#1007), everything else a single item.
+ * pattern run — a controller run (#1007), or any other family's consecutive
+ * related events (#1025) — everything else a single item.
  */
 export function buildTimelineSections(events: ContextEvent[]): TimelineSection[] {
-  return groupControllerRuns(buildTimelineItems(events))
+  return groupPatternRuns(buildTimelineItems(events))
 }
 
 /**
- * Group already-merged timeline items into controller-run sections.
+ * Group already-merged timeline items into pattern-run sections.
  *
- * A controller run is a MAXIMAL CONSECUTIVE run of controller events under the
- * same patternId — consecutive, because anything the loop did not record
- * itself (a guard's screen call, an error row, the pattern's own enter/exit
- * dividers) stays visible in the timeline rather than folding into the group.
- * A consecutive run of controller events that never emitted a
- * controller_action is not a controller run — a retriever's standalone result,
- * for one — and stays single rows too. Display-only: exports read the raw
- * events, never this.
+ * A pattern run is a MAXIMAL CONSECUTIVE run of events under the same
+ * patternId AND the same family — consecutive and same-family, because
+ * anything else in between (a guard's event inside a loop's round, an error
+ * row, the pattern's own enter/exit dividers, an event of no family) stays
+ * visible in the timeline and splits the run. A controller run qualifies when
+ * it holds a `controller_action` (#1007); every other family qualifies only
+ * when SEVERAL related events accumulated, so a lone evaluation or decision
+ * stays a row rather than disappearing behind a click for nothing.
+ * Display-only: exports read the raw events, never this.
  */
-export function groupControllerRuns(items: TimelineItem[]): TimelineSection[] {
+export function groupPatternRuns(items: TimelineItem[]): TimelineSection[] {
   const sections: TimelineSection[] = []
-  let pending: { patternId: string; items: TimelineItem[] } | undefined
+  let pending: { patternId: string; family: PatternFamily; items: TimelineItem[] } | undefined
 
   const flush = () => {
     if (!pending) return
-    const isRun = pending.items.some(
-      (item) => item.kind === 'event' && item.event.type === 'controller_action',
-    )
-    if (isRun) {
-      sections.push({ kind: 'controller', patternId: pending.patternId, items: pending.items })
-    } else {
-      for (const item of pending.items) sections.push({ kind: 'single', item })
-    }
+    const run = pending
     pending = undefined
+    const qualifies =
+      run.family === 'controller'
+        ? run.items.some((item) => item.kind === 'event' && item.event.type === 'controller_action')
+        : run.items.length >= 2
+    if (!qualifies) {
+      for (const item of run.items) sections.push({ kind: 'single', item })
+      return
+    }
+    sections.push(
+      run.family === 'controller'
+        ? { kind: 'controller', patternId: run.patternId, items: run.items }
+        : { kind: 'pattern', family: run.family, patternId: run.patternId, items: run.items },
+    )
   }
 
   for (const item of items) {
     const event = item.kind === 'event' ? item.event : item.call
-    const patternId = event.patternId
-    if (patternId && CONTROLLER_RUN_TYPES.has(event.type) && pending?.patternId === patternId) {
+    const family = familyOf(event.type, event.data)
+    const groupable =
+      event.patternId !== undefined && event.patternId !== 'harness' && family !== undefined
+    if (groupable && pending?.patternId === event.patternId && pending.family === family) {
       pending.items.push(item)
       continue
     }
     flush()
-    if (patternId && CONTROLLER_RUN_TYPES.has(event.type)) {
-      pending = { patternId, items: [item] }
+    if (groupable && family !== undefined) {
+      pending = { patternId: event.patternId, family, items: [item] }
     } else {
       sections.push({ kind: 'single', item })
     }
   }
   flush()
   return sections
+}
+
+// ============================================================================
+// Collapsed-header summaries (#1025) — small formatters, not new components
+// ============================================================================
+
+const countEventType = (items: TimelineItem[], type: EventType): number =>
+  items.filter((item) => item.kind === 'event' && item.event.type === type).length
+
+/** The events of one type in a run — a tool_pair contributes its call. */
+const eventsOfType = (items: TimelineItem[], type: EventType): ContextEvent[] =>
+  items.flatMap((item) => (item.kind === 'event' && item.event.type === type ? [item.event] : []))
+
+/**
+ * The collapsed header's one-line summary, per family: the count the family's
+ * operator wants before deciding to expand. The controller line is #1007's,
+ * byte for byte; every other family states what it did and whether it worked.
+ */
+export function sectionSummary(section: GroupSection): string {
+  if (section.kind === 'controller') {
+    const actions = countEventType(section.items, 'controller_action')
+    const toolCalls = section.items.filter(
+      (item) =>
+        item.kind === 'tool_pair' || (item.kind === 'event' && item.event.type === 'tool_call'),
+    ).length
+    return `${actions} action${actions === 1 ? '' : 's'} · ${toolCalls} tool call${toolCalls === 1 ? '' : 's'}`
+  }
+  const items = section.items
+  switch (section.family) {
+    case 'critic': {
+      const results = eventsOfType(items, 'critic_result').map(
+        (event) => (event.data as Partial<CriticResultEventData> | undefined)?.result,
+      )
+      const sufficient = results.filter((r) => r?.is_sufficient === true).length
+      const needed = results.filter((r) => r?.is_sufficient === false).length
+      const parts = [`${results.length} evaluation${results.length === 1 ? '' : 's'}`]
+      if (sufficient) parts.push(`${sufficient} sufficient`)
+      if (needed) parts.push(`${needed} need${needed === 1 ? 's' : ''} work`)
+      return parts.join(' · ')
+    }
+    case 'summariser': {
+      const calls = eventsOfType(items, 'model_call')
+      const summarised = calls.reduce(
+        (sum, event) => sum + ((event.data as Partial<ModelCallEventData>)?.items ?? 1),
+        0,
+      )
+      const n = calls.length
+      return `${n} summar${n === 1 ? 'y' : 'ies'} · ${summarised} item${summarised === 1 ? '' : 's'}`
+    }
+    case 'decision': {
+      const decisions = eventsOfType(items, 'decision_made')
+      const last = decisions[decisions.length - 1]?.data as
+        Partial<DecisionMadeEventData> | undefined
+      const verdict = last
+        ? last.abstained
+          ? `abstained${last.reason ? ` (${last.reason})` : ''}`
+          : (last.label ?? 'no route')
+        : undefined
+      // The real choice producers record the chosen label's probability in
+      // `probs` (typedDecision; an absent `type` is a legacy/default choice) —
+      // the noul path keeps its own `pTrue`. An abstained event names no label,
+      // so it keeps its abstain reason without odds.
+      const chosen = typeof last?.label === 'string' ? last?.probs?.[last.label] : undefined
+      const odds =
+        last?.type === 'noul' && typeof last.pTrue === 'number'
+          ? ` (p=${last.pTrue.toFixed(2)})`
+          : typeof chosen === 'number'
+            ? ` (p=${chosen.toFixed(2)})`
+            : ''
+      const n = decisions.length
+      return `${n} decision${n === 1 ? '' : 's'}${verdict ? ` · ${verdict}${odds}` : ''}`
+    }
+    case 'guard': {
+      const findings = eventsOfType(items, 'content_sanitized').reduce(
+        (sum, event) => sum + ((event.data as ContentSanitizedEventData).findings?.length ?? 0),
+        0,
+      )
+      const checks = items.length
+      return `${checks} check${checks === 1 ? '' : 's'} · ${findings} finding${findings === 1 ? '' : 's'}`
+    }
+    case 'retrieval': {
+      const results = eventsOfType(items, 'tool_result')
+      const matches = results.reduce(
+        (sum, event) =>
+          sum +
+          (((event.data as ToolResultEventData).result as { matches?: unknown[] } | undefined)
+            ?.matches?.length ?? 0),
+        0,
+      )
+      const n = results.length
+      return `${n} retrieval${n === 1 ? '' : 's'} · ${matches} match${matches === 1 ? '' : 'es'}`
+    }
+    case 'memory': {
+      const written = countEventType(items, 'memory_written')
+      const recalled = countEventType(items, 'memory_recalled')
+      return `${written} written · ${recalled} recalled`
+    }
+    case 'planner': {
+      const plans = eventsOfType(items, 'plan_created')
+      const skippedPlan = plans.find(
+        (event) => (event.data as Partial<PlanCreatedEventData>)?.skipped !== undefined,
+      )?.data as Partial<PlanCreatedEventData> | undefined
+      if (skippedPlan) return `skipped (${skippedPlan.skipped})`
+      const steps = plans.reduce(
+        (sum, event) => sum + ((event.data as Partial<PlanCreatedEventData>)?.plan?.n_steps ?? 0),
+        0,
+      )
+      const n = plans.length
+      return `${n} plan${n === 1 ? '' : 's'} · ${steps} step${steps === 1 ? '' : 's'}`
+    }
+  }
 }

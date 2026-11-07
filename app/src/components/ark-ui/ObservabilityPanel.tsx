@@ -17,16 +17,16 @@ import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import { getPatternColor } from '~/lib/observability/event-styles'
 import {
   buildTimelineItems,
-  groupControllerRuns,
+  groupPatternRuns,
   type TimelineItem,
 } from '@hames-ai/harness-patterns/observability/projection'
 import { SummaryBar } from './observability/SummaryBar'
 import {
-  ControllerSection,
   EmptyState,
   EventRow,
   LaneHeaders,
   PatternBoundaryRow,
+  PatternSection,
   ToolPairRow,
 } from './observability/TimelineRows'
 import { EventDetailPanel, ToolPairDetail } from './observability/EventDetail'
@@ -117,14 +117,15 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   // Build merged timeline items (tool_call + tool_result → tool_pair)
   const timelineItems = createMemo(() => buildTimelineItems(timelineEvents()))
 
-  // Display sections (#1007): one collapsible per controller run, everything
-  // else a single row. Grouping is display-only — the items keep their flat
-  // timeline indices, which is what the detail panel and the tints are
-  // addressed by, and exports read the raw events, never these.
+  // Display sections (#1007 controller runs, #1025 every pattern): one
+  // collapsible per pattern run, everything else a single row. Grouping is
+  // display-only — the items keep their flat timeline indices, which is what
+  // the detail panel and the tints are addressed by, and exports read the raw
+  // events, never these.
   const timelineSections = createMemo(() => {
     const items = timelineItems()
     const indices = new Map<TimelineItem, number>(items.map((item, i) => [item, i]))
-    return { sections: groupControllerRuns(items), indices }
+    return { sections: groupPatternRuns(items), indices }
   })
 
   // Compute per-item background tint based on active pattern stack
@@ -241,7 +242,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
                 )
               }
               return (
-                <ControllerSection
+                <PatternSection
                   section={section}
                   indexOf={(item) => timelineSections().indices.get(item) ?? -1}
                   renderItem={renderTimelineItem}

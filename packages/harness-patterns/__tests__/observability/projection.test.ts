@@ -12,10 +12,14 @@ import type { ContextEvent, EventType } from '../../types'
 import {
   buildTimelineSections,
   buildTimelineItems,
+  familyOf,
   getEventLane,
   getEventPreview,
+  groupPatternRuns,
   isGuardEvent,
+  sectionSummary,
 } from '../../observability/projection'
+import type { TimelineItem } from '../../observability/projection'
 import { GUARD_EGRESS } from '../../egress-gate.server'
 import { GUARD_INGRESS } from '../../guard-gate.server'
 
@@ -572,5 +576,321 @@ describe('buildTimelineSections', () => {
 
   it('returns nothing for an empty stream', () => {
     expect(buildTimelineSections([])).toEqual([])
+  })
+})
+
+describe('familyOf', () => {
+  it('reads every family from the event itself, never from the patternId', () => {
+    expect(familyOf('controller_action', {})).toBe('controller')
+    expect(familyOf('tool_call', { callId: 'c1' })).toBe('controller')
+    expect(familyOf('critic_result', { result: { is_sufficient: true } })).toBe('critic')
+    expect(familyOf('decision_made', { key: 'router.route', label: 'x' })).toBe('decision')
+    expect(familyOf('model_call', { role: 'describe', items: 2 })).toBe('summariser')
+    expect(familyOf('memory_recalled', {})).toBe('memory')
+    expect(familyOf('memory_written', {})).toBe('memory')
+    expect(familyOf('plan_created', { plan: { plan: 'x', n_steps: 2 } })).toBe('planner')
+  })
+
+  it("reads the guard families off the guard markers, so a guard's event is never its pattern's group", () => {
+    expect(familyOf('content_sanitized', { findings: [] })).toBe('guard')
+    expect(familyOf('model_call', { role: 'screen' })).toBe('guard')
+    expect(familyOf('decision_made', { key: 'guard.ingress' })).toBe('guard')
+    expect(familyOf('egress_refused', { tool: 'mail' })).toBe('guard')
+  })
+
+  it('gives events of no family — errors, warnings, interface events, dividers — nothing', () => {
+    expect(familyOf('error', { error: 'boom' })).toBeUndefined()
+    expect(familyOf('warning', { message: 'hmm' })).toBeUndefined()
+    expect(familyOf('user_message', { content: 'hi' })).toBeUndefined()
+    expect(familyOf('assistant_message', { content: 'hi' })).toBeUndefined()
+    expect(familyOf('pattern_enter', { pattern: 'x' })).toBeUndefined()
+    expect(familyOf('pattern_exit', {})).toBeUndefined()
+    expect(familyOf('model_call', {})).toBeUndefined()
+  })
+})
+
+describe('groupPatternRuns — every pattern (#1025)', () => {
+  const item = (event: ContextEvent): TimelineItem => ({ kind: 'event', event })
+  const items = (...events: ContextEvent[]) => events.map(item)
+  const critic = (ok: boolean, over: Partial<ContextEvent> = {}) =>
+    ev('critic_result', { result: { is_sufficient: ok, explanation: 'x' } }, over)
+  const decision = (over: Record<string, unknown> = {}) =>
+    ev('decision_made', { key: 'router.route', label: 'neo4j', type: 'choice', ...over })
+  const summarise = (items: number) => ev('model_call', { role: 'describe', items })
+  const sanitized = (findings: number, over: Partial<ContextEvent> = {}) =>
+    ev(
+      'content_sanitized',
+      { tool: 'web', findings: Array.from({ length: findings }, () => ({ rule: 'r' })) },
+      over,
+    )
+
+  it('folds a critic run of consecutive evaluations into one section', () => {
+    const e1 = critic(true)
+    const e2 = critic(false)
+    expect(groupPatternRuns(items(e1, e2))).toEqual([
+      {
+        kind: 'pattern',
+        family: 'critic',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: e1 },
+          { kind: 'event', event: e2 },
+        ],
+      },
+    ])
+  })
+
+  it('leaves a lone evaluation of any family a single row', () => {
+    const lone = critic(false)
+    const loneDecision = decision()
+    expect(groupPatternRuns(items(lone))).toEqual([
+      { kind: 'single', item: { kind: 'event', event: lone } },
+    ])
+    expect(groupPatternRuns(items(loneDecision))).toEqual([
+      { kind: 'single', item: { kind: 'event', event: loneDecision } },
+    ])
+  })
+
+  it('splits a run at a guard event sharing the patternId — the control record stays visible', () => {
+    const e1 = critic(true)
+    const e1b = critic(false)
+    const guardEvent = sanitized(1)
+    const e2 = critic(true)
+    const e2b = critic(false)
+    const sections = groupPatternRuns(items(e1, e1b, guardEvent, e2, e2b))
+    expect(sections).toHaveLength(3)
+    expect(sections[0]).toEqual({
+      kind: 'pattern',
+      family: 'critic',
+      patternId: 'neo4j-query',
+      items: [
+        { kind: 'event', event: e1 },
+        { kind: 'event', event: e1b },
+      ],
+    })
+    // A lone guard event does not qualify as a run either.
+    expect(sections[1]).toEqual({ kind: 'single', item: { kind: 'event', event: guardEvent } })
+    expect(sections[2].kind).toBe('pattern')
+  })
+
+  it('splits runs at a controller action interrupting, and at any family change', () => {
+    const e1 = critic(true)
+    const a1 = ev('controller_action', { action: { tool_name: 'x' } })
+    const e2 = critic(false)
+    const sections = groupPatternRuns(items(e1, a1, e2))
+    expect(sections).toHaveLength(3)
+    expect(sections[1]).toEqual({
+      kind: 'controller',
+      patternId: 'neo4j-query',
+      items: [{ kind: 'event', event: a1 }],
+    })
+    expect(sections[0].kind).toBe('single')
+    expect(sections[2].kind).toBe('single')
+  })
+
+  it('folds consecutive guard events — a screen and its sanitized record — into one section', () => {
+    const screen = ev('model_call', { role: 'screen', source: 'web/fetch' })
+    const record = sanitized(2)
+    const sections = groupPatternRuns(items(screen, record))
+    expect(sections).toEqual([
+      {
+        kind: 'pattern',
+        family: 'guard',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: screen },
+          { kind: 'event', event: record },
+        ],
+      },
+    ])
+  })
+
+  it('folds summariser batches, decision steps, memory steps and planner output', () => {
+    const s1 = summarise(3)
+    const s2 = summarise(1)
+    expect(groupPatternRuns(items(s1, s2))).toEqual([
+      {
+        kind: 'pattern',
+        family: 'summariser',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: s1 },
+          { kind: 'event', event: s2 },
+        ],
+      },
+    ])
+
+    const d1 = decision({ label: 'neo4j' })
+    const d2 = decision({ label: 'web', type: 'noul', pTrue: 0.9 })
+    expect(groupPatternRuns(items(d1, d2))).toEqual([
+      {
+        kind: 'pattern',
+        family: 'decision',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: d1 },
+          { kind: 'event', event: d2 },
+        ],
+      },
+    ])
+
+    const m1 = ev('memory_recalled', {})
+    const m2 = ev('memory_written', {})
+    expect(groupPatternRuns(items(m1, m2))[0]).toMatchObject({ kind: 'pattern', family: 'memory' })
+
+    const p1 = ev('plan_created', { plan: { plan: 'a\nb', n_steps: 2 } })
+    const p2 = ev('plan_created', { plan: { plan: 'c', n_steps: 4 } })
+    expect(groupPatternRuns(items(p1, p2))[0]).toMatchObject({ kind: 'pattern', family: 'planner' })
+  })
+
+  it('starts a new section past the pattern exit divider and for a new patternId', () => {
+    const e1 = critic(true)
+    const e1b = critic(false)
+    const exit = ev('pattern_exit', {})
+    const e2 = critic(true)
+    const e2b = critic(false)
+    const sections = groupPatternRuns(items(e1, e1b, exit, e2, e2b))
+    expect(sections).toHaveLength(3)
+    expect(sections.filter((s) => s.kind === 'pattern')).toHaveLength(2)
+
+    const other = critic(true, { patternId: 'web-search' })
+    const e3 = critic(true)
+    expect(groupPatternRuns(items(e1, other, e3))).toEqual([
+      { kind: 'single', item: { kind: 'event', event: e1 } },
+      { kind: 'single', item: { kind: 'event', event: other } },
+      { kind: 'single', item: { kind: 'event', event: e3 } },
+    ])
+  })
+
+  it('keeps harness-level events and error rows out of every group', () => {
+    const h1 = ev(
+      'critic_result',
+      { result: { is_sufficient: true, explanation: 'x' } },
+      {
+        patternId: 'harness',
+      },
+    )
+    const h2 = ev(
+      'critic_result',
+      { result: { is_sufficient: false, explanation: 'y' } },
+      {
+        patternId: 'harness',
+      },
+    )
+    const boom = ev('error', { error: 'boom' })
+    const e1 = critic(true)
+    expect(groupPatternRuns(items(e1, boom, h1, h2))).toEqual([
+      { kind: 'single', item: { kind: 'event', event: e1 } },
+      { kind: 'single', item: { kind: 'event', event: boom } },
+      { kind: 'single', item: { kind: 'event', event: h1 } },
+      { kind: 'single', item: { kind: 'event', event: h2 } },
+    ])
+  })
+})
+
+describe('sectionSummary', () => {
+  const summaryOf = (events: ContextEvent[]) => {
+    const section = buildTimelineSections(events).find((s) => s.kind !== 'single')
+    if (!section) throw new Error('no grouped section')
+    return sectionSummary(section)
+  }
+
+  it('keeps the controller line byte-identical with #1007', () => {
+    const a1 = ev('controller_action', { action: { tool_name: 'x' } })
+    const c1 = ev('tool_call', { tool: 'json_get', callId: 'c1' })
+    const r1 = ev('tool_result', { tool: 'json_get', success: true, callId: 'c1' })
+    expect(
+      sectionSummary({
+        kind: 'controller',
+        patternId: 'p',
+        items: [
+          { kind: 'event', event: a1 },
+          { kind: 'tool_pair', call: c1, result: r1 },
+        ],
+      }),
+    ).toBe('1 action · 1 tool call')
+  })
+
+  it('critic: verdicts and the evaluation count', () => {
+    expect(
+      summaryOf([
+        ev('critic_result', { result: { is_sufficient: true, explanation: 'ok' } }),
+        ev('critic_result', { result: { is_sufficient: false, explanation: 'no' } }),
+      ]),
+    ).toBe('2 evaluations · 1 sufficient · 1 needs work')
+    expect(
+      summaryOf([
+        ev('critic_result', { result: { is_sufficient: false, explanation: 'no' } }),
+        ev('critic_result', { result: { is_sufficient: false, explanation: 'no' } }),
+      ]),
+    ).toBe('2 evaluations · 2 need work')
+  })
+
+  it('summariser: batches and the items they covered', () => {
+    expect(
+      summaryOf([
+        ev('model_call', { role: 'describe', items: 3 }),
+        ev('model_call', { role: 'describe', items: 1 }),
+      ]),
+    ).toBe('2 summaries · 4 items')
+    expect(
+      summaryOf([ev('model_call', { role: 'describe' }), ev('model_call', { role: 'describe' })]),
+    ).toBe('2 summaries · 2 items')
+  })
+
+  it('decision: the chosen route and its probability', () => {
+    const decision = (over: Record<string, unknown> = {}) =>
+      ev('decision_made', { key: 'router.route', label: 'neo4j', type: 'choice', ...over })
+    expect(
+      summaryOf([
+        decision(),
+        ev('decision_made', { key: 'router.route', label: 'web', type: 'noul', pTrue: 0.75 }),
+      ]),
+    ).toBe('2 decisions · web (p=0.75)')
+    expect(
+      summaryOf([
+        decision(),
+        ev('decision_made', { key: 'k', abstained: true, reason: 'error', label: null }),
+      ]),
+    ).toBe('2 decisions · abstained (error)')
+  })
+
+  it('guard: the check count and the findings count', () => {
+    expect(
+      summaryOf([
+        ev('model_call', { role: 'screen', source: 'web/fetch' }),
+        ev('content_sanitized', {
+          tool: 'web',
+          findings: [{ rule: 'a' }, { rule: 'b' }, { rule: 'c' }],
+        }),
+      ]),
+    ).toBe('2 checks · 3 findings')
+    expect(
+      summaryOf([
+        ev('content_sanitized', { tool: 'web', findings: [] }),
+        ev('content_sanitized', { tool: 'mail', findings: [] }),
+      ]),
+    ).toBe('2 checks · 0 findings')
+  })
+
+  it('memory: what was written and recalled', () => {
+    expect(
+      summaryOf([ev('memory_recalled', {}), ev('memory_written', {}), ev('memory_written', {})]),
+    ).toBe('2 written · 1 recalled')
+  })
+
+  it('planner: the plans and their steps, or the skip', () => {
+    expect(
+      summaryOf([
+        ev('plan_created', { plan: { plan: 'a\nb', n_steps: 2 } }),
+        ev('plan_created', { plan: { plan: 'c', n_steps: 4 } }),
+      ]),
+    ).toBe('2 plans · 6 steps')
+    expect(
+      summaryOf([
+        ev('plan_created', { plan: { plan: 'a\nb', n_steps: 2 } }),
+        ev('plan_created', { skipped: 'no intent' }),
+      ]),
+    ).toBe('skipped (no intent)')
   })
 })

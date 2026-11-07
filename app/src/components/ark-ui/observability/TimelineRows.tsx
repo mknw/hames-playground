@@ -11,6 +11,7 @@ import type { JSX } from 'solid-js'
 import type {
   ContextEvent,
   DecisionMadeEventData,
+  EventType,
   ToolCallEventData,
   ToolResultEventData,
 } from '@hames-ai/harness-patterns'
@@ -20,8 +21,10 @@ import {
   getEventLane,
   getEventPreview,
   isGuardEvent,
+  sectionSummary,
+  type GroupSection,
+  type PatternFamily,
   type TimelineItem,
-  type TimelineSection,
 } from '@hames-ai/harness-patterns/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
@@ -373,18 +376,34 @@ export const ToolPairRow = (props: {
 }
 
 // ============================================================================
-// Controller Section (#1007) — one collapsible per controller run
+// Pattern Section (#1007 controller runs, #1025 every pattern)
 // ============================================================================
 
+/** The event type a family's collapsed header borrows its glyph and colour
+ *  from — the representative event each family is made of. App-side: it reads
+ *  `eventColors` / `eventIconClasses`, which cannot live in the package. */
+const FAMILY_EVENT: Record<PatternFamily, EventType> = {
+  controller: 'controller_action',
+  critic: 'critic_result',
+  summariser: 'model_call',
+  decision: 'decision_made',
+  guard: 'content_sanitized',
+  memory: 'memory_written',
+  planner: 'plan_created',
+  retrieval: 'tool_result',
+}
+
 /**
- * One controller run, collapsed by default: the loop's actions, tool calls and
- * results fold behind a single header that names the run, counts what it did
- * and flags a failure. Display-only grouping — the rows inside are the same
- * EventRow/ToolPairRow the flat timeline renders, at their own timeline index,
- * so opening one still drives the shared detail panel.
+ * One pattern run, collapsed by default (#1007 controller, #1025 every
+ * pattern): the run's events fold behind a single header that names the
+ * family, counts what it did and flags a failure. One component for every
+ * family — the pattern-specific summary is a small formatter in the package's
+ * projection, not a new component. Display-only grouping — the rows inside are
+ * the same EventRow/ToolPairRow the flat timeline renders, at their own
+ * timeline index, so opening one still drives the shared detail panel.
  */
-export const ControllerSection = (props: {
-  section: Extract<TimelineSection, { kind: 'controller' }>
+export const PatternSection = (props: {
+  section: GroupSection
   /** The item's index in the flat timeline — the detail panel's address. */
   indexOf: (item: TimelineItem) => number
   /** The panel's own row factory, so grouped rows stay identical rows. */
@@ -392,17 +411,11 @@ export const ControllerSection = (props: {
 }) => {
   const [open, setOpen] = createSignal(false)
 
+  const family = () => (props.section.kind === 'controller' ? 'controller' : props.section.family)
+  const representative = () => FAMILY_EVENT[family()]
+
   // The collapsed header's one line: what the run did and whether anything
   // failed — a failed tool result, or a recovery (the loop's own error round).
-  const actions = () =>
-    props.section.items.filter(
-      (item) => item.kind === 'event' && item.event.type === 'controller_action',
-    ).length
-  const toolCalls = () =>
-    props.section.items.filter(
-      (item) =>
-        item.kind === 'tool_pair' || (item.kind === 'event' && item.event.type === 'tool_call'),
-    ).length
   const failed = () =>
     props.section.items.some((item) => {
       if (item.kind === 'tool_pair') {
@@ -411,6 +424,9 @@ export const ControllerSection = (props: {
       if (item.kind !== 'event') return false
       return (
         item.event.type === 'loop_recovery' ||
+        // A guard's marked error folded into the section: the header flags
+        // what the error row inside it records (rv-1027 term 2).
+        item.event.type === 'error' ||
         (item.event.type === 'tool_result' &&
           (item.event.data as ToolResultEventData).success === false)
       )
@@ -440,14 +456,14 @@ export const ControllerSection = (props: {
           />
         </Collapsible.Indicator>
         <span
-          class="i-material-symbols-adjust"
+          class={eventIconClasses[representative()]}
           w="4"
           h="4"
-          style={{ color: eventColors.controller_action }}
+          style={{ color: eventColors[representative()] }}
           aria-hidden="true"
         />
         <span text="xs ui-text-primary" font="medium">
-          controller
+          {family()}
         </span>
         <Show when={props.section.patternId !== 'harness'}>
           <span text="xs ui-text-tertiary" font="mono">
@@ -455,8 +471,7 @@ export const ControllerSection = (props: {
           </span>
         </Show>
         <span text="xs ui-text-secondary" font="mono" flex="1">
-          {actions()} action{actions() === 1 ? '' : 's'} · {toolCalls()} tool call
-          {toolCalls() === 1 ? '' : 's'}
+          {sectionSummary(props.section)}
         </span>
         <Show when={failed()}>
           <span text="xs ui-danger" font="mono">

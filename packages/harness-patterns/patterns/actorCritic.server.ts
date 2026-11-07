@@ -36,6 +36,7 @@ import {
   isRecoverableLLMFailure,
   unparseableOutputFeedback,
   invalidToolArgsFeedback,
+  unterminatedStringFeedback,
   trackLoopRecovery,
   resolveMaxConsecutiveRecoveries,
   recoveryStreak,
@@ -53,6 +54,13 @@ function refusal(name: string): string {
   return (
     `Tool not allowed: ${name}` + (isAgentWithheldTool(name) ? ' (withheld from every agent)' : '')
   )
+}
+
+/** The error the actor's next attempt reads for a failed call: the verbatim
+ *  error, with the #1018 newline-escape fix appended when the failure is that
+ *  signature. The committed `tool_result` event keeps the verbatim error. */
+function seenScriptError(toolError: string, newlineFix: string | undefined): string {
+  return newlineFix ? `${toolError}\n${newlineFix}` : toolError
 }
 
 export interface ActorCriticData {
@@ -813,13 +821,20 @@ export function actorCritic<T extends ActorCriticData>(
           }
         }
 
-        // Track result
+        // Track result. #1018: a tool error that is the JSON-decoded-newline
+        // signature gets the exact fix appended to `previousAttempts` — the
+        // actor's next-attempt feedback channel — while the committed
+        // tool_result event below keeps the error verbatim.
+        const toolError = result.error ?? 'Execution failed'
+        const newlineFix = result.success
+          ? undefined
+          : unterminatedStringFeedback(args, result.error)
         const script = typeof args.script === 'string' ? args.script : JSON.stringify(args)
         const ran: ScriptExecutionEvent = {
           toolName: action.tool_name,
           script,
           output: result.success ? JSON.stringify(result.data) : '',
-          error: result.success ? null : (result.error ?? 'Execution failed'),
+          error: result.success ? null : seenScriptError(toolError, newlineFix),
         }
         previousAttempts.push(ran)
         lastRun = result.success
@@ -850,7 +865,8 @@ export function actorCritic<T extends ActorCriticData>(
         if (!result.success) {
           trackLoopRecovery(scope, {
             failure: 'tool_error',
-            error: result.error ?? 'Execution failed',
+            error: toolError,
+            ...(newlineFix ? { feedback: `${toolError}\n${newlineFix}` } : {}),
             tool: action.tool_name,
             turn: attempt,
             maxTurns: maxRetries,

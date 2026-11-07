@@ -115,7 +115,8 @@ import { getErrorHint } from '../error-hints'
 import { askHuman, currentRunId, hitlPending } from '../hitl.server'
 import { RUNTIME_CONFIG_BOUNDS } from '../runtime-config'
 import { emitLive } from '../live-event-context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentClock, currentRunFrame } from '../run-frame.server'
+import { formatTimeBlock } from '../clock'
 import { onPath, resumableFingerprint, takeResume, type TakenResume } from '../resume.server'
 import { trimToFit } from '../token-budget.server'
 import { createEventView } from './event-view.server'
@@ -212,6 +213,9 @@ export interface DecisionLoopRoute<T> {
 
 /** What an overridden `state` builder receives. */
 export interface DecisionLoopStateInput {
+  /** The shared turn-clock rendering, when the host supplied a clock. An
+   *  overridden state builder owns its placement. */
+  readonly currentTime?: string
   /** The turn's resolved intent (#1006): the brief this turn's compact-intent
    *  call produced, read off its `intent_compacted` event. Absent when the
    *  chain runs no compact-intent step, the call was skipped (a first turn) or
@@ -642,6 +646,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const documents = input.documents && renderDocumentsBlock(input.documents)
     const render = (c: readonly string[], s: readonly string[], r: readonly string[]): string =>
       [
+        ...(input.currentTime ? [input.currentTime, ''] : []),
         // The turn's resolved intent (#1006) heads the state: the ONE sentence
         // every part of this turn works from. Quoted as ONE JSON string so a
         // newline in it cannot start a line that reads as the state's own
@@ -850,6 +855,8 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     view: EventView,
     taken: TakenResume | undefined,
   ): Promise<PatternScope<T>> => {
+    const clock = currentClock()
+    const currentTime = clock ? formatTimeBlock(clock) : undefined
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
     // Roster-only source payloads from EVERY iteration, even after its summary
@@ -979,6 +986,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           conversation = conversationTurns(view)
           state = renderState(
             {
+              ...(currentTime ? { currentTime } : {}),
               conversation,
               ...(turnIntent ? { intent: turnIntent } : {}),
               records,

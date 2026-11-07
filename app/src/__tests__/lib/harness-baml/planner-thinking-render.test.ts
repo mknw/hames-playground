@@ -162,8 +162,8 @@ describe('controller and critic reasoning twins', () => {
   })
 
   it('CriticThinking renders byte-identical to Critic — only the leaf differs', async () => {
-    const original = (await b.request.Critic('i', [], opts)).body.text()
-    const twin = (await b.request.CriticThinking('i', [], opts)).body.text()
+    const original = (await b.request.Critic('i', [], null, opts)).body.text()
+    const twin = (await b.request.CriticThinking('i', [], null, opts)).body.text()
     // The critic's result type has no reasoning field, so there is nothing to
     // strip: same body template, same schema, only the client changes.
     expect(twin).toBe(original)

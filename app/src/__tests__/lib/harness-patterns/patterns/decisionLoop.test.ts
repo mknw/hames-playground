@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame, currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
+import { formatTimeBlock, type TurnClock } from '@hames-ai/harness-patterns/clock'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -86,6 +87,47 @@ type Data = DecisionLoopData & Record<string, unknown>
 type Route = DecisionLoopRoute<Data>
 
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
+
+// #1029. Mutation: omit currentTime from the rendered state, or read Date.now()
+// instead of the turn clock. Both must fail even when time advances in a route.
+describe('decision state current time', () => {
+  it.each([{ timeZone: 'Europe/Brussels' }, { timeZone: 'UTC', zoneUnknown: true }])(
+    'keeps one now across iterations ($timeZone)',
+    async (zone) => {
+      const clock: TurnClock = { instant: Date.parse('2026-11-04T23:30:00Z'), ...zone }
+      const d = scriptedDecide(['lookup', 'answer'])
+      const wall = vi.spyOn(Date, 'now').mockReturnValue(clock.instant)
+      try {
+        const child = returning('lookup', 'done')
+        const original = child.fn
+        child.fn = async (scope, view) => {
+          wall.mockReturnValue(clock.instant + 86_400_000)
+          return original(scope, view)
+        }
+        await withRunFrame({ clock }, async () => {
+          const ctx = createContext<Data>('Find projects from the last two weeks', {})
+          await runChain(ctx, [
+            decisionLoop(
+              { lookup: route(child) },
+              {
+                decide: d.decide,
+                answer: 'Answer',
+                patternId: 'clock-loop',
+              },
+            ),
+          ])
+        })
+        expect(d.states).toHaveLength(2)
+        for (const state of d.states) {
+          expect(state.startsWith(formatTimeBlock(clock))).toBe(true)
+          expect(state.match(/CURRENT TIME/g)).toHaveLength(1)
+        }
+      } finally {
+        wall.mockRestore()
+      }
+    },
+  )
+})
 
 // ============================================================================
 // Fixtures

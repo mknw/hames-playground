@@ -303,7 +303,7 @@ function ActorController(
 // Shared body for the reasoning twins (#625 pattern): the critic's prompt,
 // extracted verbatim from the original function so the twin and the original
 // cannot drift. Output format belongs to the calling function.
-template_string CriticBody(intent: string, attempts: Attempt[]) #"
+template_string CriticBody(intent: string, attempts: Attempt[], current_time: string?) #"
     {{ _.role("system") }}
     You evaluate whether task execution results satisfy the user's intent.
     Be precise about what is missing. Be lenient with partial results after multiple attempts.
@@ -326,6 +326,7 @@ template_string CriticBody(intent: string, attempts: Attempt[]) #"
     {% endfor %}
 
     {{ _.role("user") }}
+    {{ CurrentTime(current_time) }}
     Evaluate the MOST RECENT result against the intent.
 
     CRITERIA:
@@ -362,11 +363,12 @@ template_string CriticBody(intent: string, attempts: Attempt[]) #"
 
 function Critic(
   intent: string,
-  attempts: Attempt[]
+  attempts: Attempt[],
+  current_time: string?
 ) -> CriticResult {
   client CriticAnthropic
   prompt #"
-    {{ CriticBody(intent, attempts) }}
+    {{ CriticBody(intent, attempts, current_time) }}
 
     {{ ctx.output_format }}
   "#
@@ -383,11 +385,12 @@ function Critic(
 // OpenRouter route). `Critic` keeps its contract everywhere else.
 function CriticThinking(
   intent: string,
-  attempts: Attempt[]
+  attempts: Attempt[],
+  current_time: string?
 ) -> CriticResult {
   client LargeQwenThink
   prompt #"
-    {{ CriticBody(intent, attempts) }}
+    {{ CriticBody(intent, attempts, current_time) }}
 
     {{ ctx.output_format }}
   "#

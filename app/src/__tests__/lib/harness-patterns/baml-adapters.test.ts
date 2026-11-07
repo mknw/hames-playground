@@ -1929,7 +1929,7 @@ describe('current_time from the run frame clock', () => {
     const { formatTimeBlock } = await import('@hames-ai/harness-patterns/clock')
     const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
     const expected = formatTimeBlock(CLOCK)
-    expect(expected).toContain('Thursday, 2026-11-05, 00:30 UTC+01:00 (Europe/Brussels)')
+    expect(expected).toContain('Thursday, 2026-11-05T00:30:00+01:00 (Europe/Brussels)')
     await inTurn(async () => {
       await adapters.createLoopControllerAdapter()('msg', 'intent', '[]', 0)
       expect(slot(mockLoopController)).toBe(expected)

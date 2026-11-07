@@ -2128,7 +2128,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     let result: CriticResult
     try {
       if (requestedThinking) {
-        result = await b.CriticThinking(intent, attempts, criticOpts)
+        result = await b.CriticThinking(intent, attempts, currentTimeBlock(), criticOpts)
         // The collector, not the routing intention, proves that this response
         // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
         if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
@@ -2143,7 +2143,7 @@ export function createCriticAdapter(): CriticAdapterFn {
           )
         }
       } else {
-        result = await b.Critic(intent, attempts, criticOpts)
+        result = await b.Critic(intent, attempts, currentTimeBlock(), criticOpts)
       }
     } catch (e) {
       const selected = selectedCall()

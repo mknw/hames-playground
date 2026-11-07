@@ -75,6 +75,14 @@ There is no calibration and no threshold. Per #418 G11, the answer's probabiliti
 
 ### What the decisions model sees each iteration
 
+**Amended (#1029):** the state starts with the host's turn clock, rendered by
+`formatTimeBlock` as an ISO date-time with offset, weekday and the user's zone
+(unknown zone explicitly falls back to UTC). Every decision in the turn reads
+that one instant. Compact intent, each route's controller/planner/critic, and
+synthesis receive the same rendering through their BAML adapters, in user-role
+content after stable system text and the last cache marker. No clock is captured
+by a cached pattern at construction. SPEC and GUIDE carry the current contract.
+
 The systemone request is `{ model, state, questions }`, where `state` is one string (`jev-decide.server.ts:304-311`), capped at the model's state window (32k tokens for Jev, `limitsFor('decide')`). `decisionLoop` passes a custom `state`, because the default one renders only user and final assistant messages (`typedDecision.server.ts:1259-1276`) and so would never see this turn's progress. The state is rendered as:
 
 ```

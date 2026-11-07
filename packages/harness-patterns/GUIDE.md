@@ -223,6 +223,16 @@ follows the same contract:
 `simpleLoop` records the replaced thinking attempt as a `warning` (`task: 'controller'`).
 See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
 
+For date-relative tasks, the host supplies `clock: { instant, timeZone }` on
+the turn's run frame: capture `instant` once at turn start, resolve the user's
+IANA zone, and use `{ timeZone: 'UTC', zoneUnknown: true }` when unknown.
+`decisionLoop` and the BAML adapters share `formatTimeBlock`'s memoized rendering
+(ISO date-time with offset, weekday and zone). It reaches the decision state,
+compact intent, controllers, planner, critic and synthesis without reading a
+new instant during the turn. BAML places it after stable system content and
+the last cache marker, preserving existing cached prefixes. Bare library runs
+with no clock omit the block. See SPEC's turn-clock contract for state overrides.
+
 ### Protecting the web route's earlier inputs
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around

@@ -118,6 +118,9 @@ const FUNCTIONS: [string, Render, object][] = [
   ],
   ['Planner', (t, o) => request.Planner('q', 'i', TOOLS, 'CTX', t, o), ANTHROPIC],
   ['PlannerThinking', (t, o) => request.PlannerThinking('q', 'i', TOOLS, 'CTX', t, o), THINK],
+  ['Critic', (t, o) => request.Critic('i', ATTEMPTS, t, o), ANTHROPIC],
+  ['CriticThinking', (t, o) => request.CriticThinking('i', ATTEMPTS, t, o), THINK],
+  ['CompactIntent', (t, o) => request.CompactIntent(HISTORY, 'latest', t, o), ANTHROPIC],
   [
     'Synthesize',
     // references, guide (#985), then current_time: the two string slots are

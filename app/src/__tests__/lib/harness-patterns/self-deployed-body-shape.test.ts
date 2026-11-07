@@ -149,7 +149,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     () =>
       b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, null, SELF_DEPLOYED),
   ],
-  ['Critic', () => b.request.Critic('i', [], SELF_DEPLOYED)],
+  ['Critic', () => b.request.Critic('i', [], null, SELF_DEPLOYED)],
   [
     'Synthesize',
     () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, null, SELF_DEPLOYED),
@@ -172,7 +172,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
   ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, SMALL)],
   ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', SMALL)],
-  ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', SMALL)],
+  ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', null, SMALL)],
   ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', SMALL)],
   ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, SMALL)],
   ['ExtractMemory', () => b.request.ExtractMemory('preference', 'USER: q', 'q', SMALL)],

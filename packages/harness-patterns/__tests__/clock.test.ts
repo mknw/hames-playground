@@ -26,7 +26,7 @@ describe('formatTimeBlock', () => {
     const clock = at('2026-11-04T23:30:00Z', 'Europe/Brussels')
     expect(localDate(clock)).toBe('2026-11-05')
     expect(formatTimeBlock(clock)).toContain(
-      'Thursday, 2026-11-05, 00:30 UTC+01:00 (Europe/Brussels)',
+      'Thursday, 2026-11-05T00:30:00+01:00 (Europe/Brussels)',
     )
     expect(formatTimeBlock(clock)).not.toContain('2026-11-04')
   })
@@ -34,33 +34,33 @@ describe('formatTimeBlock', () => {
   it('follows the spring DST change: 01:59 CET, then 03:00 CEST one minute later', () => {
     // 2026-03-29 01:00Z: Brussels jumps from 02:00 CET to 03:00 CEST.
     expect(formatTimeBlock(at('2026-03-29T00:59:00Z', 'Europe/Brussels'))).toContain(
-      'Sunday, 2026-03-29, 01:59 UTC+01:00',
+      'Sunday, 2026-03-29T01:59:00+01:00',
     )
     expect(formatTimeBlock(at('2026-03-29T01:00:00Z', 'Europe/Brussels'))).toContain(
-      'Sunday, 2026-03-29, 03:00 UTC+02:00',
+      'Sunday, 2026-03-29T03:00:00+02:00',
     )
   })
 
   it('follows the autumn DST change: the repeated hour keeps two offsets', () => {
     // 2026-10-25 01:00Z: Brussels falls back from 03:00 CEST to 02:00 CET.
     expect(formatTimeBlock(at('2026-10-25T00:30:00Z', 'Europe/Brussels'))).toContain(
-      '02:30 UTC+02:00',
+      'T02:30:00+02:00',
     )
     expect(formatTimeBlock(at('2026-10-25T01:30:00Z', 'Europe/Brussels'))).toContain(
-      '02:30 UTC+01:00',
+      'T02:30:00+01:00',
     )
   })
 
   it('a zone west of UTC is still on the previous day', () => {
     const clock = at('2026-11-05T02:00:00Z', 'America/New_York')
     expect(localDate(clock)).toBe('2026-11-04')
-    expect(formatTimeBlock(clock)).toContain('Wednesday, 2026-11-04, 21:00 UTC-05:00')
+    expect(formatTimeBlock(clock)).toContain('Wednesday, 2026-11-04T21:00:00-05:00')
   })
 
   it('the UTC fallback says the zone is unknown and asks the answer to say so', () => {
     const block = formatTimeBlock(at('2026-11-04T23:30:00Z', 'UTC', true))
     expect(block).toContain("the user's time zone is unknown, so this is UTC")
-    expect(block).toContain('Wednesday, 2026-11-04, 23:30 UTC+00:00 (UTC)')
+    expect(block).toContain('Wednesday, 2026-11-04T23:30:00+00:00 (UTC)')
     expect(block).toContain('say that you assumed UTC')
     // A known zone carries neither caveat.
     const known = formatTimeBlock(at('2026-11-04T23:30:00Z', 'UTC'))

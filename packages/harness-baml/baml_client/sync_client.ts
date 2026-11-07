@@ -148,7 +148,7 @@ export class BamlSyncClient {
   }
   
   CompactIntent(
-      history: types.Message[],latest: string,
+      history: types.Message[],latest: string,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): string {
     try {
@@ -180,7 +180,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "CompactIntent",
         {
-          "history": history,"latest": latest
+          "history": history,"latest": latest,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -298,7 +298,7 @@ export class BamlSyncClient {
   }
   
   Critic(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.CriticResult {
     try {
@@ -330,7 +330,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Critic",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -348,7 +348,7 @@ export class BamlSyncClient {
   }
   
   CriticThinking(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.CriticResult {
     try {
@@ -380,7 +380,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "CriticThinking",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

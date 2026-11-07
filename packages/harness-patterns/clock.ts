@@ -77,6 +77,7 @@ function localParts(instant: number, timeZone: string): LocalParts {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hourCycle: 'h23',
     timeZoneName: 'longOffset',
   }).formatToParts(new Date(instant))
@@ -87,8 +88,8 @@ function localParts(instant: number, timeZone: string): LocalParts {
   return {
     weekday: get('weekday'),
     date: `${get('year')}-${get('month')}-${get('day')}`,
-    time: `${get('hour')}:${get('minute')}`,
-    offset: `UTC${gmt || '+00:00'}`,
+    time: `${get('hour')}:${get('minute')}:${get('second')}`,
+    offset: gmt || '+00:00',
   }
 }
 
@@ -97,12 +98,17 @@ export function localDate(clock: TurnClock): string {
   return localParts(clock.instant, clock.timeZone).date
 }
 
+const timeBlocks = new WeakMap<TurnClock, string>()
+
 /**
  * The block every time-reasoning prompt carries: weekday, ISO date, local time,
  * UTC offset and zone name, plus the one instruction that makes it useful.
- * Deterministic for one clock, so a turn's calls all render it byte-identically.
+ * Memoized per clock for decisions and BAML calls alike. The host holds one
+ * clock per turn, so every call sees the same rendering even across midnight.
  */
 export function formatTimeBlock(clock: TurnClock): string {
+  const cached = timeBlocks.get(clock)
+  if (cached !== undefined) return cached
   const p = localParts(clock.instant, clock.timeZone)
   const header = clock.zoneUnknown
     ? "CURRENT TIME (when this turn started; the user's time zone is unknown, so this is UTC):"
@@ -110,7 +116,11 @@ export function formatTimeBlock(clock: TurnClock): string {
   const rule = clock.zoneUnknown
     ? 'Read "now", "today", "tomorrow", "this afternoon", "recent" and similar against this time, and when an answer depends on the local time, say that you assumed UTC.'
     : 'Read "now", "today", "tomorrow", "this afternoon", "recent" and similar against this time.'
-  return [header, `${p.weekday}, ${p.date}, ${p.time} ${p.offset} (${clock.timeZone})`, rule].join(
-    '\n',
-  )
+  const block = [
+    header,
+    `${p.weekday}, ${p.date}T${p.time}${p.offset} (${clock.timeZone})`,
+    rule,
+  ].join('\n')
+  timeBlocks.set(clock, block)
+  return block
 }

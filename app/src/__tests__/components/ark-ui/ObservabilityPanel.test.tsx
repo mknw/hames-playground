@@ -51,15 +51,15 @@ const rows = (container: HTMLElement) => [
 ]
 
 /**
- * Expand every controller section (#1007). The collapsed-by-default group is
- * what an operator sees, so a test that reads or opens a grouped row expands
- * its section first. Scoped by the header text so other aria-expanded
- * triggers (the export menu) are left alone.
+ * Expand every pattern section (#1007 controller, #1025 every pattern). The
+ * collapsed-by-default group is what an operator sees, so a test that reads
+ * or opens a grouped row expands its section first. Scoped away from other
+ * aria-expanded triggers (the export menu) by their label.
  */
-const expandControllerSections = async (container: HTMLElement) => {
+const expandPatternSections = async (container: HTMLElement) => {
   const triggers = [
     ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
-  ].filter((b) => b.textContent?.includes('controller'))
+  ].filter((b) => b.getAttribute('aria-label') !== 'Export session')
   for (const trigger of triggers) fireEvent.click(trigger)
   await tick()
 }
@@ -495,7 +495,7 @@ describe('ObservabilityPanel — timeline construction', () => {
       }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(container)
+    await expandPatternSections(container)
     expect(rows(container)[0].textContent).toContain('×2 first_tool, second_tool')
   })
 
@@ -612,7 +612,7 @@ describe('ObservabilityPanel — detail drill-down', () => {
       }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(container)
+    await expandPatternSections(container)
 
     const panel = openFirstRow(container)
     expect(panel.textContent).toContain('need the node list first')
@@ -627,7 +627,7 @@ describe('ObservabilityPanel — detail drill-down', () => {
       ev('controller_action', { action: { tool_name: 't', tool_args: '{}', is_final: true } }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(container)
+    await expandPatternSections(container)
 
     const panel = openFirstRow(container)
     expect(panel.textContent).not.toContain('Reasoning')
@@ -755,7 +755,7 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(rendered.container)
+    await expandPatternSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
@@ -1059,7 +1059,7 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(rendered.container)
+    await expandPatternSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
@@ -1537,7 +1537,7 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
-    await expandControllerSections(rendered.container)
+    await expandPatternSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
@@ -1746,7 +1746,7 @@ describe('ObservabilityPanel — controller sections (#1007)', () => {
 
   it('expanding shows the grouped rows in chronological order, tints and all', async () => {
     const { container } = render(() => <ObservabilityPanel events={run()} />)
-    await expandControllerSections(container)
+    await expandPatternSections(container)
 
     const text = rows(container).map((r) => r.textContent ?? '')
     expect(text[0]).toContain('x')
@@ -1763,7 +1763,7 @@ describe('ObservabilityPanel — controller sections (#1007)', () => {
 
   it('opens the detail for an event inside the group, after expanding', async () => {
     const { container } = render(() => <ObservabilityPanel events={run()} />)
-    await expandControllerSections(container)
+    await expandPatternSections(container)
 
     fireEvent.click(rows(container)[1])
     expect(detail()!.textContent).toContain('json_get')
@@ -1809,5 +1809,145 @@ describe('ObservabilityPanel — controller sections (#1007)', () => {
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
     expect(sectionText(container)).toHaveLength(2)
+  })
+})
+
+// ============================================================================
+// #1025 — Context Manager compacts every pattern's events
+// ============================================================================
+describe('ObservabilityPanel — pattern sections (#1025)', () => {
+  /** The section triggers matching one family label, whitespace-collapsed. */
+  const sectionText = (container: HTMLElement, label: string) =>
+    [...container.querySelectorAll('button[aria-expanded]')]
+      .filter((b) => b.textContent?.includes(label))
+      .map((b) => b.textContent?.replace(/\s+/g, ' ').trim())
+
+  const critic = (ok: boolean) =>
+    ev('critic_result', { result: { is_sufficient: ok, explanation: 'x' } })
+
+  it('collapses a critic run behind one labelled, keyboard-reachable section with its verdicts', async () => {
+    const { container } = render(() => (
+      <ObservabilityPanel events={[critic(true), critic(false), critic(true)]} />
+    ))
+
+    const triggers = sectionText(container, 'critic')
+    expect(triggers).toEqual(['criticneo4j-query3 evaluations · 2 sufficient · 1 needs work'])
+    // A real button, collapsed by default: keyboard reachable.
+    const trigger = container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]').item(0)
+    expect(trigger?.tagName).toBe('BUTTON')
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false')
+    // The header borrows the family's representative event glyph.
+    expect(trigger?.querySelector('span[class*="rate-review"]')).toBeTruthy()
+  })
+
+  it('expands a critic section into the same rows the flat timeline renders', async () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[ev('user_message', { content: 'hi' }), critic(true), critic(false)]}
+      />
+    ))
+    await expandPatternSections(container)
+
+    const text = rows(container).map((r) => r.textContent ?? '')
+    expect(text[0]).toContain('hi')
+    expect(text[1]).toContain('critic result')
+    expect(text[2]).toContain('critic result')
+    expect(sectionText(container, 'critic')[0]).toContain('1 sufficient')
+  })
+
+  it('opens the detail for an event inside a critic group, after expanding', async () => {
+    const { container } = render(() => (
+      <ObservabilityPanel events={[critic(true), critic(false)]} />
+    ))
+    await expandPatternSections(container)
+
+    fireEvent.click(rows(container)[0])
+    expect(detail()!.textContent).toContain('critic')
+  })
+
+  it('summarises a summariser run by its batches and items', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[
+          ev('model_call', { role: 'describe', items: 3 }),
+          ev('model_call', { role: 'describe', items: 1 }),
+        ]}
+      />
+    ))
+    expect(sectionText(container, 'summariser')).toEqual([
+      'summariserneo4j-query2 summaries · 4 items',
+    ])
+  })
+
+  it('summarises a decision run by the chosen route and its probability', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[
+          ev('decision_made', { key: 'router.route', label: 'neo4j', type: 'choice' }),
+          ev('decision_made', { key: 'router.route', label: 'web', type: 'noul', pTrue: 0.75 }),
+        ]}
+      />
+    ))
+    expect(sectionText(container, 'decision')).toEqual([
+      'decisionneo4j-query2 decisions · web (p=0.75)',
+    ])
+  })
+
+  it('summarises a guard run by its findings count', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[
+          ev('model_call', { role: 'screen', source: 'web/fetch' }),
+          ev('content_sanitized', {
+            tool: 'web',
+            findings: [{ rule: 'a' }, { rule: 'b' }],
+          }),
+        ]}
+      />
+    ))
+    expect(sectionText(container, 'guard')).toEqual(['guardneo4j-query2 checks · 2 findings'])
+  })
+
+  it('summarises a memory run by what was written and recalled', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[ev('memory_recalled', {}), ev('memory_written', {}), ev('memory_written', {})]}
+      />
+    ))
+    expect(sectionText(container, 'memory')).toEqual(['memoryneo4j-query2 written · 1 recalled'])
+  })
+
+  it('summarises a planner run by its plans and steps', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[
+          ev('plan_created', { plan: { plan: 'a\nb', n_steps: 2 } }),
+          ev('plan_created', { plan: { plan: 'c', n_steps: 4 } }),
+        ]}
+      />
+    ))
+    expect(sectionText(container, 'planner')).toEqual(['plannerneo4j-query2 plans · 6 steps'])
+  })
+
+  it('leaves a lone evaluation of any family a timeline row, not a collapsed section', () => {
+    const { container } = render(() => <ObservabilityPanel events={[critic(false)]} />)
+
+    expect(sectionText(container, 'critic')).toEqual([])
+    expect(rows(container)).toHaveLength(1)
+  })
+
+  it('keeps a guard event sharing the patternId out of the run it interrupted', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel
+        events={[
+          ev('critic_result', { result: { is_sufficient: true, explanation: 'x' } }),
+          ev('content_sanitized', { tool: 'web', findings: [{ rule: 'a' }] }),
+          ev('critic_result', { result: { is_sufficient: true, explanation: 'y' } }),
+        ]}
+      />
+    ))
+    // The control's record stays visible between the two lone evaluations.
+    expect(sectionText(container, 'guard')).toEqual([])
+    expect(container.textContent).toContain('content sanitized')
   })
 })

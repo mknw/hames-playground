@@ -22,6 +22,7 @@ import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, redactCall } from '../context.server'
+import { supersededRouteEventIds } from '../route-records'
 
 assertServerOnImport()
 
@@ -64,13 +65,20 @@ function buildSynthesisInputFromView(
   // The default is one turn; a caller that asked for a wider window in its own
   // `viewConfig` keeps it.
   const errorView = view.fromLastNTurns(errorTurnWindow)
+  // Read the full backing stream only for relationship metadata. The actual
+  // content reads below retain the caller's pattern and turn windows.
+  const obsolete = supersededRouteEventIds(view.unfiltered().get())
+  const errors = errorView
+    .errors()
+    .get()
+    .filter((e) => !e.id || !obsolete.has(e.id))
 
   const input: CompactExecutionInput = {
     mode,
     userMessage: userContent,
     intent: data.intent ?? userContent,
-    hasError: errorView.hasErrors(),
-    errorMessage: errorView.lastError(),
+    hasError: errors.length > 0,
+    errorMessage: errors.length ? (errors.at(-1)!.data as ErrorEventData).error : undefined,
   }
 
   // `memoryRecall`'s block for THIS turn (it clears the key on every exit, so a
@@ -167,6 +175,7 @@ function buildSynthesisInputFromView(
         const mine = new Set<LoopHistory['iterations'][number]>()
 
         for (const event of threadView.get()) {
+          if (event.id && obsolete.has(event.id)) continue
           if (event.type === 'controller_action') {
             const actionData = event.data as { action: import('../types').ControllerAction }
             unpaired.add(iterations.length)

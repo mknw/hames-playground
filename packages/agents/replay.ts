@@ -21,6 +21,7 @@ import type {
   ErrorEventData,
   WarningEventData,
 } from '@hames-ai/harness-patterns'
+import { supersededRouteEventIds } from '@hames-ai/harness-patterns/route-records'
 
 export interface ReplayedMessage {
   id: string
@@ -104,8 +105,10 @@ export function replayMessages(serializedContext: string): ReplayedMessage[] {
     return []
   }
   const events = parsed.events ?? []
+  const obsolete = supersededRouteEventIds(events)
   const out: ReplayedMessage[] = []
   for (const ev of events) {
+    if (ev.id && obsolete.has(ev.id)) continue
     if (ev.type === 'user_message') {
       const data = ev.data as UserMessageEventData
       out.push({

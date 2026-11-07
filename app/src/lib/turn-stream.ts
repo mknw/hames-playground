@@ -24,6 +24,7 @@ import { extractReferences } from '@hames-ai/agents'
 // dependency-free (no server-only imports), and the stream handler wants
 // exactly that guarantee.
 import { errorBubble, warningBubble } from '@hames-ai/agents/replay'
+import { supersededRouteEventIds } from '@hames-ai/harness-patterns/route-records'
 import {
   parseChatStream,
   StreamLostError,
@@ -91,6 +92,7 @@ export interface TurnRequest {
  */
 export interface TurnSink {
   appendMessage(message: Message): void
+  removeMessages(ids: ReadonlySet<string>): void
   pushEvents(events: ContextEvent[]): void
   pushGraph(elements: GraphElement[]): void
   setContext(context: UnifiedContext): void
@@ -292,7 +294,7 @@ export async function runTurn(
           // cannot diverge — the bubble must look identical whether it was
           // painted from the live stream or rebuilt after a reload.
           sink.appendMessage({
-            id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            id: evt.id ?? `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             timestamp: new Date(),
             patternId: evt.patternId,
             ...errorBubble(evt.data as ErrorEventData),
@@ -338,7 +340,10 @@ export async function runTurn(
     sink.finishProgress()
     clearWarming()
 
-    if (finalResult?.context) sink.setContext(finalResult.context)
+    if (finalResult?.context) {
+      sink.removeMessages(supersededRouteEventIds(finalResult.context.events))
+      sink.setContext(finalResult.context)
+    }
 
     const pendingIds = pendingRequestIds(finalResult)
     const finalResponse = finalResult?.response ?? ''

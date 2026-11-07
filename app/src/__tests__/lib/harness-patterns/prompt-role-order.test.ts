@@ -219,10 +219,10 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         o,
       ),
   ],
-  ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, o)],
+  ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, TIME, o)],
   [
     'CriticThinking',
-    (o) => () => b.request.CriticThinking('i', ATTEMPTS, { ...o, client: 'LargeQwenThink' }),
+    (o) => () => b.request.CriticThinking('i', ATTEMPTS, TIME, { ...o, client: 'LargeQwenThink' }),
   ],
   [
     'Synthesize',
@@ -268,7 +268,7 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
       ),
   ],
   ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', TIME, o)],
-  ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],
+  ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', TIME, o)],
   ['RetrieveQuery', (o) => () => b.request.RetrieveQuery(HISTORY, 'latest', o)],
   ['ReferenceSelector', (o) => () => b.request.ReferenceSelector('i', HISTORY, CANDIDATES, o)],
   ['ExtractMemory', (o) => () => b.request.ExtractMemory('preference', 'USER: q', 'q', o)],

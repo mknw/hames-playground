@@ -196,6 +196,13 @@ Unattended runs immediately record the default answer and retain their existing
 decision flow. Without `withBudget`, nothing changes. See SPEC for the
 loop-owned post-route continuation and the factory's contract.
 
+When that extra dispatch succeeds, its route result explicitly names the failed
+record and budget error it supersedes. Synthesis drops that obsolete failure,
+and transcript readers can use the client-safe `route-records` module's
+`supersededRouteEventIds(events)` to clear the corresponding warning by event
+id, live and on reload. Historical events remain intact; failed retries and
+unrelated errors remain visible.
+
 A host can also tell the decisions model which documents the conversation holds,
 through `documents` on the loop's config: a per-run source that returns the
 visible total and, only when the host decides that run may reveal them, a list
@@ -222,6 +229,28 @@ A controller's optional second argument `hooks.onRetry(failedCall)` (`Controller
 follows the same contract:
 `simpleLoop` records the replaced thinking attempt as a `warning` (`task: 'controller'`).
 See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
+
+For date-relative tasks, the host supplies `clock: { instant, timeZone }` on
+the turn's run frame: capture `instant` once at turn start, resolve the user's
+IANA zone, and use `{ timeZone: 'UTC', zoneUnknown: true }` when unknown.
+`decisionLoop` and the BAML adapters share `formatTimeBlock`'s memoized rendering
+(ISO date-time with offset, weekday and zone). It reaches the decision state,
+compact intent, controllers, planner, critic and synthesis without reading a
+new instant during the turn. BAML places it after stable system content and
+the last cache marker, preserving existing cached prefixes. Bare library runs
+with no clock omit the block. See SPEC's turn-clock contract for state overrides.
+
+The harness stores the clock in `UnifiedContext.turnClock`. `resumeHarness`
+restores it, including `zoneUnknown`, before resolving answers or running any
+patterns; a changed ambient clock cannot redate a paused turn. A new message
+through `continueSession` replaces it with that message's frame clock (or clears
+it if absent). The app resumes older blobs without a stored clock using the
+last user-message timestamp, falling back to session creation, and explicitly
+assumes an unknown UTC zone; today's preference is not a historical zone fact.
+Expiry checks still use the actual resume time. The shared prompt rule applies
+the clock to the current request only, respects an explicit reference date, and
+preserves dated quotations' own temporal context. It explicitly says this is
+not the date of documents or events.
 
 ### Protecting the web route's earlier inputs
 

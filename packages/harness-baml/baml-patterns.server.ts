@@ -50,6 +50,7 @@ import {
 import { clientOverrideFor, limitsFor } from './clients.server'
 import { routeMessageOp } from './routing.server'
 import { escapeDataFence } from './data-fence'
+import { currentTimeBlock } from './time-block.server'
 
 assertServerOnImport()
 
@@ -81,6 +82,7 @@ export function createCompactIntentAdapter(): CompactIntentFn {
       raw = await b.CompactIntent(
         history.map((m) => ({ ...m, content: escapeDataFence(m.content) })),
         latest,
+        currentTimeBlock(),
         opts,
       )
     } catch (e) {

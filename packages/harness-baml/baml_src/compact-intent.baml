@@ -18,7 +18,8 @@
 
 function CompactIntent(
   history: Message[],
-  latest: string
+  latest: string,
+  current_time: string?
 ) -> string {
   client DescribeAnthropic
   prompt #"
@@ -50,6 +51,7 @@ function CompactIntent(
     {% endif %}
 
     {{ _.role("user") }}
+    {{ CurrentTime(current_time) }}
     Latest message: {{ latest }}
 
     {{ ctx.output_format }}

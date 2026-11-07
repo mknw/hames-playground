@@ -485,7 +485,7 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
 /** A fresh conversation id. Prefixed so a stray row is identifiable in the
  *  test database. */
 export function newSessionId(label: string): string {
-  return `e2e-${label}-${Math.random().toString(36).slice(2, 10)}`
+  return `e2e-${label}-${crypto.randomUUID()}`
 }
 
 /** Every event of one type in a persisted context blob. */

@@ -25,6 +25,7 @@ import type { GraphElement } from '@hames-ai/agents'
 import { SSE_STALL_MS, type WarmingEventData } from '~/lib/sse-client'
 import type { HarnessSettings } from '~/lib/settings'
 import singleNodeFixture from './harness-client/fixtures/cypher-single-node.json'
+import { routeRecoveryEvents } from './route-recovery-fixture'
 
 // ---------------------------------------------------------------------------
 // Wire + sink doubles
@@ -82,6 +83,11 @@ const recorder = () => {
 
   const sink: TurnSink = {
     appendMessage: (m) => messages.push(m),
+    removeMessages: (ids) => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (ids.has(messages[i].id)) messages.splice(i, 1)
+      }
+    },
     pushEvents: (e) => events.push(...e),
     pushGraph: (g) => graph.push(...g),
     setContext: (c) => contexts.push(c),
@@ -293,6 +299,36 @@ describe('runTurn — transitions', () => {
 })
 
 describe('runTurn — effects', () => {
+  it.each(['success', 'failure', 'answer', 'later-turn'] as const)(
+    'reconciles warnings already painted before a resume (%s)',
+    async (outcome) => {
+      const events = routeRecoveryEvents(outcome)
+      const rec = recorder()
+      // First stream paints the warning and parks. A resume has a new stream.
+      fetchMock.mockResolvedValue(
+        sseResponse([
+          ...events.slice(0, 4).map((data) => ({ event: 'message', data })),
+          done({ status: 'paused', response: '', context: { events: events.slice(0, 4) } }),
+        ]),
+      )
+      await runTurn(request(), rec.sink)
+      expect(rec.messages.filter((m) => m.role === 'warning').map((m) => m.id)).toEqual([
+        'budget',
+        'unrelated',
+      ])
+      fetchMock.mockResolvedValue(
+        sseResponse([
+          ...events.slice(4).map((data) => ({ event: 'message', data })),
+          done({ response: 'Synthetic answer', context: { events } }),
+        ]),
+      )
+      await runTurn({ ...request(), mode: 'resume' }, rec.sink)
+      expect(rec.messages.filter((m) => m.role === 'warning').map((m) => m.id)).toEqual(
+        outcome === 'success' ? ['unrelated'] : ['budget', 'unrelated'],
+      )
+    },
+  )
+
   it('feeds every message frame to progress and to the event buffer, in order', async () => {
     fetchMock.mockResolvedValue(
       sseResponse([controllerAction({ tool_name: 'a' }), toolResult(singleNodeFixture), done()]),

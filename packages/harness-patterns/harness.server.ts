@@ -29,7 +29,14 @@ import {
 } from './context.server'
 import { checkResume, readHitl, recordAnswers, supersedeHitl } from './hitl.server'
 import { refuseUnresumableGates } from './pattern-capabilities'
-import { withRunFrame, currentRunFrame, activeRunFrame, type RunFrame } from './run-frame.server'
+import {
+  withRunFrame,
+  amendRunFrame,
+  currentClock,
+  currentRunFrame,
+  activeRunFrame,
+  type RunFrame,
+} from './run-frame.server'
 import { runtimeConfig } from './runtime-config.server'
 
 assertServerOnImport()
@@ -51,8 +58,11 @@ function turnEstimateSettings(): TurnEstimateSettings {
   return { maxToolTurns: s.maxToolTurns, maxRetries: s.maxRetries }
 }
 
-/** Stamp `chainTurnEstimate` on the most recent user_message event in-place. */
-function stampChainEstimate<T>(ctx: UnifiedContext<T>, patterns: ConfiguredPattern<T>[]): void {
+/** Capture this new user turn's clock and stamp its chain estimate. */
+function stampTurnMetadata<T>(ctx: UnifiedContext<T>, patterns: ConfiguredPattern<T>[]): void {
+  const clock = currentClock()
+  if (clock) ctx.turnClock = clock
+  else delete ctx.turnClock
   let userMsg: ContextEvent | undefined
   for (let i = ctx.events.length - 1; i >= 0; i--) {
     if (ctx.events[i].type === 'user_message') {
@@ -317,7 +327,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
       // Project total chain turns upfront so progress UIs can seed themselves
       // before the first pattern_enter arrives. Inside the frame, because the
       // projection reads the host's budgets through `runtimeConfig()`.
-      stampChainEstimate(ctx, patterns)
+      stampTurnMetadata(ctx, patterns)
 
       // Emit the initial user_message live so consumers (e.g. SSE listeners)
       // see `chainTurnEstimate` before any pattern runs.
@@ -430,69 +440,74 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
   refuseUnresumableGates(patterns)
   return enterRun(opts.frame, opts.onEvent, async (listener) => {
     const ctx = deserializeContext<T>(serializedContext)
-
-    // Steps 1–6 only CHECK. A refusal throws before anything below runs.
-    const { accepted, startAt, continuation } = checkResume(ctx, answers, {
-      names: patterns.map((p) => p.name),
-      tier: activeRunFrame().inference?.tier,
-      now: Date.now(),
-      patterns,
-    })
-
-    const startTime = Date.now()
-
-    // 7. The host's side effects, one per answer, inside the frame and after
-    //    every check [F4]. A throw fails the resume with nothing recorded.
-    const resolutions: unknown[] = []
-    for (const { request, answer } of accepted) {
-      resolutions.push(opts.resolve ? await opts.resolve(request, answer) : undefined)
-    }
-
-    // 8–9. The decisions, and the held results they release.
-    recordAnswers(ctx, accepted, resolutions, opts.principal)
-
-    // Legacy-blob scrub, until 1.0 (#433 F9): a 0.1.x `resumeHarness(…,
-    // approved)` wrote `approved` onto `ctx.data`, and a gate written for it
-    // would read a stale one as a decision. Core no longer writes it.
-    if (ctx.data && typeof ctx.data === 'object') {
-      delete (ctx.data as Record<string, unknown>).approved
-    }
-
-    // Where THIS resume's events start — the restored context already holds
-    // every previous turn's, including any error they recorded.
-    const eventsBefore = ctx.events.length
-
-    // 10. A choice that stops the run stops it: nothing is re-entered.
-    const stop = accepted.find((a) => a.option.stopsRun)
-    if (stop) {
-      ctx.status = 'done'
-      ctx.data = { ...ctx.data, response: `Stopped at your request (${stop.request.kind}).` }
-      const settled = settleTurn(ctx, eventsBefore)
-      return scopedResult(ctx, settled, startTime)
-    }
-
-    ctx.status = 'running'
-
-    try {
-      // 11. Re-enter the paused top-level pattern; the ones before it already
-      //     ran, and their events and data are in the context. Below a
-      //     resumable one the run continues INSIDE it, along the recorded path
-      //     (slice 6); any other re-runs from its start.
-      await runChain(ctx, patterns, listener, {
-        startAt,
-        ...(continuation ? { continuation } : {}),
+    const clock = ctx.turnClock ?? currentClock()
+    if (clock) ctx.turnClock = clock
+    // Restore the serialized turn's time before resolving answers or executing
+    // patterns. The resume request's wall time still governs expiry checks.
+    return amendRunFrame({ clock }, async () => {
+      // Steps 1–6 only CHECK. A refusal throws before anything below runs.
+      const { accepted, startAt, continuation } = checkResume(ctx, answers, {
+        names: patterns.map((p) => p.name),
+        tier: activeRunFrame().inference?.tier,
+        now: Date.now(),
+        patterns,
       })
 
-      // How this turn ended — one shared decision, see `settleTurn`.
-      const settled = settleTurn(ctx, eventsBefore)
+      const startTime = Date.now()
 
-      return scopedResult(ctx, settled, startTime)
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      setCtxError(ctx, msg, 'harness')
+      // 7. The host's side effects, one per answer, inside the frame and after
+      //    every check [F4]. A throw fails the resume with nothing recorded.
+      const resolutions: unknown[] = []
+      for (const { request, answer } of accepted) {
+        resolutions.push(opts.resolve ? await opts.resolve(request, answer) : undefined)
+      }
 
-      return scopedResult(ctx, { response: `Error: ${msg}`, status: 'error' }, startTime)
-    }
+      // 8–9. The decisions, and the held results they release.
+      recordAnswers(ctx, accepted, resolutions, opts.principal)
+
+      // Legacy-blob scrub, until 1.0 (#433 F9): a 0.1.x `resumeHarness(…,
+      // approved)` wrote `approved` onto `ctx.data`, and a gate written for it
+      // would read a stale one as a decision. Core no longer writes it.
+      if (ctx.data && typeof ctx.data === 'object') {
+        delete (ctx.data as Record<string, unknown>).approved
+      }
+
+      // Where THIS resume's events start — the restored context already holds
+      // every previous turn's, including any error they recorded.
+      const eventsBefore = ctx.events.length
+
+      // 10. A choice that stops the run stops it: nothing is re-entered.
+      const stop = accepted.find((a) => a.option.stopsRun)
+      if (stop) {
+        ctx.status = 'done'
+        ctx.data = { ...ctx.data, response: `Stopped at your request (${stop.request.kind}).` }
+        const settled = settleTurn(ctx, eventsBefore)
+        return scopedResult(ctx, settled, startTime)
+      }
+
+      ctx.status = 'running'
+
+      try {
+        // 11. Re-enter the paused top-level pattern; the ones before it already
+        //     ran, and their events and data are in the context. Below a
+        //     resumable one the run continues INSIDE it, along the recorded path
+        //     (slice 6); any other re-runs from its start.
+        await runChain(ctx, patterns, listener, {
+          startAt,
+          ...(continuation ? { continuation } : {}),
+        })
+
+        // How this turn ended — one shared decision, see `settleTurn`.
+        const settled = settleTurn(ctx, eventsBefore)
+
+        return scopedResult(ctx, settled, startTime)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        setCtxError(ctx, msg, 'harness')
+
+        return scopedResult(ctx, { response: `Error: ${msg}`, status: 'error' }, startTime)
+      }
+    })
   })
 }
 
@@ -555,7 +570,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
     // Re-project chain turns for this turn — settings or pattern selection may
     // have changed between turns.
-    stampChainEstimate(ctx, patterns)
+    stampTurnMetadata(ctx, patterns)
 
     // Emit the new user_message live so consumers see the fresh estimate.
     const continuedMsg = ctx.events[ctx.events.length - 1]

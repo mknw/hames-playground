@@ -25,6 +25,7 @@
  *   - drop the `{% if current_time %}` guard in `CurrentTime` → (3) fails.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
+import { formatTimeBlock } from '@hames-ai/harness-patterns/clock'
 import type {
   Attempt,
   LoopTurn,
@@ -118,6 +119,9 @@ const FUNCTIONS: [string, Render, object][] = [
   ],
   ['Planner', (t, o) => request.Planner('q', 'i', TOOLS, 'CTX', t, o), ANTHROPIC],
   ['PlannerThinking', (t, o) => request.PlannerThinking('q', 'i', TOOLS, 'CTX', t, o), THINK],
+  ['Critic', (t, o) => request.Critic('i', ATTEMPTS, t, o), ANTHROPIC],
+  ['CriticThinking', (t, o) => request.CriticThinking('i', ATTEMPTS, t, o), THINK],
+  ['CompactIntent', (t, o) => request.CompactIntent(HISTORY, 'latest', t, o), ANTHROPIC],
   [
     'Synthesize',
     // references, guide (#985), then current_time: the two string slots are
@@ -153,6 +157,25 @@ function parts(body: unknown): Part[] {
 }
 
 describe('current_time placement', () => {
+  it.each(FUNCTIONS)(
+    '%s renders the scoped date rule on both wires',
+    async (_name, render, opts) => {
+      const block = formatTimeBlock({
+        instant: Date.parse('2026-11-04T23:30:12Z'),
+        timeZone: 'Europe/Brussels',
+      })
+      for (const wire of [ANTHROPIC, opts === THINK ? THINK : OPENAI]) {
+        const seq = parts((await render(block, wire)).body.json())
+        const time = seq.find((part) => part.text.includes('CURRENT TIME'))
+        expect(time?.text).toContain(block)
+        expect(time?.text).toContain('in the current request only')
+        expect(time?.text).toContain('explicit reference date; use that reference date instead')
+        expect(time?.text).toContain("relative dates inside them refer to the quotation's date")
+        expect(time?.text).toContain('This is not the date of documents or events.')
+      }
+    },
+  )
+
   it.each(FUNCTIONS)(
     '%s renders the block once, in a user part after every cache marker',
     async (_name, render, opts) => {

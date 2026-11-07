@@ -154,7 +154,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async CompactIntent(
-        history: types.Message[],latest: string,
+        history: types.Message[],latest: string,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<string> {
           try {
@@ -168,7 +168,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.CompactIntent(
-          history,latest,
+          history,latest,current_time,
           __baml_options__
           );
 
@@ -192,7 +192,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "CompactIntent",
             {
-            "history": history,"latest": latest
+            "history": history,"latest": latest,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -322,7 +322,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async Critic(
-        intent: string,attempts: types.Attempt[],
+        intent: string,attempts: types.Attempt[],current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.CriticResult> {
           try {
@@ -336,7 +336,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.Critic(
-          intent,attempts,
+          intent,attempts,current_time,
           __baml_options__
           );
 
@@ -360,7 +360,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "Critic",
             {
-            "intent": intent,"attempts": attempts
+            "intent": intent,"attempts": attempts,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -378,7 +378,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async CriticThinking(
-        intent: string,attempts: types.Attempt[],
+        intent: string,attempts: types.Attempt[],current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.CriticResult> {
           try {
@@ -392,7 +392,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.CriticThinking(
-          intent,attempts,
+          intent,attempts,current_time,
           __baml_options__
           );
 
@@ -416,7 +416,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "CriticThinking",
             {
-            "intent": intent,"attempts": attempts
+            "intent": intent,"attempts": attempts,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -1194,7 +1194,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             CompactIntent(
-            history: types.Message[],latest: string,
+            history: types.Message[],latest: string,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<string, string>
               {
@@ -1243,7 +1243,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "CompactIntent",
                 {
-                "history": history,"latest": latest
+                "history": history,"latest": latest,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1416,7 +1416,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             Critic(
-            intent: string,attempts: types.Attempt[],
+            intent: string,attempts: types.Attempt[],current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.CriticResult, types.CriticResult>
               {
@@ -1465,7 +1465,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "Critic",
                 {
-                "intent": intent,"attempts": attempts
+                "intent": intent,"attempts": attempts,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1490,7 +1490,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             CriticThinking(
-            intent: string,attempts: types.Attempt[],
+            intent: string,attempts: types.Attempt[],current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.CriticResult, types.CriticResult>
               {
@@ -1539,7 +1539,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "CriticThinking",
                 {
-                "intent": intent,"attempts": attempts
+                "intent": intent,"attempts": attempts,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),

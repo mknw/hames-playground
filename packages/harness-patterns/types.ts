@@ -4,6 +4,7 @@
  * Pure TypeScript interfaces plus the LLM call-envelope error class. Safe to
  * import from client and server.
  */
+import type { TurnClock } from './clock'
 
 /**
  * The data types the harness patterns exchange with their LLM layer.
@@ -375,6 +376,9 @@ export interface UnifiedContext<T = Record<string, unknown>> {
   sessionId: string
   /** When the session was created */
   createdAt: number
+  /** The current user turn's captured clock. Serialized across pauses;
+   *  replaced from the run frame when a new user message starts a turn. */
+  turnClock?: TurnClock
   /** Full event stream */
   events: ContextEvent[]
   /** Current execution status */
@@ -1302,6 +1306,14 @@ export interface ToolCallEventData {
 
 /** Data payload for tool_result event */
 export interface ToolResultEventData {
+  /** decisionLoop's route record identity and the budget error it represents.
+   * A successful authorized re-dispatch may replace that exact record/error
+   * pair. Historical events stay immutable; readers project the replacement. */
+  routeRecord?: {
+    iteration: number
+    budgetErrorId?: string
+    supersedes?: { recordId: string; budgetErrorId: string }
+  }
   /** Correlation ID linking this result to its call */
   callId?: string
   /** Shared ID grouping the sub-calls of one multi-call turn (see ToolCallEventData). */

@@ -72,7 +72,7 @@ export class HttpRequest {
   }
   
   CompactIntent(
-      history: types.Message[],latest: string,
+      history: types.Message[],latest: string,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -91,7 +91,7 @@ export class HttpRequest {
       return this.runtime.buildRequestSync(
         "CompactIntent",
         {
-          "history": history,"latest": latest
+          "history": history,"latest": latest,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),
@@ -171,7 +171,7 @@ export class HttpRequest {
   }
   
   Critic(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -190,7 +190,7 @@ export class HttpRequest {
       return this.runtime.buildRequestSync(
         "Critic",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),
@@ -204,7 +204,7 @@ export class HttpRequest {
   }
   
   CriticThinking(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -223,7 +223,7 @@ export class HttpRequest {
       return this.runtime.buildRequestSync(
         "CriticThinking",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),
@@ -672,7 +672,7 @@ export class HttpStreamRequest {
   }
   
   CompactIntent(
-      history: types.Message[],latest: string,
+      history: types.Message[],latest: string,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -691,7 +691,7 @@ export class HttpStreamRequest {
       return this.runtime.buildRequestSync(
         "CompactIntent",
         {
-          "history": history,"latest": latest
+          "history": history,"latest": latest,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),
@@ -771,7 +771,7 @@ export class HttpStreamRequest {
   }
   
   Critic(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -790,7 +790,7 @@ export class HttpStreamRequest {
       return this.runtime.buildRequestSync(
         "Critic",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),
@@ -804,7 +804,7 @@ export class HttpStreamRequest {
   }
   
   CriticThinking(
-      intent: string,attempts: types.Attempt[],
+      intent: string,attempts: types.Attempt[],current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): HTTPRequest {
     try {
@@ -823,7 +823,7 @@ export class HttpStreamRequest {
       return this.runtime.buildRequestSync(
         "CriticThinking",
         {
-          "intent": intent,"attempts": attempts
+          "intent": intent,"attempts": attempts,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __baml_options__?.tb?.__tb(),

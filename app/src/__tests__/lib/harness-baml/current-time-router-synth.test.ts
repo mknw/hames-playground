@@ -33,7 +33,7 @@ const ENV = {
 }
 // A Brussels user just after midnight UTC: the block must say Thursday 5 November.
 const CLOCK = { instant: Date.parse('2026-11-04T23:30:00Z'), timeZone: 'Europe/Brussels' }
-const LOCAL = 'Thursday, 2026-11-05, 00:30 UTC+01:00 (Europe/Brussels)'
+const LOCAL = 'Thursday, 2026-11-05T00:30:00+01:00 (Europe/Brussels)'
 const GUIDE = 'GUIDETOKEN can read your calendar.'
 const inTurn = <T>(fn: () => Promise<T>) =>
   withRunFrame({ inference: { tier: 'anthropic' }, clock: CLOCK }, fn)

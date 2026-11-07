@@ -99,6 +99,7 @@ import type {
   PatternConfig,
   PatternExitEventData as PatternExitData,
   PatternScope,
+  ToolResultEventData,
   PlanResult,
   UnifiedContext,
   WarningEventData,
@@ -115,7 +116,8 @@ import { getErrorHint } from '../error-hints'
 import { askHuman, currentRunId, hitlPending } from '../hitl.server'
 import { RUNTIME_CONFIG_BOUNDS } from '../runtime-config'
 import { emitLive } from '../live-event-context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentClock, currentRunFrame } from '../run-frame.server'
+import { formatTimeBlock } from '../clock'
 import { onPath, resumableFingerprint, takeResume, type TakenResume } from '../resume.server'
 import { trimToFit } from '../token-budget.server'
 import { createEventView } from './event-view.server'
@@ -212,6 +214,9 @@ export interface DecisionLoopRoute<T> {
 
 /** What an overridden `state` builder receives. */
 export interface DecisionLoopStateInput {
+  /** The shared turn-clock rendering, when the host supplied a clock. An
+   *  overridden state builder owns its placement. */
+  readonly currentTime?: string
   /** The turn's resolved intent (#1006): the brief this turn's compact-intent
    *  call produced, read off its `intent_compacted` event. Absent when the
    *  chain runs no compact-intent step, the call was skipped (a first turn) or
@@ -642,6 +647,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const documents = input.documents && renderDocumentsBlock(input.documents)
     const render = (c: readonly string[], s: readonly string[], r: readonly string[]): string =>
       [
+        ...(input.currentTime ? [input.currentTime, ''] : []),
         // The turn's resolved intent (#1006) heads the state: the ONE sentence
         // every part of this turn works from. Quoted as ONE JSON string so a
         // newline in it cannot start a line that reads as the state's own
@@ -850,6 +856,8 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     view: EventView,
     taken: TakenResume | undefined,
   ): Promise<PatternScope<T>> => {
+    const clock = currentClock()
+    const currentTime = clock ? formatTimeBlock(clock) : undefined
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
     // Roster-only source payloads from EVERY iteration, even after its summary
@@ -979,6 +987,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           conversation = conversationTurns(view)
           state = renderState(
             {
+              ...(currentTime ? { currentTime } : {}),
               conversation,
               ...(turnIntent ? { intent: turnIntent } : {}),
               records,
@@ -1215,6 +1224,31 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
 
       // The record as events: the controller_action / tool_result pair
       // `compactExecution`'s thread mode already reads, under THIS loop's id.
+      const budgetErrorId = iterationEvents.find(
+        (e) => e.type === 'error' && (e.data as ErrorEventData).kind === 'budget_exhausted',
+      )?.id
+      // Resume may have rebuilt the failed iteration from its child brackets.
+      // Its persisted record remains the identity to replace, including after
+      // a second pause inside the enlarged route. Never link ordinary repeats.
+      const previous = retry
+        ? [...outerCtx.events, ...scope.events].findLast(
+            (e) =>
+              e.patternId === loopId &&
+              e.type === 'tool_result' &&
+              (e.data as ToolResultEventData).tool === label &&
+              (e.data as ToolResultEventData).success === false &&
+              (e.data as ToolResultEventData).routeRecord?.iteration === iteration - 1,
+          )
+        : undefined
+      const previousBudgetError = (previous?.data as ToolResultEventData | undefined)?.routeRecord
+        ?.budgetErrorId
+      const routeRecord: NonNullable<ToolResultEventData['routeRecord']> = {
+        iteration,
+        ...(budgetErrorId ? { budgetErrorId } : {}),
+        ...(record.status === 'succeeded' && previous?.id && previousBudgetError
+          ? { supersedes: { recordId: previous.id, budgetErrorId: previousBudgetError } }
+          : {}),
+      }
       trackEvent(
         scope,
         'controller_action',
@@ -1235,12 +1269,13 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         scope,
         'tool_result',
         record.status === 'succeeded'
-          ? { tool: label, result: record.result, success: true }
+          ? { tool: label, result: record.result, success: true, routeRecord }
           : {
               tool: label,
               result: null,
               success: false,
               error: record.result || record.failure,
+              routeRecord,
             },
         resolved.trackHistory,
       )

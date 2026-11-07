@@ -102,6 +102,7 @@ import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { resolveTurnClock } from '../time-zone.server'
+import { pausedTurnClock } from '@hames-ai/harness-patterns/clock'
 import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
 import { beginSelfDeployedTurn, endSelfDeployedTurn } from '../inference/large-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
@@ -222,8 +223,8 @@ export async function runTurnAndPersist(
   req: TurnRequest,
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
-  // The turn's start instant — the one "now" every prompt and tool in this turn
-  // reads (`clock` below). Captured first, before any await.
+  // Request start for metrics and, on a new user message, the turn's clock.
+  // A resume restores the paused turn's clock below. Capture before any await.
   const startedAt = Date.now()
   // ---------------------------------------------------------------------------
   // Inference tier — the per-CONVERSATION switch, resolved ONCE per turn.
@@ -273,16 +274,6 @@ export async function runTurnAndPersist(
   // which cannot know what 'self_deployed' means, so the fail-closed gate stayed in
   // `@hames-ai/harness-baml` and the host calls it (issue #374, D1).
   assertInferenceTier(tier)
-  // The turn's clock: its start instant in the user's zone (browser, else the
-  // stored zone, else the deployment default, else UTC — `time-zone.server.ts`
-  // owns that order). ONE value per turn on the run frame, so the router, the
-  // planner, the controllers, the synthesizer, the calendar tools and the org
-  // hook's "today" all agree, including across a midnight inside the turn.
-  const { clock } = await resolveTurnClock({
-    userId,
-    browserTimeZone: req.browserTimeZone,
-    instant: startedAt,
-  })
 
   // Establish the request scope so pattern closures and app-side tools that
   // need per-conversation context at runtime (a per-conversation allowlist
@@ -343,42 +334,91 @@ export async function runTurnAndPersist(
   // derivation — that `isAttendedRequest()` below hands the run frame's `hitl`
   // slot.
   const attended = req.mode === 'interactive' || req.mode === 'resume'
-  return runWithRequestContext({ userId, sessionId, attended }, () =>
-    withRunFrame(
-      {
-        config: req.settings ?? DEFAULT_SETTINGS,
-        inference: { tier },
-        clock,
-      },
-      async () => {
-        // The header's warm indicator and the global counters both learn about
-        // this turn here — one place, so no entry point can forget. `finally`
-        // is load-bearing: a turn that throws must not leave the in-flight
-        // gauge pinned, which would show "running" forever.
-        if (tier === 'self_deployed') beginSelfDeployedTurn()
-        recordTurn(tier)
-        try {
-          // The cold-start watch is armed HERE rather than at the first
-          // self_deployed-bound call, because the thing that detects one is several
-          // layers down and takes no parameters. Only for a self_deployed-tier turn whose
-          // caller wants the notice — the SSE route is the only one that does,
-          // since it is the only entry point with a live wire to a person
-          // waiting. A turn with no watch still wakes; the ping is not a UI
-          // feature.
-          //
-          // The WAKE itself is deliberately NOT here. It used to be, and that
-          // put a routine network failure outside every `catch` that owns a
-          // conversation row — see {@link runAndSave}, which is where it moved
-          // and why.
-          const run = (): Promise<HarnessResultScoped<SessionData>> => runOneTurn(req, tier)
-          const watched = tier === 'self_deployed' && req.onWarming
-          return watched ? await runWithColdStartWatch(watched, run) : await run()
-        } finally {
-          if (tier === 'self_deployed') endSelfDeployedTurn()
-        }
-      },
-    ),
-  )
+  return runWithRequestContext({ userId, sessionId, attended }, async () => {
+    // Read the clock from the SAME owner-checked claimed blob the resume runs.
+    // Claiming first avoids a second, potentially stale session read.
+    const held = await claimTurn(req, tier)
+    // The lease is renewed for as long as this turn holds it, so a slow turn
+    // keeps its conversation and only a dead process loses it.
+    const renewal = setInterval(() => {
+      dbRenewConversationClaim(sessionId, userId, held.version).then(
+        (renewed) => {
+          if (renewed || held.released) return
+          clearInterval(renewal)
+          console.error(
+            `[turn] lost the claim on ${sessionId}: another turn took it after it lapsed, so ` +
+              'this turn will not be saved.',
+          )
+        },
+        // `%s`, not interpolation: with a second argument the first is a format
+        // string, and the session id comes from the request.
+        (err: unknown) => console.error('[turn] could not renew the claim on %s:', sessionId, err),
+      )
+    }, TURN_CLAIM_RENEW_MS)
+    renewal.unref?.()
+
+    try {
+      const clock =
+        req.mode === 'resume' && held.loaded
+          ? pausedTurnClock(deserializeContext(held.loaded.serializedContext))
+          : (
+              await resolveTurnClock({
+                userId,
+                browserTimeZone: req.browserTimeZone,
+                instant: startedAt,
+              })
+            ).clock
+      return await withRunFrame(
+        {
+          config: req.settings ?? DEFAULT_SETTINGS,
+          inference: { tier },
+          clock,
+        },
+        async () => {
+          // The header's warm indicator and the global counters both learn about
+          // this turn here — one place, so no entry point can forget. `finally`
+          // is load-bearing: a turn that throws must not leave the in-flight
+          // gauge pinned, which would show "running" forever.
+          if (tier === 'self_deployed') beginSelfDeployedTurn()
+          recordTurn(tier)
+          try {
+            // The cold-start watch is armed HERE rather than at the first
+            // self_deployed-bound call, because the thing that detects one is several
+            // layers down and takes no parameters. Only for a self_deployed-tier turn whose
+            // caller wants the notice — the SSE route is the only one that does,
+            // since it is the only entry point with a live wire to a person
+            // waiting. A turn with no watch still wakes; the ping is not a UI
+            // feature.
+            //
+            // The WAKE itself is deliberately NOT here. It used to be, and that
+            // put a routine network failure outside every `catch` that owns a
+            // conversation row — see {@link runAndSave}, which is where it moved
+            // and why.
+            const run = (): Promise<HarnessResultScoped<SessionData>> => runOneTurn(req, tier, held)
+            const watched = tier === 'self_deployed' && req.onWarming
+            return watched ? await runWithColdStartWatch(watched, run) : await run()
+          } finally {
+            if (tier === 'self_deployed') endSelfDeployedTurn()
+          }
+        },
+      )
+    } finally {
+      clearInterval(renewal)
+      // Every exit path lets go. The save released the claim in the statement
+      // that wrote the turn, and a failed run released it in `runAndSave`'s
+      // catch; what is left is a throw after the claim and before `runAndSave`
+      // took over, which must not keep the conversation for a lease.
+      if (!held.released) {
+        await dbReleaseConversationClaim(sessionId, userId, held.version).catch((err: unknown) =>
+          console.error(
+            `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+            sessionId,
+            err,
+          ),
+        )
+      }
+    }
+  })
 }
 
 /**
@@ -389,65 +429,28 @@ export async function runTurnAndPersist(
 async function runOneTurn(
   req: TurnRequest,
   tier: InferenceTier,
+  held: HeldTurn,
 ): Promise<HarnessResultScoped<SessionData>> {
-  const { sessionId, userId } = req
-  // Refused here, before anything runs, when another turn holds the row.
-  const held = await claimTurn(req, tier)
   // #553 option 1: recall, wake and settle share the persisted run-origin gate.
   const memoryAllowed =
     req.mode === 'interactive' ||
     (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
   setRequestMemoryAllowed(memoryAllowed)
-  // The lease is renewed for as long as this turn holds it, so a slow turn
-  // keeps its conversation and only a dead process loses it.
-  const renewal = setInterval(() => {
-    dbRenewConversationClaim(sessionId, userId, held.version).then(
-      (renewed) => {
-        if (renewed || held.released) return
-        clearInterval(renewal)
-        console.error(
-          `[turn] lost the claim on ${sessionId}: another turn took it after it lapsed, so ` +
-            'this turn will not be saved.',
-        )
-      },
-      // `%s`, not interpolation: with a second argument the first is a format
-      // string, and the session id comes from the request.
-      (err: unknown) => console.error('[turn] could not renew the claim on %s:', sessionId, err),
-    )
-  }, TURN_CLAIM_RENEW_MS)
-  renewal.unref?.()
 
-  let ran: {
+  const ran: {
     agentId: string
     result: HarnessResultScoped<SessionData>
     saved: SavedTurn
     memory?: MemoryConfig
     orgKnowledge?: boolean
-  }
-  try {
-    ran =
-      req.mode === 'resume'
-        ? await runResumeAndSave(req, tier, held)
-        : await (async () => {
-            const { agentId, run } = planTurn(req, held.loaded)
-            return { agentId, ...(await runAndSave(req, agentId, run, tier, held)) }
-          })()
-  } finally {
-    clearInterval(renewal)
-    // Every exit path lets go. The save released the claim in the statement
-    // that wrote the turn, and a failed run released it in `runAndSave`'s
-    // catch; what is left is a throw after the claim and before `runAndSave`
-    // took over, which must not keep the conversation for a lease.
-    if (!held.released) {
-      await dbReleaseConversationClaim(sessionId, userId, held.version).catch((err: unknown) =>
-        console.error(
-          `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
-          sessionId,
-          err,
-        ),
-      )
-    }
-  }
+  } =
+    req.mode === 'resume'
+      ? await runResumeAndSave(req, tier, held)
+      : await (async () => {
+          const { agentId, run } = planTurn(req, held.loaded)
+          return { agentId, ...(await runAndSave(req, agentId, run, tier, held)) }
+        })()
+
   const { result, saved } = ran
 
   req.onResult?.(result)
@@ -569,7 +572,7 @@ async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTur
  * What this turn runs, and under which agent — the whole mode dispatch, in one
  * place and before anything but the claim is written. Pure: the returned `run`
  * is invoked by {@link runAndSave} once the patterns exist. A throw here
- * leaves the claim to {@link runOneTurn}'s `finally`.
+ * leaves the claim to {@link runTurnAndPersist}'s `finally`.
  */
 function planTurn(
   req: ChatTurnRequest,

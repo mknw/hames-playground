@@ -25,6 +25,7 @@
  *   - drop the `{% if current_time %}` guard in `CurrentTime` → (3) fails.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
+import { formatTimeBlock } from '@hames-ai/harness-patterns/clock'
 import type {
   Attempt,
   LoopTurn,
@@ -156,6 +157,25 @@ function parts(body: unknown): Part[] {
 }
 
 describe('current_time placement', () => {
+  it.each(FUNCTIONS)(
+    '%s renders the scoped date rule on both wires',
+    async (_name, render, opts) => {
+      const block = formatTimeBlock({
+        instant: Date.parse('2026-11-04T23:30:12Z'),
+        timeZone: 'Europe/Brussels',
+      })
+      for (const wire of [ANTHROPIC, opts === THINK ? THINK : OPENAI]) {
+        const seq = parts((await render(block, wire)).body.json())
+        const time = seq.find((part) => part.text.includes('CURRENT TIME'))
+        expect(time?.text).toContain(block)
+        expect(time?.text).toContain('in the current request only')
+        expect(time?.text).toContain('explicit reference date; use that reference date instead')
+        expect(time?.text).toContain("relative dates inside them refer to the quotation's date")
+        expect(time?.text).toContain('This is not the date of documents or events.')
+      }
+    },
+  )
+
   it.each(FUNCTIONS)(
     '%s renders the block once, in a user part after every cache marker',
     async (_name, render, opts) => {

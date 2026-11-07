@@ -2289,6 +2289,22 @@ The block is fixed within the run and included in the state budget, never trimme
 A state override receives it as optional `DecisionLoopStateInput.currentTime`
 and owns its placement. With no clock the block is absent.
 
+The harness stamps `UnifiedContext.turnClock` on each new user message, so JSON
+serialization retains the full `TurnClock`, including `zoneUnknown`.
+`resumeHarness` restores that clock on the run frame before resolving answers
+and re-entering patterns, overriding any ambient resume-request clock.
+`continueSession` captures the new message's frame clock, clearing the old one
+if none is supplied. Resume expiry checks use actual wall time, not turn time.
+For older blobs without `turnClock`, core retains the host-supplied clock (or
+none). The app's `pausedTurnClock` compatibility policy uses the last
+`user_message.ts`, else `createdAt`, with `timeZone: 'UTC', zoneUnknown: true`:
+it cannot recover a historical zone from a newly changed preference. That
+compatibility clock is persisted on a subsequent pause.
+
+The shared directive resolves relative dates in the current request only,
+defers to an explicit reference date, and preserves the temporal context of
+dated quotations. It says "This is not the date of documents or events."
+
 The BAML adapters pass this same rendering to the router, compact-intent call,
 loop controller, actor, planner, critic and synthesizer (reasoning variants
 included). It renders in user-role content after stable system content and,

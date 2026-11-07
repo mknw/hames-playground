@@ -3569,3 +3569,54 @@ describe('decisionLoop — the turn’s resolved intent (#1006)', () => {
     expect(queries).toEqual(['Search the notes again, this time for the Q3 figures'])
   })
 })
+
+// Independent #1030 evidence: the documented state override seam carries
+// the same clock block as the default state, with no fresh wall-clock read.
+it('review: custom decision state receives the shared currentTime block', async () => {
+  const clock: TurnClock = {
+    instant: Date.parse('2026-11-04T23:30:12Z'),
+    timeZone: 'Europe/Brussels',
+  }
+  const d = scriptedDecide(['answer'])
+  const supplied: Array<string | undefined> = []
+  await withRunFrame({ clock }, async () => {
+    const ctx = createContext<Data>('What day is it?', {})
+    await runChain(ctx, [
+      decisionLoop(
+        { lookup: route(returning('lookup', 'done')) },
+        {
+          decide: d.decide,
+          answer: 'Answer',
+          patternId: 'custom-clock-loop',
+          state: (input) => {
+            supplied.push(input.currentTime)
+            return input.currentTime ?? 'MISSING CLOCK'
+          },
+        },
+      ),
+    ])
+  })
+  expect(supplied).toEqual([formatTimeBlock(clock)])
+  expect(d.states).toEqual([formatTimeBlock(clock)])
+})
+
+it('review: a cached decision pattern reads each new turns clock at execution', async () => {
+  const d = scriptedDecide(['answer', 'answer'])
+  const pattern = decisionLoop(
+    { lookup: route(returning('lookup', 'done')) },
+    { decide: d.decide, answer: 'Answer', patternId: 'cached-clock-loop' },
+  )
+  const clocks = [
+    { instant: Date.parse('2026-11-04T23:30:12Z'), timeZone: 'Europe/Brussels' },
+    { instant: Date.parse('2026-11-05T23:30:12Z'), timeZone: 'Europe/Brussels' },
+  ]
+  for (const clock of clocks) {
+    await withRunFrame({ clock }, async () => {
+      await runChain(createContext<Data>('What day is it?', {}), [pattern])
+    })
+  }
+  expect(d.states).toHaveLength(2)
+  clocks.forEach((clock, index) =>
+    expect(d.states[index].startsWith(formatTimeBlock(clock))).toBe(true),
+  )
+})

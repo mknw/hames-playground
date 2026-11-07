@@ -12,7 +12,36 @@
  *   - `formatTimeBlock` ignoring `zoneUnknown`: the fallback pin goes red.
  */
 import { describe, expect, it } from 'vitest'
-import { formatTimeBlock, localDate, validTimeZone, type TurnClock } from '../clock'
+import {
+  formatTimeBlock,
+  localDate,
+  pausedTurnClock,
+  validTimeZone,
+  type TurnClock,
+} from '../clock'
+
+describe('pausedTurnClock compatibility', () => {
+  it('uses the last user-message instant, with an explicitly unknown UTC zone', () => {
+    expect(
+      pausedTurnClock({
+        createdAt: 100,
+        events: [
+          { id: 'first', type: 'user_message', ts: 200, patternId: 'harness', data: {} },
+          { id: 'last', type: 'user_message', ts: 300, patternId: 'harness', data: {} },
+          { id: 'later', type: 'warning', ts: 400, patternId: 'harness', data: {} },
+        ],
+      }),
+    ).toEqual({ instant: 300, timeZone: 'UTC', zoneUnknown: true })
+  })
+
+  it('uses session creation when a legacy blob has no user message', () => {
+    expect(pausedTurnClock({ createdAt: 100, events: [] })).toEqual({
+      instant: 100,
+      timeZone: 'UTC',
+      zoneUnknown: true,
+    })
+  })
+})
 
 const at = (iso: string, timeZone: string, zoneUnknown?: boolean): TurnClock => ({
   instant: Date.parse(iso),

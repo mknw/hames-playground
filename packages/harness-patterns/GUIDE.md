@@ -233,6 +233,18 @@ new instant during the turn. BAML places it after stable system content and
 the last cache marker, preserving existing cached prefixes. Bare library runs
 with no clock omit the block. See SPEC's turn-clock contract for state overrides.
 
+The harness stores the clock in `UnifiedContext.turnClock`. `resumeHarness`
+restores it, including `zoneUnknown`, before resolving answers or running any
+patterns; a changed ambient clock cannot redate a paused turn. A new message
+through `continueSession` replaces it with that message's frame clock (or clears
+it if absent). The app resumes older blobs without a stored clock using the
+last user-message timestamp, falling back to session creation, and explicitly
+assumes an unknown UTC zone; today's preference is not a historical zone fact.
+Expiry checks still use the actual resume time. The shared prompt rule applies
+the clock to the current request only, respects an explicit reference date, and
+preserves dated quotations' own temporal context. It explicitly says this is
+not the date of documents or events.
+
 ### Protecting the web route's earlier inputs
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around

@@ -240,7 +240,7 @@ and escalate if the required values are absent. The runner does not copy or prin
 otherwise escalate. Never start another embedder.
 
 Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver
-uses a memory-only stash, a keyword retrieval backend and scripted shell effects. Live mode reads the production gateway descriptions/schemas through metadata-only MCP requests and the shipped Graph definitions; the sandbox tool mirrors the shipped shell schema/description. Missing metadata refuses execution. Every required tool has per-scenario argument predicates. It executes no generated code and makes no real Graph, Neo4j or
+uses a memory-only stash, a keyword retrieval backend and scripted shell effects. Live mode reads the production gateway descriptions/schemas through metadata-only MCP requests and the shipped Graph definitions; the sandbox tool mirrors the shipped shell schema/description, and the five sandbox file tools are the lazy office sandbox's own pre-VM descriptors (`IN_VM_TOOL_DESCRIPTORS`, held to the pinned filesystem image by the sandbox package's drift pin), which is the text production's actor reads before any VM exists. Missing metadata refuses execution. Every required tool has per-scenario argument predicates. It executes no generated code and makes no real Graph, Neo4j or
 Redis request; tool execution uses a loopback fake gateway. A running production MCP gateway is a live-mode precondition for metadata-only `listTools`; missing metadata fails before wake or spend. Artifact and markdown-index checks
 prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.

@@ -1,7 +1,8 @@
-/** Live mode reads production gateway metadata only; no gateway tool is executed. */
+/** Live mode reads production gateway metadata only (the sandbox's file tools excepted: they are
+ * production's lazy-sandbox descriptors); no gateway tool is executed. */
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
-import { sandboxFileToolsFromGateway } from '../../src/lib/eval-support/synthetic-sandbox'
+import { lazySandboxFileTools } from '../../src/lib/eval-support/synthetic-sandbox'
 
 export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDescription[]> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
@@ -62,6 +63,7 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
       additionalProperties: false,
     },
   })
-  tools.push(...sandboxFileToolsFromGateway(tools))
+  // The office sandbox is lazy: its five file tools carry production's pre-VM text.
+  tools.push(...lazySandboxFileTools())
   return tools
 }

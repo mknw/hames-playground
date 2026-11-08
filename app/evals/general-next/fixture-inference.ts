@@ -350,6 +350,14 @@ function guideAnswer(prompt: string): string {
     : `Here is what I can do. ${prompt.slice(begin, end).trim()}`
 }
 
+/** The weekday and date of a CURRENT TIME line, as a person writes them: `formatTimeBlock`
+ *  renders `Thursday, 2026-11-05T00:30:00+01:00 (Europe/Brussels)` since #1029, and the
+ *  date glued to the time is not the date token the answer check reads. */
+function dateOf(line: string): string {
+  const at = /^(\w+), (\d{4}-\d{2}-\d{2})T/.exec(line)
+  return at ? `${at[1]}, ${at[2]}` : line
+}
+
 /**
  * The scripted Synthesize of a clocked scenario (45) answers from the CURRENT TIME block it
  * was HANDED and from the tool results in the same prompt, and from nothing else — so "the
@@ -360,7 +368,7 @@ function timeAnswer(prompt: string): string {
   const at = prompt.indexOf('CURRENT TIME')
   const line = at < 0 ? undefined : prompt.slice(at).split('\n')[1]?.trim()
   return [
-    line ? `Today is ${line.replace(/,\s*\d{2}:\d{2}.*$/, '')}.` : "I don't know today's date.",
+    line ? `Today is ${dateOf(line)}.` : "I don't know today's date.",
     prompt.includes('Design review')
       ? 'This afternoon: Design review at 14:00.'
       : 'I could not read your calendar.',

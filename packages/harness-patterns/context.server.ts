@@ -146,7 +146,7 @@ export function createEvent(
  *  `rawInput`, `rawOutput` and `parsedOutput` are what the call READ and what
  *  the model said — a memory's text, a tool result, a page under screening.
  *  Cost attribution survives: the client BAML selected, usage, duration and the
- *  step's `metrics`.
+ *  step's `metrics` — and `promptChars`, the prompt's size as a count.
  *
  *  `keepOutput` is for the two records whose PROMPT renders the memory block
  *  (router, compactExecution's synthesize — review F1): the reply their
@@ -170,6 +170,7 @@ export function redactCall(
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
     ...(call.provider ? { provider: call.provider } : {}),
     ...(call.clientName ? { clientName: call.clientName } : {}),
+    ...(call.promptChars !== undefined ? { promptChars: call.promptChars } : {}),
     ...(opts.keepOutput && call.rawOutput !== undefined ? { rawOutput: call.rawOutput } : {}),
   }
 }

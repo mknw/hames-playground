@@ -7,6 +7,7 @@ export interface Check {
 import type { SpendKey } from './spend-budget'
 import type { ArgsPredicate } from './tool-arguments'
 import type { GuardTurnCounts } from './guard-report'
+import type { WriterTurnSize } from './writer-report'
 import type { ReasoningSummary } from './thinking-mode'
 import type { MemoryExpectations, MemoryScenario, MemoryTrace } from './memory-scenario'
 import type { OrgExpectations, OrgScenario, OrgTrace } from './org-scenario'
@@ -61,6 +62,17 @@ export interface ConversationScenario {
   noSandboxCommand?: { says: string; pattern: string }
   /** Per-scenario tool results that replace the driver's shared fixture for that tool. */
   toolData?: Record<string, unknown>
+  /** Documents this scenario's person uploaded before turn 1, beside the shared seed
+   *  (name → content); a `.md` one is searchable like the shared notes. */
+  uploads?: Record<string, string>
+  /** Hermetic only: the scripted controller's arguments for a tool, in place of the
+   *  fixture's generic ones, so a predicate that grades what one route handed the
+   *  next (a name the graph returned, searched for in the files) can pass. */
+  scriptedArgs?: Record<string, Record<string, unknown>>
+  /** Hermetic only: the scripted Synthesize names each of `answerIncludes` only when
+   *  the prompt it was HANDED carries it, so "the answer carries the fact" is decided
+   *  by what reached the writer (#1032), not echoed. */
+  answerFromPrompt?: boolean
   /** A FIXED turn clock for the whole scenario (the run frame's `clock` slot): the
    * instant (ISO) and the user's IANA zone. Absent = no clock, as before, so no
    * other scenario's prompts change. Graders compare against this, never the wall clock. */
@@ -117,6 +129,10 @@ export interface ConversationResult extends SpendKey {
   /** Per-turn guard counts (boundary guards slice 7), computed from the turn's
    *  own events; present whenever a trace came back. */
   guards?: GuardTurnCounts[]
+  /** Per-turn writer input size against the serving client's window, and whether
+   *  the writer fell back to compact route records (#1032); present whenever a
+   *  trace came back. */
+  writer?: WriterTurnSize[]
   /** 1-based attempt number of a graded run (#842): absent on a row that was never run
    * (gated, stopped, not run) or that failed before any attempt could be graded. */
   attempt?: number

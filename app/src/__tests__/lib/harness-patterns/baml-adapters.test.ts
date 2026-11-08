@@ -1950,3 +1950,49 @@ describe('current_time from the run frame clock', () => {
     expect(slot(mockPlanner)).toBeNull()
   })
 })
+
+// #1032: the prompt's size rides the call record as a count, so a redacted
+// record (the synthesizer's, on the saved event) still says how big the writer
+// input was. Mutation: drop `textOf(system)` in `promptCharsOf` → the Anthropic
+// case reads 5; drop the `promptChars` line in `redactCall` → the last case reads
+// undefined.
+describe('promptChars (#1032)', () => {
+  it('counts the message text and a top-level system, not the JSON around them', async () => {
+    const { extractLLMCallData, promptCharsOf } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const body = JSON.stringify({
+      model: 'm',
+      max_tokens: 4096,
+      messages: [
+        { role: 'system', content: 'abc' },
+        { role: 'user', content: [{ type: 'text', text: 'hello' }, { type: 'image' }] },
+      ],
+    })
+    const collector = { last: { rawLlmResponse: 'x', calls: [{ httpRequest: { body } }] } }
+    const result = extractLLMCallData(collector as any, 'Synthesize', {}, Date.now())
+    expect(result!.promptChars).toBe(8)
+    expect(
+      promptCharsOf(JSON.stringify({ system: [{ text: 'sys' }], messages: [{ content: 'hi' }] })),
+    ).toBe(5)
+    expect(promptCharsOf(JSON.stringify({ system: 'abcd', messages: [] }))).toBe(4)
+  })
+
+  it('is absent when the body is not a JSON chat request', async () => {
+    const { promptCharsOf } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    expect(promptCharsOf(undefined)).toBeUndefined()
+    expect(promptCharsOf('not json')).toBeUndefined()
+    expect(promptCharsOf('{"prompt":"x"}')).toBeUndefined()
+    expect(promptCharsOf('7')).toBeUndefined()
+  })
+
+  it('survives redaction, which drops everything the call read', async () => {
+    const { redactCall } = await import('@hames-ai/harness-patterns/context.server')
+    const redacted = redactCall({
+      functionName: 'Synthesize',
+      variables: { turns: ['secret'] },
+      rawInput: '{"messages":[{"content":"secret"}]}',
+      promptChars: 6,
+    })
+    expect(redacted).toEqual({ functionName: 'Synthesize', variables: {}, promptChars: 6 })
+  })
+})

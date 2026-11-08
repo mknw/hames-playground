@@ -186,11 +186,11 @@ it('wires the guards’ settings into the driver’s bag, one env read (#845 rev
   expect(run()).toMatch(/guardTurnCounts\(trace\.turns\)/)
   expect(run()).not.toContain('guardConfig()')
 })
-it('keeps 50 executable scenarios, 51 documented contracts, and an explicit proof per scenario', () => {
+it('keeps 51 executable scenarios, 52 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),
   )
-  expect(files).toHaveLength(50)
+  expect(files).toHaveLength(51)
   for (const file of files) {
     const source = read(`evals/general-next/scenarios/${file}`)
     const messages = source.slice(source.indexOf('messages:'), source.indexOf('expectedTools:'))
@@ -335,7 +335,9 @@ it('mocks the Data Stash click between turns and serves only searchable document
       driver,
     )?.[1]
   expect(beforeRun).toContain('if (turn > 0) indexForUser(next, trace)')
-  expect(driver.match(/stashSearchable\((?:name|source), UPLOADED, trace\)/g)).toHaveLength(2)
+  expect(
+    driver.match(/stashSearchable\((?:name|source), uploadedFor\(scenario\), trace\)/g),
+  ).toHaveLength(2)
   expect(driver).not.toMatch(/endsWith\('\.md'\)/)
 })
 // The same ruling, per scenario (PM addition, 2026-10-28): every runnable scenario that

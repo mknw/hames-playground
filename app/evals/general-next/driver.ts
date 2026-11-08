@@ -42,6 +42,9 @@ const UPLOADS = new Map([
   ['lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n'],
 ])
 const UPLOADED: ReadonlySet<string> = new Set(UPLOADS.keys())
+/** The shared uploads plus a scenario's own (#1032's 48 brings a document of its own). */
+const uploadedFor = (scenario: ConversationScenario | undefined): ReadonlySet<string> =>
+  scenario?.uploads ? new Set([...UPLOADED, ...Object.keys(scenario.uploads)]) : UPLOADED
 // 07-follow-up-success (owner option 2, rebuilt per the owner's shape-probe directive; the
 // people fixture is TASK Q, #808): the per-entity structure is DERIVED from a read-only
 // shape probe of the dev graph — labels, relationship types, property vocabulary, the
@@ -325,6 +328,9 @@ export async function createDriver(
       // including a degree-aggregation few-shot crib, whose shape must never be answered
       // with the count row — on the triples, which is also where the WORKS_ON data the
       // follow-up ranks and reads lives.
+      // A scenario's own graph rows replace the argument-aware fixture below (#1032's 48).
+      if (name === 'read_neo4j_cypher' && scenario?.toolData?.read_neo4j_cypher !== undefined)
+        return { success: true, data: scenario.toolData.read_neo4j_cypher }
       if (name === 'read_neo4j_cypher') {
         const query = typeof args.query === 'string' ? args.query : ''
         const noTraversal = !/-\[|\]-|--/.test(query)
@@ -409,7 +415,7 @@ export async function createDriver(
         mimeType: name.endsWith('.csv') ? 'text/csv' : 'text/markdown',
         size: content.length,
         uploadedAt: index,
-        searchable: stashSearchable(name, UPLOADED, trace),
+        searchable: stashSearchable(name, uploadedFor(scenario), trace),
       })),
     }),
     quoteMemoriesToDecider: privateDecisionRun,
@@ -420,7 +426,7 @@ export async function createDriver(
       type: 'keyword',
       search: async () =>
         [...documents]
-          .filter(([source]) => stashSearchable(source, UPLOADED, trace))
+          .filter(([source]) => stashSearchable(source, uploadedFor(scenario), trace))
           .map(([source, content]) => {
             trace.retrievals.push({ source, turn })
             return {
@@ -470,6 +476,7 @@ export async function createDriver(
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()
       for (const [name, content] of UPLOADS) documents.set(name, content)
+      for (const [name, content] of Object.entries(next.uploads ?? {})) documents.set(name, content)
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame(
         {

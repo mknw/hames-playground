@@ -3036,6 +3036,72 @@
       "notes": "Built for #1006 (rv-1011 term 2: the retriever leg). Hermetic: the scripted brief proves the resolved intent reaches the retriever as its query, not that a model resolves the back-reference — that is the live run's claim. Red on today's main: no intent_compacted event exists, so the resolved-intent checks fail."
     },
     {
+      "id": "48-person-files-document",
+      "title": "A person from the graph, their files, then the document they point to",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval", "office-data", "read-documents"],
+        "sources": ["knowledge-graph", "m365-files", "uploads"],
+        "intents": ["find-person", "lookup-fact"],
+        "turnShape": "single",
+        "toolShape": "several-routes",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "long-document"
+      },
+      "turns": [
+        "Who is the rollout lead for Project Lantern in the knowledge graph? Search my OneDrive for files from that person, then read the rollout plan among them in my uploaded documents and tell me its go-live date and budget owner."
+      ],
+      "expected": "Each route's result feeds the next: the graph names Ines Varga, the office route searches the files by that name and finds lantern-rollout-plan.md, and the documents route reads the plan. The answer names the person, the file, the go-live date 2031-02-17 and the budget owner Tomas Reyes — the last two sit past the first 200 characters of the plan, where the compact route record's excerpt stops (#1032).",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools",
+          "tools": ["read_neo4j_cypher", "graph_files_search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: a graph query",
+          "tool": "read_neo4j_cypher"
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the files are searched by the person the graph returned",
+          "tool": "graph_files_search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes",
+          "facts": ["Ines Varga", "lantern-rollout-plan.md", "2031-02-17", "Tomas Reyes"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes",
+          "routes": ["info-retrieval", "office-data", "read-documents"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the scenario's own graph row (Ines Varga, rollout lead of Lantern), files search result and uploaded lantern-rollout-plan.md (module toolData and uploads)",
+        "hermetic only: the scripted controller searches the files by the person's name (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
+      ],
+      "cells": [
+        ["find-person", "knowledge-graph"],
+        ["lookup-fact", "m365-files"],
+        ["lookup-fact", "uploads"]
+      ],
+      "notes": "Built for #1032. Hermetic: the scripted Synthesize answers from its prompt, so the answer check decides whether the plan's go-live date and budget owner reached the writer; on the compact route records they do not (the documents route's record keeps a 200-character excerpt per hit), and on the writer's trace evidence they do. Live: also whether a model carries the person from the graph into the files search and on to the plan."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",

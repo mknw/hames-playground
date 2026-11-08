@@ -2586,6 +2586,12 @@ export interface LLMCallData {
   promptTemplate?: string
   /** Rendered prompt / HTTP request body */
   rawInput?: string
+  /** Characters of the rendered prompt the selected request sent: the text of
+   *  its messages (and a top-level `system`), not the JSON around them. A
+   *  count, never content, so a redacted record keeps it — it is how an eval
+   *  reports a prompt's size once `rawInput` is gone (#1032). Absent when the
+   *  request body could not be read. */
+  promptChars?: number
   /** Raw LLM response string before parsing */
   rawOutput?: string
   /** Structured output after BAML parsing */

@@ -50,6 +50,19 @@ report and any later re-derivation from a capture agree. A growing `decideDown`
 count is an egress gate quietly degraded to the roster alone; that visibility is
 the number the guard redesign exists to move.
 
+Every graded row also carries `writer` (#1032): one entry per turn with the answer
+writer's input size — `chars` (the rendered `Synthesize` prompt, from the call record's
+`promptChars`, which the redaction keeps), `estimatedTokens` (`chars / 4`, the estimate
+the writer's own trim works with) and `providerInputTokens` (the provider's own count) —
+against `contextWindow`, the window of the client that served the call, as `windowShare`;
+and `fallbackFired` / `fallbackRouteCalls`, set when the writer could not fit each route's
+complete trace and fell back to compact route records (`decisionLoop`'s `writer_evidence`
+warning). The report's top-level `writer` summarises the run: the largest input, its share
+of the window and how many turns fell back. Computed from the turn's own events
+(`src/lib/eval-support/writer-report.ts`), so a capture re-derives the same numbers; a turn
+that wrote no answer reads `null`, never 0. Hermetic sizes are the scripted run's prompts,
+real in size but not in content; the live run is the measurement.
+
 The observer prices completed calls, so the final in-flight call can overshoot the
 80% threshold and even the configured cap. The report adds a separate conservative
 private-infrastructure line: elapsed scenario seconds (including setup and endpoint

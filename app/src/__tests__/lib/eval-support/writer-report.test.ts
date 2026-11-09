@@ -122,6 +122,21 @@ describe('writerTurnSize', () => {
     })
     // A record without the count (an older blob) is unmeasured, never 0.
     expect(writerTurnSize(1, [answer(undefined)], windows).chars).toBeNull()
+    // The final answer's record, wherever it sits: a non-final assistant
+    // message after it (a status emit) is not the writer's call.
+    // MUTATION: read the first assistant_message, or drop the `final` filter
+    // (rv-1033's two forms) → chars reads null.
+    expect(
+      writerTurnSize(
+        1,
+        [
+          event('assistant_message', { content: 'Let me look', final: false }),
+          answer(1_234),
+          event('assistant_message', { content: 'Saved for later?', final: false }),
+        ],
+        windows,
+      ).chars,
+    ).toBe(1_234)
   })
 })
 

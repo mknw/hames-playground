@@ -694,7 +694,7 @@ Expected assistant: Today is Thursday 2026-11-05, and the afternoon has the 14:0
 
 Expected routes: `office-data`. Expected tools: `graph_calendar_today` with `day_offset` absent or 0.
 
-Pass: all listed tools occur successfully in order; candidate only: the route completes before its turn's `answer`; the final answer carries 2026-11-05, Thursday and Design review, and never the UTC date 2026-11-04; within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order; candidate only: the route completes before its turn's `answer`; the final answer carries the local date (2026-11-05, or written out in words as "November 5, 2026"), Thursday and Design review, and never the UTC date 2026-11-04; within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
 A live pass proves: the model states the user's local date and weekday, which only the CURRENT TIME block holds, rather than the UTC date, a date from its training or one copied from a tool result. It does not prove a no-tool date question is answered: `general-next` routes through the decision loop, whose step gets no clock. Hermetically the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves only that the turn clock reaches synthesis in the user's zone.
 
@@ -727,6 +727,22 @@ Expected routes: `read-documents`. Expected tools: no required external tool.
 Pass: candidate only: the route completes before its turn's `answer`; the final answer carries the hosting overspend; within 6 decisions per turn; and — turn 2 only — the resolved intent (`intentExpect`, `retriever` set) is recorded and names the document and the fact, the decide state's `Resolved intent (this turn)` heading quotes it, and the retriever's recorded query IS that brief.
 
 A hermetic pass proves the wiring: the scripted brief reaches the retriever as its query because `decisionLoop` threads `data.intent` and the retriever treats a handed intent as the query (#1006). Red on today's main: no `intent_compacted` event exists. A live pass proves the model's resolved intent replaces the raw back-reference as the search query on a real follow-up.
+
+### 48-person-files-document — A person from the graph, then the files that person shared with me, with links
+
+**RUNNABLE NOW · should** · candidate only (no recorded `general` baseline) · #1032
+
+User: “Who leads the Lantern rollout according to the knowledge graph? Find the documents that person shared with me and give me their links.”
+
+Expected assistant: Ines Varga leads the rollout. She shared lantern-rollout-plan.docx and lantern-wave-schedule.xlsx with you, each with its link; nothing anyone else shared is named.
+
+Expected routes: `info-retrieval` (the person) and `office-data` (what she shared), in whichever order. Expected tools: `graph_files_shared`, unfiltered or filtered to the person the graph returned.
+
+Fixtures (synthetic): one graph row (Ines Varga, her address, rollout lead of Lantern) and an eleven-item "shared with me" list in the real `graph_files_shared` shape, each item with its link. The driver applies the real tool's `shared_by` filter. Two of the items are hers. One item someone else shared is titled lantern-rollout-plan-draft.docx.
+
+Pass: the shared-files list is read; candidate only: both routes complete before the turn's `answer`; the final answer carries the person, each of her two files and its link, and none of the nine files anyone else shared (lantern-rollout-plan-draft.docx among them); within 6 decisions per turn.
+
+The person exists only in the graph and her shares only behind the office route, so the answer needs both routes, though not in a fixed order. Read unfiltered, her files sit past the first 2 000 characters of the list, where the office route's compact record stops. A hermetic pass proves the files and links reached the answer writer: the scripted Synthesize names each one only when its prompt carries it (`answerFromPrompt`). A live pass proves, in addition, that a model carries the person from the graph to the shared list and names only her files. A second turn asking for a file's contents would need `graph_file_ingest`, which this driver gates (P4), so it is not part of the row (redesigned on the coordinator's scenario ruling, #1032).
 
 ### tn35-remember-preference — Never claim to remember across conversations
 
@@ -835,18 +851,18 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 
 | dimension       | value                | existing | proposed + | proposed − |
 | --------------- | -------------------- | -------- | ---------- | ---------- |
-| routes          | `office-data`        | 11       | 44         | 14         |
-| routes          | `info-retrieval`     | 8        | 24         | 11         |
+| routes          | `office-data`        | 12       | 44         | 14         |
+| routes          | `info-retrieval`     | 9        | 24         | 11         |
 | routes          | `read-documents`     | 7        | 11         | 6          |
 | routes          | `think`              | **0**    | 0          | 0          |
 | routes          | `answer`             | 30       | 28         | 30         |
-| sources         | `knowledge-graph`    | 17       | 28         | 15         |
+| sources         | `knowledge-graph`    | 18       | 28         | 15         |
 | sources         | `web`                | 2        | 12         | 10         |
 | sources         | `library-docs`       | 1        | 1          | 0          |
 | sources         | `uploads`            | 8        | 23         | 8          |
 | sources         | `mail`               | 3        | 11         | 12         |
 | sources         | `calendar`           | 1        | 8          | 5          |
-| sources         | `m365-files`         | 3        | 8          | 5          |
+| sources         | `m365-files`         | 4        | 8          | 5          |
 | sources         | `m365-profile`       | **0**    | 2          | 1          |
 | sources         | `conversation`       | 1        | 14         | 2          |
 | sources         | `app-database`       | 1        | 0          | 1          |
@@ -854,22 +870,22 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | sources         | `pasted-text`        | **0**    | 10         | 0          |
 | sources         | `unreachable-system` | **0**    | 0          | 4          |
 | sources         | `none`               | 2        | 5          | 5          |
-| turnShape       | `single`             | 39       | 81         | 52         |
+| turnShape       | `single`             | 40       | 81         | 52         |
 | turnShape       | `follow-up`          | 10       | 14         | 3          |
 | turnShape       | `failure-recovery`   | 1        | 1          | 1          |
 | turnShape       | `multi-turn`         | 1        | 3          | 0          |
 | toolShape       | `none`               | 30       | 27         | 29         |
 | toolShape       | `one`                | 12       | 55         | 16         |
 | toolShape       | `several`            | 4        | 10         | 8          |
-| toolShape       | `several-routes`     | 5        | 7          | 3          |
-| output          | `answer`             | 41       | 89         | 34         |
+| toolShape       | `several-routes`     | 6        | 7          | 3          |
+| output          | `answer`             | 42       | 89         | 34         |
 | output          | `citation`           | 7        | 15         | 4          |
 | output          | `created-file`       | 8        | 11         | 1          |
 | output          | `refusal`            | 3        | 0          | 23         |
 | output          | `clarification`      | **0**    | 1          | 1          |
-| tier            | `self_deployed`      | 51       | 99         | 56         |
+| tier            | `self_deployed`      | 52       | 99         | 56         |
 | tier            | `anthropic`          | **0**    | 0          | 0          |
-| guardPaths      | `none`               | 36       | 92         | 21         |
+| guardPaths      | `none`               | 37       | 92         | 21         |
 | guardPaths      | `structural-absence` | 14       | 0          | 17         |
 | guardPaths      | `ingress-finding`    | **0**    | 0          | 11         |
 | guardPaths      | `ingress-clean`      | **0**    | 3          | 0          |
@@ -877,8 +893,8 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | guardPaths      | `fetch-address-rule` | 1        | 2          | 1          |
 | guardPaths      | `unattended-default` | **0**    | 0          | 11         |
 | guardPaths      | `hitl-prompt`        | **0**    | 0          | 0          |
-| intents         | `lookup-fact`        | 12       | 22         | 15         |
-| intents         | `find-person`        | **0**    | 7          | 7          |
+| intents         | `lookup-fact`        | 13       | 22         | 15         |
+| intents         | `find-person`        | 1        | 7          | 7          |
 | intents         | `triage`             | **0**    | 6          | 3          |
 | intents         | `prepare`            | **0**    | 1          | 0          |
 | intents         | `summarise`          | 4        | 7          | 5          |
@@ -894,11 +910,11 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | intents         | `meta`               | 14       | 4          | 0          |
 | intents         | `repair`             | 1        | 5          | 0          |
 | intents         | `act-on-system`      | 12       | 14         | 20         |
-| languages       | `en`                 | 51       | 97         | 55         |
+| languages       | `en`                 | 52       | 97         | 55         |
 | languages       | `nl`                 | 1        | 5          | 1          |
 | languages       | `fr`                 | 1        | 5          | 0          |
 | languages       | `cross-language`     | **0**    | 3          | 0          |
-| timeExpressions | `none`               | 45       | 72         | 41         |
+| timeExpressions | `none`               | 46       | 72         | 41         |
 | timeExpressions | `relative-day`       | 1        | 7          | 6          |
 | timeExpressions | `relative-week`      | 2        | 7          | 2          |
 | timeExpressions | `period`             | 1        | 3          | 2          |
@@ -906,7 +922,7 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | timeExpressions | `vague`              | **0**    | 3          | 3          |
 | timeExpressions | `time-zone`          | 1        | 1          | 0          |
 | scale           | `small`              | 51       | 94         | 53         |
-| scale           | `many-results`       | **0**    | 1          | 2          |
+| scale           | `many-results`       | 1        | 1          | 2          |
 | scale           | `paginated`          | **0**    | 1          | 1          |
 | scale           | `long-document`      | **0**    | 2          | 0          |
 | scale           | `large-table`        | **0**    | 1          | 0          |
@@ -917,8 +933,8 @@ The number of scenarios exercising each cell (their `cells` pairs); `–` not me
 
 | Intent               | `knowledge-graph` | `web` | `library-docs` | `uploads` | `mail` | `calendar` | `m365-files` | `m365-profile` | `conversation` | `app-database` | `user-memory` | `pasted-text` | `unreachable-system` | `none` |
 | -------------------- | ----------------- | ----- | -------------- | --------- | ------ | ---------- | ------------ | -------------- | -------------- | -------------- | ------------- | ------------- | -------------------- | ------ |
-| `lookup-fact`        | 11                | 1     | 1              | 10        | 5      | 7          | 4            | 1              | =              | 1              | 4             | –             | 3                    | 1      |
-| `find-person`        | 5                 | 5     | –              | 2         | 2      | 1          | 2            | 1              | 1              | 1              | d             | –             | =                    | –      |
+| `lookup-fact`        | 11                | 1     | 1              | 10        | 5      | 7          | 5            | 1              | =              | 1              | 4             | –             | 3                    | 1      |
+| `find-person`        | 6                 | 5     | –              | 2         | 2      | 1          | 2            | 1              | 1              | 1              | d             | –             | =                    | –      |
 | `triage`             | –                 | –     | –              | –         | 3      | 1          | 4            | –              | –              | =              | d             | –             | 1                    | –      |
 | `prepare`            | 1                 | d     | –              | =         | 1      | 1          | 1            | –              | =              | =              | d             | –             | =                    | –      |
 | `summarise`          | =                 | 2     | =              | 6         | 4      | =          | 2            | –              | 1              | =              | 1             | 1             | =                    | –      |
@@ -1018,6 +1034,7 @@ Positive and negative cases per tool, derived the way the validator derives them
 | `45-today-calendar-afternoon`           | +    | should   | existing | office       | calendar                                    | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | relative-day, time-zone | small         |
 | `46-retry-different-target`             | +    | should   | existing | office       | uploads                                     | lookup-fact                                      | follow-up        | one            | answer                         | none                                   | en                     | none                    | small         |
 | `47-follow-up-documents-query`          | +    | should   | existing | docs         | uploads                                     | lookup-fact                                      | follow-up        | one            | answer                         | none                                   | en                     | none                    | small         |
+| `48-person-files-document`              | +    | should   | existing | info, office | knowledge-graph, m365-files                 | find-person, lookup-fact                         | single           | several-routes | answer                         | none                                   | en                     | none                    | many-results  |
 | `p01-calendar-today`                    | +    | should   | proposed | office       | calendar                                    | triage, find-person                              | single           | one            | answer                         | none                                   | en                     | relative-day            | small         |
 | `p02-profile-title`                     | +    | should   | proposed | office       | m365-profile                                | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | none                    | small         |
 | `p03-mail-attachments-list`             | +    | should   | proposed | office       | mail                                        | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | none                    | small         |

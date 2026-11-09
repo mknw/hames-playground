@@ -169,6 +169,7 @@ export type {
   CompactExecutionMode,
   CompactExecutionInput,
   SynthesisFn,
+  SynthesisResult,
   CompactExecutionData,
   LoopHistory,
   LoopIteration,

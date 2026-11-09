@@ -50,6 +50,7 @@ import type {
 } from '@hames-ai/harness-patterns'
 import type { SandboxAttach } from '@hames-ai/agents'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
+import { IN_VM_TOOL_DESCRIPTORS } from '@hames-ai/sandbox/in-vm-tools'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
 import type { ConversationScenario, ConversationTrace } from './conversation'
 
@@ -104,16 +105,21 @@ export const SANDBOX_FILE_TOOLS: MCPToolDescription[] = [
   },
 ]
 
-/** Live mode: the sandbox's file tools ARE the gateway's rust-mcp-filesystem entries, renamed by
- * V0_IN_VM_SERVERS. Derived, never restated, so the description is the server's own text; an
- * entry the gateway does not list is an error, not a stand-in. */
-export function sandboxFileToolsFromGateway(gateway: MCPToolDescription[]): MCPToolDescription[] {
-  return V0_IN_VM_SERVERS.flatMap((server) => Object.entries(server.tools))
-    .filter(([, exposed]) => exposed !== 'sandbox_bash')
-    .map(([native, exposed]) => {
-      const tool = gateway.find((t) => t.name === native)
-      if (!tool) throw new Error(`Production tool metadata missing: ${native} (${exposed})`)
-      return { ...tool, name: exposed }
+/** Live mode: the sandbox's five file tools as production's LAZY office sandbox advertises them
+ * before any VM exists — `IN_VM_TOOL_DESCRIPTORS` (`@hames-ai/sandbox/in-vm-tools`), which
+ * restates the pinned rust-mcp-filesystem image's own descriptors under their `sandbox_` names and
+ * is held equal to that image by the sandbox package's drift pin. general-next's office sandbox
+ * is `lazy`, so this is the text its actor's prompt carries; the gateway does not have to serve the
+ * filesystem server for the eval to read it (#1032, coordinator ruling: production's own text,
+ * neither the gateway's entries nor the hermetic stand-ins). A name the registry exposes and the
+ * table lacks is an error, not a stand-in. */
+export function lazySandboxFileTools(): MCPToolDescription[] {
+  return V0_IN_VM_SERVERS.flatMap((server) => Object.values(server.tools))
+    .filter((exposed) => exposed !== 'sandbox_bash')
+    .map((exposed) => {
+      const tool = IN_VM_TOOL_DESCRIPTORS.find((t) => t.name === exposed)
+      if (!tool) throw new Error(`In-VM tool descriptor missing: ${exposed}`)
+      return { ...tool }
     })
 }
 

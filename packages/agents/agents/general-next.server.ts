@@ -459,7 +459,7 @@ async function createPatterns(
               (deps.graphFileIngest === true
                 ? ', including files office-data copied in with graph_file_ingest,'
                 : '') +
-              ' and return cited excerpts.\n' +
+              ' and return cited excerpts; it cannot see OneDrive, SharePoint or what someone shared with the user, which office-data finds.\n' +
               'Tools: document retriever (Data Stash search, cited passages).',
             capability: 'Search this conversation’s Data Stash and return cited excerpts.',
           },
@@ -477,7 +477,7 @@ async function createPatterns(
         {
           decide: createDecideAdapter(),
           question:
-            'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools. When a request needs routes working together (one route’s result is another’s input), choose think first.',
+            'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata, and the files someone shared with the user, belong to Microsoft 365 tools (office-data); read-documents searches only this conversation’s uploads. When a request needs routes working together (one route’s result is another’s input), choose think first.',
           answer:
             "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",
           handoff: { lastN: 2 },
@@ -486,6 +486,9 @@ async function createPatterns(
           liveEvents: true,
           documents: deps.createDecisionDocuments?.(sessionId),
           quoteMemories: deps.quoteMemoriesToDecider,
+          // The answer writer reads each route call's complete trace this turn,
+          // not its capped record (#1032); the decisions model keeps the records.
+          writerEvidence: 'trace',
         },
       ),
     ),

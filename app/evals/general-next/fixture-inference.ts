@@ -154,27 +154,29 @@ export async function fixtureInference() {
               reasoning: 'Synthetic controller',
               tool_name: name ?? 'Return',
               tool_args: JSON.stringify(
-                name === 'sandbox_bash'
-                  ? {
-                      command: `python3 -c "# lantern-notes.md lantern-sales.csv ${scenario.artifacts.join(' ')}"`,
-                    }
-                  : name === 'graph_calendar_today'
-                    ? { day_offset: 0 }
-                    : name === 'graph_files_search'
-                      ? { query: 'budget summaries budget forecasts' }
-                      : name?.startsWith('graph_')
-                        ? { limit: 10 }
-                        : {
-                            query:
-                              name === 'read_neo4j_cypher'
-                                ? 'MATCH (p:Project) RETURN count(p) AS count'
-                                : 'Next.js release notes',
-                            url: 'https://nextjs.org/blog/next-15-5',
-                            // A message that names a page is read at that page (28's fetch).
-                            ...(given ? { url: given } : {}),
-                            libraryName: 'solid-js',
-                            context7CompatibleLibraryID: '/solidjs/solid',
-                          },
+                name && scenario.scriptedArgs?.[name]
+                  ? scenario.scriptedArgs[name]
+                  : name === 'sandbox_bash'
+                    ? {
+                        command: `python3 -c "# lantern-notes.md lantern-sales.csv ${scenario.artifacts.join(' ')}"`,
+                      }
+                    : name === 'graph_calendar_today'
+                      ? { day_offset: 0 }
+                      : name === 'graph_files_search'
+                        ? { query: 'budget summaries budget forecasts' }
+                        : name?.startsWith('graph_')
+                          ? { limit: 10 }
+                          : {
+                              query:
+                                name === 'read_neo4j_cypher'
+                                  ? 'MATCH (p:Project) RETURN count(p) AS count'
+                                  : 'Next.js release notes',
+                              url: 'https://nextjs.org/blog/next-15-5',
+                              // A message that names a page is read at that page (28's fetch).
+                              ...(given ? { url: given } : {}),
+                              libraryName: 'solid-js',
+                              context7CompatibleLibraryID: '/solidjs/solid',
+                            },
               ),
               // The actor cannot exit actorCritic itself: is_final only summons the critic,
               // which is the exit authority, so the actor sets it on its LAST scripted tool.
@@ -192,13 +194,18 @@ export async function fixtureInference() {
           case 'Synthesize':
             result = scenario.memory
               ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
-              : scenario.guideAnswer
-                ? guideAnswer(prompt)
-                : scenario.clock
-                  ? timeAnswer(prompt)
-                  : scenario.failFirstTurn && turnIndex === 0
-                    ? 'The lookup failed: synthetic service unavailable. No count is known.'
-                    : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
+              : scenario.answerFromPrompt
+                ? evidenceAnswer(
+                    prompt,
+                    scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes,
+                  )
+                : scenario.guideAnswer
+                  ? guideAnswer(prompt)
+                  : scenario.clock
+                    ? timeAnswer(prompt)
+                    : scenario.failFirstTurn && turnIndex === 0
+                      ? 'The lookup failed: synthetic service unavailable. No count is known.'
+                      : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
             result = scenario.messages.at(-1)
@@ -343,6 +350,14 @@ function guideAnswer(prompt: string): string {
     : `Here is what I can do. ${prompt.slice(begin, end).trim()}`
 }
 
+/** The weekday and date of a CURRENT TIME line, as a person writes them: `formatTimeBlock`
+ *  renders `Thursday, 2026-11-05T00:30:00+01:00 (Europe/Brussels)` since #1029, and the
+ *  date glued to the time is not the date token the answer check reads. */
+function dateOf(line: string): string {
+  const at = /^(\w+), (\d{4}-\d{2}-\d{2})T/.exec(line)
+  return at ? `${at[1]}, ${at[2]}` : line
+}
+
 /**
  * The scripted Synthesize of a clocked scenario (45) answers from the CURRENT TIME block it
  * was HANDED and from the tool results in the same prompt, and from nothing else — so "the
@@ -353,9 +368,26 @@ function timeAnswer(prompt: string): string {
   const at = prompt.indexOf('CURRENT TIME')
   const line = at < 0 ? undefined : prompt.slice(at).split('\n')[1]?.trim()
   return [
-    line ? `Today is ${line.replace(/,\s*\d{2}:\d{2}.*$/, '')}.` : "I don't know today's date.",
+    line ? `Today is ${dateOf(line)}.` : "I don't know today's date.",
     prompt.includes('Design review')
       ? 'This afternoon: Design review at 14:00.'
       : 'I could not read your calendar.',
   ].join(' ')
+}
+
+/**
+ * The scripted Synthesize of an evidence scenario (#1032's 48) names each expected fact
+ * only when the prompt it was HANDED carries it, and says which it could not find — so
+ * "the answer carries her files and their links" is decided by whether the route that
+ * read them got them to the writer, not echoed from the scenario.
+ */
+function evidenceAnswer(prompt: string, facts: readonly string[]): string {
+  const found = facts.filter((f) => prompt.includes(f))
+  const missing = facts.filter((f) => !prompt.includes(f))
+  return [
+    found.length ? `From the results: ${found.join('; ')}.` : 'The results name none of it.',
+    missing.length ? `Not found in the results: ${missing.length} item(s).` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 }

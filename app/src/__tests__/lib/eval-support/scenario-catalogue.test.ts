@@ -1042,9 +1042,9 @@ describe('general-next scenario catalogue', () => {
     expect(validate(catalogue(), scenariosMd, moduleIds)).toEqual([])
   })
 
-  it('reads the 51 implemented scenarios from SCENARIOS.md, not zero', () => {
+  it('reads the 52 implemented scenarios from SCENARIOS.md, not zero', () => {
     // Guards the parser: an empty heading match would make the cross-check vacuous.
-    expect(existingIds(scenariosMd)).toHaveLength(51)
+    expect(existingIds(scenariosMd)).toHaveLength(52)
     expect(existingIds(scenariosMd)).toContain('tn58-other-owner-memory')
     expect(moduleIds.length).toBeGreaterThanOrEqual(34)
   })

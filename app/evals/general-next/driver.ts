@@ -243,6 +243,9 @@ const NAMESPACES: Record<string, string> = {
   // #1006 scenario 46: the office route's file finder, served by the shared
   // fixture result like every other graph read here.
   graph_files_search: 'graph',
+  // #1032 scenario 48: what a person shared with the user. Owned by the synthetic
+  // transport with NO shared fixture: the row brings its own items in `toolData`.
+  graph_files_shared: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
   sandbox_read: 'sandbox',
@@ -325,6 +328,9 @@ export async function createDriver(
       // including a degree-aggregation few-shot crib, whose shape must never be answered
       // with the count row — on the triples, which is also where the WORKS_ON data the
       // follow-up ranks and reads lives.
+      // A scenario's own graph rows replace the argument-aware fixture below (#1032's 48).
+      if (name === 'read_neo4j_cypher' && scenario?.toolData?.read_neo4j_cypher !== undefined)
+        return { success: true, data: scenario.toolData.read_neo4j_cypher }
       if (name === 'read_neo4j_cypher') {
         const query = typeof args.query === 'string' ? args.query : ''
         const noTraversal = !/-\[|\]-|--/.test(query)
@@ -343,6 +349,19 @@ export async function createDriver(
         }
       }
       const data = scenario?.toolData?.[name] ?? FIXTURES[name]
+      // The real tool's `shared_by` filter (graph-tools.server.ts, graph_files_shared):
+      // a case-insensitive substring of the sharer's display name.
+      if (name === 'graph_files_shared' && typeof args.shared_by === 'string') {
+        const needle = args.shared_by.toLowerCase()
+        const items = (data as { items?: Array<{ shared_by?: string | null }> } | undefined)?.items
+        if (Array.isArray(items))
+          return {
+            success: true,
+            data: {
+              items: items.filter((i) => (i.shared_by ?? '').toLowerCase().includes(needle)),
+            },
+          }
+      }
       // A canned page reads as the production fetch server returns one (03, #775).
       if (name === 'fetch' && typeof data === 'string')
         return { success: true, data: fetchEnvelope(data, args) }

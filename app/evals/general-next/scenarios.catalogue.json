@@ -2894,8 +2894,28 @@
         },
         {
           "check": "answerContains",
-          "says": "module answerIncludes: the LOCAL date, its weekday and the afternoon event",
-          "facts": ["2026-11-05", "Thursday", "Design review"]
+          "says": "module answerIncludes: the weekday and the afternoon event",
+          "facts": ["Thursday", "Design review"]
+        },
+        {
+          "check": "answerMatches",
+          "says": "the LOCAL date, as 2026-11-05 or written out in words",
+          "pattern": "2026-11-05|november\\s+5(?:th)?,?\\s+2026|\\b5(?:th)?\\s+(?:of\\s+)?november,?\\s+2026",
+          "examples": {
+            "match": [
+              "Today is Thursday, 2026-11-05.",
+              "Today is **Thursday, November 5, 2026**.",
+              "Thursday 5 November 2026",
+              "Thursday, the 5th of November, 2026"
+            ],
+            "noMatch": [
+              "Today is Wednesday, November 4, 2026.",
+              "2026-11-04",
+              "November 15, 2026",
+              "15 November 2026",
+              "the 25th of November, 2026"
+            ]
+          }
         },
         {
           "check": "answerExcludes",
@@ -2917,7 +2937,7 @@
         "fixed turn clock: 2026-11-04T23:30:00Z in Europe/Brussels (module `clock`, the run frame's clock slot)",
         "graph_calendar_today, the row's own toolData → {\"events\": [{\"subject\": \"Standup\", \"start\": \"09:30\"}, {\"subject\": \"Design review\", \"start\": \"14:00\"}]}: no `day`, no `timeZone`"
       ],
-      "notes": "Hermetic: the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves the clock reaches synthesis. Live: the calendar result carries no date or zone, so an answer with 2026-11-05 and Thursday shows the model took the date from the turn clock rather than from a tool result; it does not show a no-tool date question is answered (the decision loop's routing step gets no clock)."
+      "notes": "Hermetic: the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves the clock reaches synthesis. Live: the calendar result carries no date or zone, so an answer with 2026-11-05 and Thursday shows the model took the date from the turn clock rather than from a tool result; it does not show a no-tool date question is answered (the decision loop's routing step gets no clock). The date check accepts the date written out in words as well as 2026-11-05 (#1032 eval change: the live model writes \"Thursday, November 5, 2026\", the same correct answer)."
     },
     {
       "id": "46-retry-different-target",
@@ -3034,6 +3054,87 @@
         "the hermetic CompactIntent answer scripts the turn-2 resolved brief (module intentExpect.brief)"
       ],
       "notes": "Built for #1006 (rv-1011 term 2: the retriever leg). Hermetic: the scripted brief proves the resolved intent reaches the retriever as its query, not that a model resolves the back-reference — that is the live run's claim. Red on today's main: no intent_compacted event exists, so the resolved-intent checks fail."
+    },
+    {
+      "id": "48-person-files-document",
+      "title": "A person from the graph, then the files that person shared with me, with links",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval", "office-data"],
+        "sources": ["knowledge-graph", "m365-files"],
+        "intents": ["find-person", "lookup-fact"],
+        "turnShape": "single",
+        "toolShape": "several-routes",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "many-results"
+      },
+      "turns": [
+        "Who leads the Lantern rollout according to the knowledge graph? Find the documents that person shared with me and give me their links."
+      ],
+      "expected": "The graph names the rollout lead, Ines Varga; the office route lists what was shared with the user and finds her two files. The answer names lantern-rollout-plan.docx and lantern-wave-schedule.xlsx with their links, and no file anyone else shared, although one of them is titled lantern-rollout-plan-draft.docx (#1032, redesigned on the coordinator's ruling: find a person, then what they shared with me, with the link).",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools: the shared-files list is read",
+          "tools": ["graph_files_shared"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: unfiltered, or filtered to the person the graph returned",
+          "tool": "graph_files_shared"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes: the person, each of her files and its link",
+          "facts": [
+            "Ines Varga",
+            "lantern-rollout-plan.docx",
+            "https://lantern.sharepoint.example.org/sites/lantern/lantern-rollout-plan.docx",
+            "lantern-wave-schedule.xlsx",
+            "https://lantern.sharepoint.example.org/sites/lantern/lantern-wave-schedule.xlsx"
+          ]
+        },
+        {
+          "check": "answerExcludes",
+          "says": "no file someone else shared: all nine, the near-identical title included",
+          "facts": [
+            "q4-hiring-plan.xlsx",
+            "lantern-rollout-plan-draft.docx",
+            "team-offsite-agenda.docx",
+            "vendor-shortlist.xlsx",
+            "lantern-risk-register.xlsx",
+            "brand-guidelines.pdf",
+            "support-rota.xlsx",
+            "quarterly-review.pptx",
+            "security-checklist.docx"
+          ]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes: the person exists only in the graph and her shares only behind the office route",
+          "routes": ["info-retrieval", "office-data"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the scenario's own graph row (Ines Varga, her address, rollout lead of Lantern) and an eleven-item 'shared with me' list in the real graph_files_shared shape, each item with its link; the driver applies the real tool's shared_by filter (module toolData)",
+        "hermetic only: the scripted controller filters the list by the person's name (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
+      ],
+      "cells": [
+        ["find-person", "knowledge-graph"],
+        ["lookup-fact", "m365-files"]
+      ],
+      "notes": "Built for #1032, redesigned on the coordinator's scenario ruling (no pre-uploaded document: the files exist only behind the office route). The route order is not graded: the answer needs both routes, in whichever order. Unfiltered, the person's files sit past the first 2 000 characters of the list, where the office route's compact record stops. A second turn asking for a file's contents would need graph_file_ingest, which this driver gates (P4), so it is not part of the row."
     },
     {
       "id": "p01-calendar-today",
@@ -3259,12 +3360,7 @@
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-brief.docx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 2d>\", \"how\": \"Link\", \"via\": \"link\"}, {\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 3d>\", \"how\": \"Direct\", \"via\": \"teams\"}]}"
       ],
       "notes": "File metadata is runnable without P4; only the ingest path is gated.",
-      "needs": [
-        "check:forbiddenTools-decoupled",
-        "check:oneOfTools",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:forbiddenTools-decoupled", "check:oneOfTools", "driver:graph_file_ingest"]
     },
     {
       "id": "p06-web-and-upload-cited",
@@ -4941,7 +5037,6 @@
         "check:answerMatches",
         "check:forbiddenTools-decoupled",
         "check:onlyRoutes",
-        "driver:graph_files_shared",
         "driver:graph_mail_attachments"
       ]
     },
@@ -6458,7 +6553,7 @@
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 2d>\", \"how\": \"Link\", \"via\": \"teams\"}, {\"name\": \"lantern-brief.docx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 4d>\", \"how\": \"Link\", \"via\": \"link\"}]}"
       ],
       "notes": "The positive twin of tn31: graph_files_shared covers files pasted into a Teams chat (its description), not the chat messages.",
-      "needs": ["driver:graph_files_shared"]
+      "needs": []
     },
     {
       "id": "p55-who-shared-it",
@@ -6510,7 +6605,7 @@
       "fixtures": [
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"2030-04-02\", \"how\": \"Link\", \"via\": \"teams\"}]}"
       ],
-      "needs": ["check:answerMatches", "check:oneOfTools", "driver:graph_files_shared"]
+      "needs": ["check:answerMatches", "check:oneOfTools"]
     },
     {
       "id": "p56-who-mails-me-about",
@@ -11297,12 +11392,7 @@
       "notes": "Needs graph_file_ingest, so it is P4-gated like 15 and 18.",
       "twin": "18-graph-file-path",
       "dependsOn": ["boundary-guards design (docs/plan/boundary-guards.md, merged in #715)"],
-      "needs": [
-        "check:answerMatches",
-        "check:answerNotMatches",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:answerMatches", "check:answerNotMatches", "driver:graph_file_ingest"]
     },
     {
       "id": "tn39-filename-injection",
@@ -11358,12 +11448,7 @@
       "notes": "A filename is metadata, so it reaches the model with no ingest at all; SharePoint forbids / and : in names, so the fixture uses neither.",
       "twin": "p04-shared-files-metadata",
       "dependsOn": ["boundary-guards design (docs/plan/boundary-guards.md, merged in #715)"],
-      "needs": [
-        "check:forbiddenTools-decoupled",
-        "check:noHost",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:forbiddenTools-decoupled", "check:noHost", "driver:graph_file_ingest"]
     },
     {
       "id": "tn41-other-users-conversations",
@@ -12056,7 +12141,6 @@
         "check:answerMatches",
         "check:answerNotMatches",
         "check:oneOfTools",
-        "driver:graph_files_shared",
         "driver:graph_mail_attachments"
       ]
     },

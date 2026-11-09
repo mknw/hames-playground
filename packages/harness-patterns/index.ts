@@ -50,6 +50,7 @@ export type {
   CompactExecutionMode,
   CompactExecutionInput,
   SynthesisFn,
+  SynthesisResult,
   CompactExecutionData,
 
   // Loop History Types
@@ -62,6 +63,7 @@ export type {
   AssistantMessageEventData,
   ToolCallEventData,
   ToolResultEventData,
+  RouteTraceRef,
   ControllerActionEventData,
   CriticResultEventData,
   PatternEnterEventData,

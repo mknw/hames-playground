@@ -50,6 +50,19 @@ report and any later re-derivation from a capture agree. A growing `decideDown`
 count is an egress gate quietly degraded to the roster alone; that visibility is
 the number the guard redesign exists to move.
 
+Every graded row also carries `writer` (#1032): one entry per turn with the answer
+writer's input size — `chars` (the rendered `Synthesize` prompt, from the call record's
+`promptChars`, which the redaction keeps), `estimatedTokens` (`chars / 4`, the estimate
+the writer's own trim works with) and `providerInputTokens` (the provider's own count) —
+against `contextWindow`, the window of the client that served the call, as `windowShare` (from the provider's count when the call reported usage, else the estimate; the estimate alone is `estimatedShare`, and it reads trace prompts about 1.45× low);
+and `fallbackFired` / `fallbackRouteCalls`, set when the writer could not fit each route's
+complete trace and fell back to compact route records (`decisionLoop`'s `writer_evidence`
+warning). The report's top-level `writer` summarises the run: the largest input, its share
+of the window and how many turns fell back. Computed from the turn's own events
+(`src/lib/eval-support/writer-report.ts`), so a capture re-derives the same numbers; a turn
+that wrote no answer reads `null`, never 0. Hermetic sizes are the scripted run's prompts,
+real in size but not in content; the live run is the measurement.
+
 The observer prices completed calls, so the final in-flight call can overshoot the
 80% threshold and even the configured cap. The report adds a separate conservative
 private-infrastructure line: elapsed scenario seconds (including setup and endpoint
@@ -227,7 +240,7 @@ and escalate if the required values are absent. The runner does not copy or prin
 otherwise escalate. Never start another embedder.
 
 Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver
-uses a memory-only stash, a keyword retrieval backend and scripted shell effects. Live mode reads the production gateway descriptions/schemas through metadata-only MCP requests and the shipped Graph definitions; the sandbox tool mirrors the shipped shell schema/description. Missing metadata refuses execution. Every required tool has per-scenario argument predicates. It executes no generated code and makes no real Graph, Neo4j or
+uses a memory-only stash, a keyword retrieval backend and scripted shell effects. Live mode reads the production gateway descriptions/schemas through metadata-only MCP requests and the shipped Graph definitions; the sandbox tool mirrors the shipped shell schema/description, and the five sandbox file tools are the lazy office sandbox's own pre-VM descriptors (`IN_VM_TOOL_DESCRIPTORS`, held to the pinned filesystem image by the sandbox package's drift pin), which is the text production's actor reads before any VM exists. Missing metadata refuses execution. Every required tool has per-scenario argument predicates. It executes no generated code and makes no real Graph, Neo4j or
 Redis request; tool execution uses a loopback fake gateway. A running production MCP gateway is a live-mode precondition for metadata-only `listTools`; missing metadata fails before wake or spend. Artifact and markdown-index checks
 prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.

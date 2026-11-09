@@ -606,6 +606,41 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   }
 }
 
+/** The characters of the prompt a request body carries: every message's text
+ *  (a string, or the `text` of its parts) plus a top-level `system` (the
+ *  Anthropic shape). The JSON around them, the model id and the sampling
+ *  options are not prompt. `undefined` when the body is not a JSON chat
+ *  request, so an unreadable body never reads as an empty prompt (#1032). */
+export function promptCharsOf(rawInput: string | undefined): number | undefined {
+  if (!rawInput) return undefined
+  let body: unknown
+  try {
+    body = JSON.parse(rawInput)
+  } catch {
+    return undefined
+  }
+  if (!body || typeof body !== 'object') return undefined
+  const { messages, system } = body as { messages?: unknown; system?: unknown }
+  if (!Array.isArray(messages)) return undefined
+  const textOf = (content: unknown): number =>
+    typeof content === 'string'
+      ? content.length
+      : Array.isArray(content)
+        ? content.reduce(
+            (n: number, part) =>
+              n +
+              (part && typeof (part as { text?: unknown }).text === 'string'
+                ? (part as { text: string }).text.length
+                : 0),
+            0,
+          )
+        : 0
+  return (
+    textOf(system) +
+    messages.reduce((n: number, m) => n + textOf((m as { content?: unknown } | null)?.content), 0)
+  )
+}
+
 function buildLLMCallDataFromLog(
   last: NonNullable<Collector['last']>,
   functionName: string,
@@ -666,11 +701,13 @@ function buildLLMCallDataFromLog(
         }
       : undefined
 
+  const promptChars = promptCharsOf(rawInput)
   return {
     functionName,
     variables,
     promptTemplate: getPromptTemplate(functionName),
     rawInput,
+    ...(promptChars !== undefined ? { promptChars } : {}),
     rawOutput: last.rawLlmResponse ?? undefined,
     parsedOutput,
     usage,

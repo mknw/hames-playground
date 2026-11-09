@@ -31,6 +31,7 @@ import {
 import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
+import { writerSummary, writerTurnSizes } from '../../src/lib/eval-support/writer-report'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import {
   EVAL_REASONING_PATTERNS,
@@ -223,6 +224,9 @@ async function main() {
             rows.filter((r) => r.thinking === 'off') as ConversationResult[],
           ),
           thinking: thinkingReport(rows),
+          // #1032: the largest writer input of the run against its window, and how
+          // many turns fell back to compact route records to fit (per turn: `writer`).
+          writer: writerSummary(rows),
           // RECORDED, not run: `general` was removed, so these are its last live results.
           generalBaselineRecorded: GENERAL_BASELINE,
           hermeticCaveat: live
@@ -390,6 +394,7 @@ async function main() {
                   durationMs,
                   reasoning: reasoningSummary(trace.turns.flatMap((t) => t.events)),
                   guards: guardTurnCounts(trace.turns),
+                  writer: writerTurnSizes(trace.turns, clients.getContextWindow),
                 })
                 // First failure earns exactly two more attempts, pass or fail.
                 if (attempt === 1 && status === 'pass') break

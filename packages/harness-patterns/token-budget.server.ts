@@ -51,3 +51,41 @@ export function trimToFit<T>(
   }
   return trimmed
 }
+
+/**
+ * Replace the oldest items that have a compact form with it, one at a time,
+ * until they fit `contextWindowTokens` less the output reserve {@link trimToFit}
+ * keeps (#1032: a route call's complete trace falls back to its compact
+ * record). Items with no compact form are kept as they are. When every compact
+ * form is in and it still does not fit, the caller's `trimToFit` drops whole
+ * items next, as it always has.
+ *
+ * The size is the caller's: `measureChars` counts the characters the items
+ * add to the prompt, and `charsPerToken` turns them into tokens — the caller
+ * knows its content, and JSON-heavy text runs well under the 4 characters per
+ * token {@link estimateTokens} assumes.
+ *
+ * @returns the items, and the indices that were replaced, oldest first
+ */
+export function degradeToFit<T>(
+  items: T[],
+  compactOf: (item: T, index: number) => T | undefined,
+  measureChars: (items: T[]) => number,
+  basePromptChars: number,
+  contextWindowTokens: number,
+  charsPerToken: number = CHARS_PER_TOKEN,
+): { items: T[]; degraded: number[] } {
+  const budgetTokens = contextWindowTokens - OUTPUT_RESERVE
+  const fits = (arr: T[]) =>
+    budgetTokens <= 0 ||
+    Math.ceil((measureChars(arr) + basePromptChars) / charsPerToken) <= budgetTokens
+  const out = [...items]
+  const degraded: number[] = []
+  for (let i = 0; i < out.length && !fits(out); i++) {
+    const compact = compactOf(items[i], i)
+    if (compact === undefined) continue
+    out[i] = compact
+    degraded.push(i)
+  }
+  return { items: out, degraded }
+}

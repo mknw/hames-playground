@@ -1821,6 +1821,19 @@ compactExecution({
 })
 ```
 
+**A decisionLoop route call's trace (#1032).** In `thread` mode, a record of THIS
+turn whose `tool_result` names its trace (`routeRecord.trace`, a loop with
+`writerEvidence: 'trace'`) reaches the synthesizer as the rendered trace (see
+`decisionLoop`), resolved from the turn's events past the pattern scope; its
+compact record rides beside it as the iteration's `compact: { result, label }`
+(`label` is `"<iteration>. <route>"`). An earlier turn's record is never
+expanded. A synthesis implementation may return `fellBack` — the labels whose
+compact record it used because the traces did not fit its window, oldest first
+— and `compactExecution` then records one `warning` (task `writer_evidence`)
+naming them, with `detail.routeCalls`, before the answer. `SynthesisResult` is
+`LLMResult<string>` plus that optional field, so an implementation that returns
+only `{ value }` is unchanged.
+
 ### `compactIntent(config?)`
 
 Rewrites the latest user message into a self-contained `scope.data.intent` brief
@@ -2167,6 +2180,7 @@ interface DecisionLoopConfig extends PatternConfig {
   documents?: DecisionDocumentsSource // the conversation's documents, read ONCE per run (below)
   documentsTimeoutMs?: number // default DECISION_DOCUMENTS_TIMEOUT_MS (30 000); positive integer
   quoteMemories?: () => boolean // the host's answer, ONCE per run: may this run quote recalled memories (below)
+  writerEvidence?: 'record' | 'trace' // what the answer writer reads per route call this turn (#1032); default 'record'
 }
 
 type DecisionDocumentsSource = (signal: AbortSignal) => Promise<DecisionDocuments>
@@ -2546,6 +2560,42 @@ fenced and named the same one. A body that arrived unfenced (a guard declared wi
 `spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents
 a label. The plan, a `simpleLoop` Return, reasoning and the stats are not fenced, and not sanitised either. Owner acceptance owed: Record text the loop did not build (the plan's record, a `simpleLoop` Return, reasoning, and failure text, a fenced tool error with its fence) goes into the Decide state and the handoff as ONE JSON string: every word kept, newlines escaped, so it cannot start a line that reads as the state's own structure. The plan stays raw under PLAN, an actorCritic or retriever body stays raw (inside its fence when it has one), and code-built lines go through as they are. A reader that rewrites this text (the web-route pseudonymiser) decodes each such string before matching. A carried body that came back unfenced (no guard declares its tool, its guard found nothing under `spotlight: 'on-detection'`, or its header names another tool) is raw too, newlines included, and nothing quotes it; every guard in `general-next` is `'always'`, so it is not reachable there. The handoff block ends with `HANDOFF_END`, so a context that follows it is not read as data. A fence cut off by the cap inside a failure text is closed (`closeCutFences`), and a label is restored only from a header naming the result's own tool.
 
+**The answer writer's evidence (#1032).** `writerEvidence` chooses what the
+`compactExecution` after the loop reads for each route call of THIS turn.
+`'record'` (the default) is the record above. `'trace'` is the route's complete
+internal trace: the record's `tool_result` carries `routeRecord.trace` — the
+route's kind, the ids of its own committed `controller_action`, `tool_call`,
+`tool_result`, `critic_result`, `plan_created` and `loop_recovery` events in
+order, and the result fields its controller never saw (`simpleLoop`'s
+`resultOmit`) — and `compactExecution` resolves those ids against the turn's
+events and renders, under the route call and its status line (the step line),
+every controller action with its reasoning, every tool call (name and
+arguments) and every successful tool result. Ids, never content: the blob holds
+each result once and the record event stays small. By kind: a `simpleLoop`'s
+rounds and its `Return`; every `actorCritic` attempt, numbered, with the critic's verdict on the
+step it was run on (`accepted` or `rejected`) and `not judged` on every other
+step (under a critic cadence above 1 the critic runs on one step of several),
+each verdict in order with its explanation; and the record's saved-deliverable lines (#840: where a saved file is kept
+and that the route does not index it), the one statement a record makes that
+no event carries; the `planner`'s plan text with its reasoning; the `retriever`'s
+query, every passage in full with its `source` and locator, and its references.
+**Errored steps** — a failed call (with its action when all of the action's calls
+failed) and a round the loop recovered from (a refused tool, unusable
+arguments, an unparseable answer, a rejected `Return`) — are left out and
+counted (`erroredStepsLeftOut`); a failed route keeps its failed status line and
+its failure text, so the writer can still report a lookup that could not be
+done. **Untrusted content** reaches the writer exactly as the guard left it:
+each result is the committed event's own value (sanitised at `callTool` or in
+the retriever's assembly), fence, spotlighting and neutralised markers intact,
+with the event's redacted `sanitized` summary and `ingress` marks. Only three
+projections apply, and each removes what the route never handed a model: the
+`resultOmit` fields, a hit's unscanned `metadata` and backend fields (the
+retriever's guard scans `content` and `source` only), and a result the person
+hid or archived. `content_sanitized` and `error` are never read, whatever ids a
+record names. The decisions model, the handoff and every child keep the compact
+records, and an EARLIER turn's record is never expanded (the previous turn keeps
+its compact record). An unknown value is refused at construction.
+
 **Records an older version persisted.** A conversation saved before the screen-outage
 withholding was removed carries `withheldEventIds` on a loop record's `tool_result`.
 The loop reads them back as a pure filter, so every later child's context still
@@ -2647,7 +2697,7 @@ screen, so the retriever's hits get the deterministic pass, the fence and —
 when switched on — one classification per hit. The loop itself sanitises and screens nothing: a route record is the
 text the extractor built, and a quoted tool body carries the fence its result
 arrived in. A screen failure inside a route is recorded and fails
-open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
+open. Its loop sets `writerEvidence: 'trace'` (#1032), so its thread synthesizer reads each route call's complete trace for this turn, the previous turn's compact `orchestrator` records (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
 
 `general-next` also opts into M7's optional `withMemory`. Only its synthesis receives
 recalled memory, while decisions and children receive none. The
@@ -3790,7 +3840,8 @@ One per memory written, recorded after its commit:
 `{ memoryId, kind, tier, eventId, ordinal, action }` — **never the content, nor a
 hash of it** (#541). `formatEventData` renders it from `action` and
 `kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
-`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
+`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` and
+`promptChars` (the rendered prompt's character count, #1032) only —
 `variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
 candidates and the window, i.e. the memory's text, and never reach the blob. A
 call that produced nothing has no event to ride and is not recorded.
@@ -4399,6 +4450,21 @@ BAML Inputs:
 BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
+
+For a route trace (#1032) `defaultSynthesize` keeps both forms of each such turn. Before
+its existing trim drops any turn, the oldest route calls fall back from the trace to their
+compact record, one at a time, until the prompt fits the window of the client the call will
+take: the prompt text the turns add, counted at `TRACE_CHARS_PER_TOKEN` (2.5 — live trace
+prompts measured 2.74–2.85 characters per provider token, where the trim's chars/4 read a
+77k-token trace as 53k) against the trim's budget (`degradeToFit`, beside `trimToFit`); their
+labels come back as `fellBack`. When even the compact records do not fit, the trim drops whole
+turns, oldest first, as before. A retriever call inside a trace (`tool: 'retriever'`, read off
+the event, on turns the synthesizer itself marked as traces — never off a result's shape)
+supplies its producer's structured references. The template adds one rule only when a turn's
+result is a route trace (the synthesizer's own `LoopTurn.trace` flag, never the result's shape): an attempt marked
+`"verdict": "rejected"` is not the answer, and a route whose status says it failed could not do
+its lookup. A route's `saved` line is relayed: where the file is kept, that it is not indexed
+for search, and where the user can index it. Every other prompt is byte-identical.
 
 The BAML companion's `defaultSynthesize` accepts structured references only from the `retriever`
 producer (including multi-call results verified against their call roster). Its text seam accepts

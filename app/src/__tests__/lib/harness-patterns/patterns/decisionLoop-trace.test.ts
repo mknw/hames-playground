@@ -272,7 +272,7 @@ describe('writerEvidence: trace — what the writer reads per route kind', () =>
     ])
   })
 
-  // Run 1 of the pre-merge candidate: without this line the writer lost "index it
+  // Run A of the pre-merge candidate: without this line the writer lost "index it
   // from the Data Stash" on 14 and 17 (#840's deterministic line lives only in
   // the record). MUTATION: drop `record.saved` from the routeTraceRef call in
   // decisionLoop → no `saved` on the trace.
@@ -300,6 +300,15 @@ describe('writerEvidence: trace — what the writer reads per route kind', () =>
       'Saved to /work/out/report.md (not indexed by this route; the user can index a text one for search from the Data Stash)',
     )
     expect(String(iteration.compact?.result)).toContain((iteration.result as RouteTrace).saved)
+    // In the route call's head, ahead of the steps: the writer reads the JSON in
+    // order (run B: behind a 14k-character trace it was missed in 2 of 3 attempts).
+    // MUTATION: render `saved` after `steps` → red.
+    expect(Object.keys(iteration.result as RouteTrace)).toEqual([
+      'route',
+      'status',
+      'saved',
+      'steps',
+    ])
   })
 
   // MUTATION: drop the plan_created case → no step. MUTATION: drop `reasoning`.

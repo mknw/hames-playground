@@ -131,15 +131,16 @@ export interface RouteTrace {
   readonly route: string
   /** The record's step line: status and stats, counted by code. */
   readonly status: string
+  /** The record's saved-deliverable lines (an `actorCritic` route's, #840):
+   *  where each file the accepted attempt saved is kept, and that this route
+   *  does not index it. Code-written; no event carries it. Rendered right after
+   *  the status line, ahead of the steps. */
+  readonly saved?: string
   /** A failed route call's failure text (the record's own, capped). */
   readonly error?: string
   /** Steps left out because they errored; absent when none did. */
   readonly erroredStepsLeftOut?: number
   readonly steps: readonly TraceStep[]
-  /** The record's saved-deliverable lines (an `actorCritic` route's, #840):
-   *  where each file the accepted attempt saved is kept, and that this route
-   *  does not index it. Code-written; no event carries it. */
-  readonly saved?: string
 }
 
 /** What the record knows that the events do not. */
@@ -377,13 +378,16 @@ export function renderRouteTrace(
     }
   }
 
+  // The route call's head first — what it is, how it ended, what it saved —
+  // then its steps: the writer reads the JSON in this order, and a saved-file
+  // line behind a long trace was missed where the record's last line was not.
   return {
     route: head.route,
     status: head.status,
+    ...(ref.saved ? { saved: ref.saved } : {}),
     ...(head.error ? { error: head.error } : {}),
     ...(leftOut > 0 ? { erroredStepsLeftOut: leftOut } : {}),
     steps: rendered,
-    ...(ref.saved ? { saved: ref.saved } : {}),
   }
 }
 

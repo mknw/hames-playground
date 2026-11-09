@@ -62,9 +62,6 @@ export interface ConversationScenario {
   noSandboxCommand?: { says: string; pattern: string }
   /** Per-scenario tool results that replace the driver's shared fixture for that tool. */
   toolData?: Record<string, unknown>
-  /** Documents this scenario's person uploaded before turn 1, beside the shared seed
-   *  (name → content); a `.md` one is searchable like the shared notes. */
-  uploads?: Record<string, string>
   /** Hermetic only: the scripted controller's arguments for a tool, in place of the
    *  fixture's generic ones, so a predicate that grades what one route handed the
    *  next (a name the graph returned, searched for in the files) can pass. */

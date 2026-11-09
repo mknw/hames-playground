@@ -335,9 +335,7 @@ it('mocks the Data Stash click between turns and serves only searchable document
       driver,
     )?.[1]
   expect(beforeRun).toContain('if (turn > 0) indexForUser(next, trace)')
-  expect(
-    driver.match(/stashSearchable\((?:name|source), uploadedFor\(scenario\), trace\)/g),
-  ).toHaveLength(2)
+  expect(driver.match(/stashSearchable\((?:name|source), UPLOADED, trace\)/g)).toHaveLength(2)
   expect(driver).not.toMatch(/endsWith\('\.md'\)/)
 })
 // The same ruling, per scenario (PM addition, 2026-10-28): every runnable scenario that

@@ -54,7 +54,7 @@ Every graded row also carries `writer` (#1032): one entry per turn with the answ
 writer's input size — `chars` (the rendered `Synthesize` prompt, from the call record's
 `promptChars`, which the redaction keeps), `estimatedTokens` (`chars / 4`, the estimate
 the writer's own trim works with) and `providerInputTokens` (the provider's own count) —
-against `contextWindow`, the window of the client that served the call, as `windowShare`;
+against `contextWindow`, the window of the client that served the call, as `windowShare` (from the provider's count when the call reported usage, else the estimate; the estimate alone is `estimatedShare`, and it reads trace prompts about 1.45× low);
 and `fallbackFired` / `fallbackRouteCalls`, set when the writer could not fit each route's
 complete trace and fell back to compact route records (`decisionLoop`'s `writer_evidence`
 warning). The report's top-level `writer` summarises the run: the largest input, its share

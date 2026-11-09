@@ -2900,7 +2900,7 @@
         {
           "check": "answerMatches",
           "says": "the LOCAL date, as 2026-11-05 or written out in words",
-          "pattern": "2026-11-05|november\\s+5(?:th)?,?\\s+2026|5(?:th)?\\s+(?:of\\s+)?november,?\\s+2026",
+          "pattern": "2026-11-05|november\\s+5(?:th)?,?\\s+2026|\\b5(?:th)?\\s+(?:of\\s+)?november,?\\s+2026",
           "examples": {
             "match": [
               "Today is Thursday, 2026-11-05.",
@@ -2908,7 +2908,13 @@
               "Thursday 5 November 2026",
               "Thursday, the 5th of November, 2026"
             ],
-            "noMatch": ["Today is Wednesday, November 4, 2026.", "2026-11-04", "November 15, 2026"]
+            "noMatch": [
+              "Today is Wednesday, November 4, 2026.",
+              "2026-11-04",
+              "November 15, 2026",
+              "15 November 2026",
+              "the 25th of November, 2026"
+            ]
           }
         },
         {
@@ -3096,8 +3102,18 @@
         },
         {
           "check": "answerExcludes",
-          "says": "no file someone else shared, the near-identical title included",
-          "facts": ["lantern-rollout-plan-draft.docx", "lantern-risk-register.xlsx"]
+          "says": "no file someone else shared: all nine, the near-identical title included",
+          "facts": [
+            "q4-hiring-plan.xlsx",
+            "lantern-rollout-plan-draft.docx",
+            "team-offsite-agenda.docx",
+            "vendor-shortlist.xlsx",
+            "lantern-risk-register.xlsx",
+            "brand-guidelines.pdf",
+            "support-rota.xlsx",
+            "quarterly-review.pptx",
+            "security-checklist.docx"
+          ]
         },
         {
           "check": "routeCompleted",

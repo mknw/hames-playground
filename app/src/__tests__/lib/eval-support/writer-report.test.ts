@@ -56,7 +56,9 @@ describe('writerTurnSize', () => {
       estimatedTokens: 10_000,
       providerInputTokens: 1300,
       contextWindow: 131072,
-      windowShare: 0.076,
+      // The provider's count when usage is present (1 300 tokens), the estimate beside it.
+      windowShare: 0.01,
+      estimatedShare: 0.076,
       fallbackFired: false,
       fallbackRouteCalls: 0,
     })
@@ -89,6 +91,29 @@ describe('writerTurnSize', () => {
     )
     expect(failed).toMatchObject({ chars: 8, estimatedTokens: 2, contextWindow: null })
     expect(failed.windowShare).toBeNull()
+    // No usage: the share falls back to the estimate.
+    // MUTATION: always read the estimate → the first case reads 0.076.
+    const noUsage = writerTurnSize(
+      1,
+      [
+        event(
+          'assistant_message',
+          { content: 'a', final: true },
+          {
+            functionName: 'Synthesize',
+            variables: {},
+            clientName: 'LargeQwen',
+            promptChars: 40_000,
+          },
+        ),
+      ],
+      windows,
+    )
+    expect(noUsage).toMatchObject({
+      providerInputTokens: null,
+      windowShare: 0.076,
+      estimatedShare: 0.076,
+    })
     expect(writerTurnSize(1, [event('error', { error: 'decide failed' })], windows)).toMatchObject({
       fn: null,
       chars: null,
@@ -126,7 +151,7 @@ describe('writerTurnSizes / writerSummary', () => {
       turns: 2,
       maxChars: 800,
       maxEstimatedTokens: 200,
-      maxWindowShare: 0.002,
+      maxWindowShare: 0.01,
       fallbackTurns: 1,
     })
     expect(writerSummary([])).toEqual({

@@ -40,8 +40,13 @@ export interface WriterTurnSize {
   readonly providerInputTokens: number | null
   /** The serving client's context window, in tokens. */
   readonly contextWindow: number | null
-  /** `estimatedTokens / contextWindow`, to three decimals. */
+  /** The share of the window the prompt took, to three decimals: the
+   *  provider's own count when the call reported usage, else the estimate. The
+   *  estimate reads trace prompts about 1.45x low (#1032), and this number
+   *  feeds the compaction decision (rv-1033 term 5). */
   readonly windowShare: number | null
+  /** `estimatedTokens / contextWindow`, to three decimals. */
+  readonly estimatedShare: number | null
   /** The writer could not fit the full trace and fell back to compact records. */
   readonly fallbackFired: boolean
   /** How many route calls fell back (the warnings' `detail.routeCalls`). */
@@ -59,6 +64,9 @@ function writerCall(events: readonly ContextEvent[]): LLMCallData | undefined {
     (e) => e.type === 'error' && /^Synthesize/.test(e.llmCall?.functionName ?? ''),
   )?.llmCall
 }
+
+const share = (tokens: number | null, window: number | null): number | null =>
+  tokens !== null && window ? Math.round((tokens / window) * 1000) / 1000 : null
 
 export function writerTurnSize(
   turn: number,
@@ -89,10 +97,8 @@ export function writerTurnSize(
     estimatedTokens,
     providerInputTokens,
     contextWindow,
-    windowShare:
-      estimatedTokens !== null && contextWindow
-        ? Math.round((estimatedTokens / contextWindow) * 1000) / 1000
-        : null,
+    windowShare: share(providerInputTokens ?? estimatedTokens, contextWindow),
+    estimatedShare: share(estimatedTokens, contextWindow),
     fallbackFired: warnings.length > 0,
     fallbackRouteCalls: routeCalls,
   }

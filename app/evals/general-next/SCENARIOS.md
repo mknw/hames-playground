@@ -740,7 +740,7 @@ Expected routes: `info-retrieval` (the person) and `office-data` (what she share
 
 Fixtures (synthetic): one graph row (Ines Varga, her address, rollout lead of Lantern) and an eleven-item "shared with me" list in the real `graph_files_shared` shape, each item with its link. The driver applies the real tool's `shared_by` filter. Two of the items are hers. One item someone else shared is titled lantern-rollout-plan-draft.docx.
 
-Pass: the shared-files list is read; candidate only: both routes complete before the turn's `answer`; the final answer carries the person, each of her two files and its link, and neither lantern-rollout-plan-draft.docx nor lantern-risk-register.xlsx; within 6 decisions per turn.
+Pass: the shared-files list is read; candidate only: both routes complete before the turn's `answer`; the final answer carries the person, each of her two files and its link, and none of the nine files anyone else shared (lantern-rollout-plan-draft.docx among them); within 6 decisions per turn.
 
 The person exists only in the graph and her shares only behind the office route, so the answer needs both routes, though not in a fixed order. Read unfiltered, her files sit past the first 2 000 characters of the list, where the office route's compact record stops. A hermetic pass proves the files and links reached the answer writer: the scripted Synthesize names each one only when its prompt carries it (`answerFromPrompt`). A live pass proves, in addition, that a model carries the person from the graph to the shared list and names only her files. A second turn asking for a file's contents would need `graph_file_ingest`, which this driver gates (P4), so it is not part of the row (redesigned on the coordinator's scenario ruling, #1032).
 

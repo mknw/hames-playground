@@ -378,8 +378,8 @@ function timeAnswer(prompt: string): string {
 /**
  * The scripted Synthesize of an evidence scenario (#1032's 48) names each expected fact
  * only when the prompt it was HANDED carries it, and says which it could not find — so
- * "the answer carries the go-live date" is decided by whether the route that read it got
- * it to the writer, not echoed from the scenario.
+ * "the answer carries her files and their links" is decided by whether the route that
+ * read them got them to the writer, not echoed from the scenario.
  */
 function evidenceAnswer(prompt: string, facts: readonly string[]): string {
   const found = facts.filter((f) => prompt.includes(f))

@@ -339,6 +339,10 @@ export function renderRouteTrace(
         // present the very evidence #1032 delivers.
         const judged = pending.pop()
         if (judged) judged.verdict = verdict
+        // A skipped `is_final` repeat (#784 item 7) dispatched nothing: the
+        // critic judged the result of the step before it, as the record reads
+        // it (`extractActorCritic`), so that step takes the verdict too.
+        if (judged && judged.calls.length === 0 && pending.length) pending.pop()!.verdict = verdict
         for (const attempt of pending) attempt.verdict = 'not judged'
         pending = []
         steps.push({ kind: 'critic', verdict, explanation: d.result.explanation ?? '' })

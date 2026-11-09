@@ -2151,6 +2151,7 @@ interface DecisionLoopRoute<T> {
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
   allowReplan?: boolean // planner routes only, refused elsewhere: offer it every iteration (default: see "What is offered")
+  minPrePlanningBranchCalls?: number // planner routes only, integer >= 2, refused with allowReplan: true: re-plan after N−1 other route iterations (#1031)
 }
 
 interface DecisionLoopConfig extends PatternConfig {
@@ -2204,6 +2205,16 @@ it is offered.
   planner route offers it every time, for a host that wants replanning (a later
   plan replaces the earlier one under PLAN). On any other kind of route,
   `allowReplan` is refused at construction.
+- **Re-planning with a gap (#1031).** `minPrePlanningBranchCalls: N` on a
+  planner route offers it again, once a plan exists, only when at least N−1
+  iterations of non-planner routes ran since the last planner iteration this
+  turn (succeeded or failed), so a re-plan is at the earliest the Nth call. The
+  first plan of a turn is unaffected: until a plan exists the guard above
+  decides. The newest plan replaces the earlier one under PLAN, and the repeat
+  rule still binds. Absent, the guard above is unchanged. Construction refuses
+  it on a route that is not a planner, together with `allowReplan: true`, and
+  below 2 or not an integer. `general-next` sets 3: two other route calls
+  between two plans.
 - **The repeat rule (#809).** Any route is withheld for the rest of the turn once
   two of its records in a row made no progress. In one recorded run a route whose
   every read failed was dispatched six times, each time returning the same honest
@@ -2237,8 +2248,10 @@ it is offered.
   readers are `madeProgress` and `stalledRoutes` in
   `decisionLoop-records.server.ts`. The rule binds an `allowReplan` planner too,
   which is withheld after two failed plans in a row; a guarded planner is never
-  offered straight after itself, so it cannot reach two. The rule has no
-  configuration.
+  offered straight after itself, so it cannot reach two, and neither can a
+  planner with `minPrePlanningBranchCalls`. Across its re-plan the rule still
+  binds the other routes: a route withheld before the newest plan stays
+  withheld after it. The rule has no configuration.
 
 Apart from a repeat's step line, the guard adds nothing to the state. While a
 route is withheld, the decisions model sees the same state as without the guard: the records that withheld it are in **This turn so far** and, within

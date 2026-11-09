@@ -68,7 +68,9 @@
  *     `recoverable`, or `runChain` would end the turn on a child's irrecoverable
  *     error.
  *   - a planner route is not OFFERED again straight after itself, nor once a plan
- *     exists this turn (`allowReplan` opts a route out). The decisions model sees
+ *     exists this turn (`allowReplan` opts a route out; `minPrePlanningBranchCalls`
+ *     N offers it again once N−1 other route iterations ran since the last
+ *     planner iteration, #1031). The decisions model sees
  *     only each option's description and the state, so a model that likes
  *     `think` picks it every time it is offered — six of six in a recorded run,
  *     which spent the whole bound and never answered. The guard is on the
@@ -210,6 +212,13 @@ export interface DecisionLoopRoute<T> {
    *  (until two plans in a row fail: the repeat rule binds every route);
    *  planner routes only, refused on any other kind of route. */
   readonly allowReplan?: boolean
+  /** Re-planning with a gap (#1031): once a plan exists this turn, the planner
+   *  route is offered again only when at least N−1 non-planner iterations have
+   *  run since the previous planner iteration, so a re-plan is at the earliest
+   *  the Nth call. The first plan of a turn is unaffected, the repeat rule still
+   *  binds and the newest plan replaces the earlier one. An integer >= 2, planner
+   *  routes only, and refused together with `allowReplan: true`. */
+  readonly minPrePlanningBranchCalls?: number
 }
 
 /** What an overridden `state` builder receives. */
@@ -419,6 +428,24 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       throw new Error(
         `decisionLoop: route '${name}' sets allowReplan but is not a planner; there is nothing to replan (allowReplan is read only by a planner route)`,
       )
+    }
+    const gap = routes[name].minPrePlanningBranchCalls
+    if (gap !== undefined) {
+      if (kind !== 'planner') {
+        throw new Error(
+          `decisionLoop: route '${name}' sets minPrePlanningBranchCalls but is not a planner; there is nothing to replan (minPrePlanningBranchCalls is read only by a planner route)`,
+        )
+      }
+      if (routes[name].allowReplan === true) {
+        throw new Error(
+          `decisionLoop: route '${name}' sets minPrePlanningBranchCalls together with allowReplan: true; a planner route is offered either every time or after the gap, not both`,
+        )
+      }
+      if (!Number.isInteger(gap) || gap < 2) {
+        throw new Error(
+          `decisionLoop: route '${name}' sets minPrePlanningBranchCalls to ${gap}; it must be an integer >= 2`,
+        )
+      }
     }
     if (routes[name].withBudget && kind !== 'simpleLoop' && kind !== 'actorCritic') {
       throw new Error(`decisionLoop: withBudget requires a bounded loop route ('${name}')`)
@@ -963,11 +990,17 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         // after itself and once a plan exists, and a stalled route for the rest of
         // the run. Only `answer` left means nothing to ask.
         const stalled = stalledRoutes(records)
+        // With a plan, a planner that sets minPrePlanningBranchCalls N returns once
+        // N−1 non-planner iterations ran since the last planner iteration (#1031).
+        const sincePlanner =
+          records.length - 1 - records.findLastIndex((r) => kinds.get(r.route) === 'planner')
         const offered = labels.filter(
           (l) =>
             !stalled.has(l.id) &&
             (!guardedPlanners.has(l.id) ||
-              (latestPlan === undefined && records[records.length - 1]?.route !== l.id)),
+              (latestPlan === undefined
+                ? records[records.length - 1]?.route !== l.id
+                : sincePlanner >= (routes[l.id].minPrePlanningBranchCalls ?? Infinity) - 1)),
         )
         if (offered.length === 1) {
           ended = 'answer'

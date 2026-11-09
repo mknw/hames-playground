@@ -483,7 +483,7 @@ describe('general-next composition', () => {
       instructions: string
     }
     expect(instructions).toBe(
-      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools.',
+      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools. When a request needs routes working together (one route’s result is another’s input), choose think first.',
     )
     expect(state).not.toContain('Choose the route whose own tools perform the next step')
     expect(criteria['office-data']).toBe(
@@ -491,15 +491,15 @@ describe('general-next composition', () => {
         'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
     )
     expect(criteria['info-retrieval']).toBe(
-      'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
+      'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.\n' +
         'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
     )
     expect(criteria['read-documents']).toBe(
-      'Search this conversation’s uploaded and indexed documents and return cited excerpts.\n' +
+      'Search this conversation’s uploaded and indexed documents, including files office-data copied in with graph_file_ingest, and return cited excerpts.\n' +
         'Tools: document retriever (Data Stash search, cited passages).',
     )
     expect(criteria.think).toBe(
-      'Decide and write the steps before acting, from the agent map and earlier results.\n' +
+      'Decide and write the steps before acting, from the agent map and earlier results. Choose this first when a request needs routes working together (one route’s result is another’s input).\n' +
         'Tools: none (planning only).',
     )
     for (const route of ['office-data', 'info-retrieval', 'read-documents', 'think']) {
@@ -1015,10 +1015,10 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
-        'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
+        'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.\n' +
         'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
       capability:
-        'Read the knowledge graph; search or fetch public web sources and library documentation.',
+        'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; search or fetch public web sources and library documentation.',
     })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
@@ -2798,6 +2798,101 @@ describe('general-next think route, in isolation', () => {
       ),
     ).toBe(false)
   })
+
+  // #1031: think is offered again once two other routes ran since the last plan, and the
+  // bound of 6 holds plan → two routes → re-plan → a route → the answer.
+  // MUTATION: delete `minPrePlanningBranchCalls: 3` from general-next.server.ts: think is
+  // absent from the 4th Decide, the scripted choice is a non-decision, red.
+  // MUTATION: `maxIterations: 6` → `maxIterations: 5`: the 6th Decide never happens and the
+  // turn ends on its bound (budget_exhausted), red.
+  it('T5: re-plans after two other routes, and plan, two routes, re-plan, a route and the answer fit the bound', async () => {
+    choices = ['think', 'info-retrieval', 'read-documents', 'think', 'info-retrieval', 'answer']
+    mocks.planner
+      .mockResolvedValueOnce({ plan: { reasoning: 'r', plan: '1) Look it up.', n_steps: 1 } })
+      .mockResolvedValueOnce({ plan: { reasoning: 'r', plan: '1) Read it.', n_steps: 1 } })
+    const result = await run('self_deployed', deps, QUESTION)
+
+    expect(decisions(result.context.events)).toEqual([
+      'think',
+      'info-retrieval',
+      'read-documents',
+      'think',
+      'info-retrieval',
+      'answer',
+    ])
+    expect(mocks.planner).toHaveBeenCalledTimes(2)
+    const offered = requests.mock.calls.map(([, init]) =>
+      Object.keys(JSON.parse(String(init.body)).questions.next_step.criteria),
+    )
+    expect(offered.map((keys) => keys.includes('think'))).toEqual([
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ])
+    expect(
+      result.context.events.some(
+        (e) => e.type === 'error' && (e.data as { kind?: string }).kind === 'budget_exhausted',
+      ),
+    ).toBe(false)
+    expect(composition.routes.think).toMatchObject({ minPrePlanningBranchCalls: 3 })
+  })
+
+  // #1031: the cross-route hints, in what Decide reads (criteria and question) and in the
+  // planner's agent map; the ingest hint only where ingest is available.
+  // MUTATION: drop any one hint from general-next.server.ts (the read-documents ingest
+  // clause, the info people sentence, the think "first" sentence, the question's "choose
+  // think first", or one of the three capability clauses): red.
+  // MUTATION: make the read-documents ingest clause unconditional: the ingest-off case
+  // goes red.
+  it.each([true, false])(
+    'T6: the cross-route hints reach Decide and the planner (ingest %s)',
+    async (graphFileIngest) => {
+      if (!graphFileIngest) gateway.names = gateway.names.filter((n) => n !== 'graph_file_ingest')
+      choices = ['think', 'answer']
+      mocks.planner.mockResolvedValueOnce({
+        plan: { reasoning: 'r', plan: PLAN, n_steps: 1 },
+      })
+      await run('anthropic', { ...deps, graphFileIngest }, QUESTION)
+      const { criteria, instructions } = JSON.parse(String(requests.mock.calls[0][1].body))
+        .questions.next_step as { criteria: Record<string, string>; instructions: string }
+      const context = mocks.planner.mock.calls[0][2] as string
+
+      // When one route's result is another's input, think comes first.
+      expect(instructions).toContain(
+        'When a request needs routes working together (one route’s result is another’s input), choose think first.',
+      )
+      expect(criteria.think).toContain(
+        'Choose this first when a request needs routes working together (one route’s result is another’s input).',
+      )
+      expect(context).toContain(
+        'Called first when a request needs routes working together (one route’s result is another’s input), so the plan orders them.',
+      )
+      // The graph identifies people before the office route searches.
+      expect(criteria['info-retrieval']).toContain(
+        'Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.',
+      )
+      expect(context).toContain(
+        'which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them',
+      )
+      // A file the office route copies in is read by read-documents: only with ingest.
+      const ingestHints = [
+        criteria['read-documents'].includes(
+          'including files office-data copied in with graph_file_ingest',
+        ),
+        context.includes(
+          'with graph_file_ingest, after which read-documents can read their contents',
+        ),
+      ]
+      expect(ingestHints).toEqual([graphFileIngest, graphFileIngest])
+      expect(criteria['read-documents']).toContain('uploaded and indexed documents')
+      for (const route of ['office-data', 'info-retrieval', 'read-documents', 'think']) {
+        expect(criteria[route].length, route).toBeLessThanOrEqual(450)
+      }
+    },
+  )
 })
 
 it.each([false, undefined])(

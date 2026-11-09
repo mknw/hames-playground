@@ -175,7 +175,9 @@ exit, and judged against the whole message it rejects complete work for a part
 no tool of the route performs. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
-not once a plan exists; `allowReplan: true` on the route opts out. Any route is
+not once a plan exists; `allowReplan: true` on the route opts out, and
+`minPrePlanningBranchCalls: N` offers a re-plan once N−1 other route iterations
+ran since the last plan. Any route is
 not offered again in the turn once two of its records in a row made no progress:
 the record failed, or none of its tool calls succeeded. A route that keeps
 returning the same failure therefore cannot be dispatched again and again in a

@@ -2894,8 +2894,22 @@
         },
         {
           "check": "answerContains",
-          "says": "module answerIncludes: the LOCAL date, its weekday and the afternoon event",
-          "facts": ["2026-11-05", "Thursday", "Design review"]
+          "says": "module answerIncludes: the weekday and the afternoon event",
+          "facts": ["Thursday", "Design review"]
+        },
+        {
+          "check": "answerMatches",
+          "says": "the LOCAL date, as 2026-11-05 or written out in words",
+          "pattern": "2026-11-05|november\\s+5(?:th)?,?\\s+2026|5(?:th)?\\s+(?:of\\s+)?november,?\\s+2026",
+          "examples": {
+            "match": [
+              "Today is Thursday, 2026-11-05.",
+              "Today is **Thursday, November 5, 2026**.",
+              "Thursday 5 November 2026",
+              "Thursday, the 5th of November, 2026"
+            ],
+            "noMatch": ["Today is Wednesday, November 4, 2026.", "2026-11-04", "November 15, 2026"]
+          }
         },
         {
           "check": "answerExcludes",
@@ -2917,7 +2931,7 @@
         "fixed turn clock: 2026-11-04T23:30:00Z in Europe/Brussels (module `clock`, the run frame's clock slot)",
         "graph_calendar_today, the row's own toolData → {\"events\": [{\"subject\": \"Standup\", \"start\": \"09:30\"}, {\"subject\": \"Design review\", \"start\": \"14:00\"}]}: no `day`, no `timeZone`"
       ],
-      "notes": "Hermetic: the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves the clock reaches synthesis. Live: the calendar result carries no date or zone, so an answer with 2026-11-05 and Thursday shows the model took the date from the turn clock rather than from a tool result; it does not show a no-tool date question is answered (the decision loop's routing step gets no clock)."
+      "notes": "Hermetic: the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves the clock reaches synthesis. Live: the calendar result carries no date or zone, so an answer with 2026-11-05 and Thursday shows the model took the date from the turn clock rather than from a tool result; it does not show a no-tool date question is answered (the decision loop's routing step gets no clock). The date check accepts the date written out in words as well as 2026-11-05 (#1032 eval change: the live model writes \"Thursday, November 5, 2026\", the same correct answer)."
     },
     {
       "id": "46-retry-different-target",

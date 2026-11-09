@@ -694,7 +694,7 @@ Expected assistant: Today is Thursday 2026-11-05, and the afternoon has the 14:0
 
 Expected routes: `office-data`. Expected tools: `graph_calendar_today` with `day_offset` absent or 0.
 
-Pass: all listed tools occur successfully in order; candidate only: the route completes before its turn's `answer`; the final answer carries 2026-11-05, Thursday and Design review, and never the UTC date 2026-11-04; within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order; candidate only: the route completes before its turn's `answer`; the final answer carries the local date (2026-11-05, or written out in words as "November 5, 2026"), Thursday and Design review, and never the UTC date 2026-11-04; within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
 A live pass proves: the model states the user's local date and weekday, which only the CURRENT TIME block holds, rather than the UTC date, a date from its training or one copied from a tool result. It does not prove a no-tool date question is answered: `general-next` routes through the decision loop, whose step gets no clock. Hermetically the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves only that the turn clock reaches synthesis in the user's zone.
 

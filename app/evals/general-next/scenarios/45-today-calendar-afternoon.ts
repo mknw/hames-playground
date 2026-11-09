@@ -19,7 +19,9 @@ export const scenario: ConversationScenario = {
       (args.day_offset === undefined || Number(args.day_offset) === 0),
   },
   expectedRoutes: ['office-data'],
-  answerIncludes: ['2026-11-05', 'Thursday', 'Design review'],
+  // The local date is graded by the catalogue's answerMatches, which accepts it written
+  // out in words as well ("Thursday, November 5, 2026"): the same correct answer.
+  answerIncludes: ['Thursday', 'Design review'],
   artifacts: [],
   forbiddenTools: [],
   maxIterations: 6,

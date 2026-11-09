@@ -2222,9 +2222,12 @@ it is offered.
 - **Re-planning with a gap (#1031).** `minPrePlanningBranchCalls: N` on a
   planner route offers it again, once a plan exists, only when at least N−1
   iterations of non-planner routes ran since the last planner iteration this
-  turn (succeeded or failed), so a re-plan is at the earliest the Nth call. The
-  first plan of a turn is unaffected: until a plan exists the guard above
-  decides. The newest plan replaces the earlier one under PLAN, and the repeat
+  turn (succeeded or failed), so a re-plan is at the earliest the Nth call, and
+  only while at least two iterations remain (`iteration <= maxIterations - 2`):
+  a re-plan exists to order at least one more route, and the answer needs a
+  decision too. A failed re-plan restarts the gap; a failed other-route record
+  counts toward it. The first plan of a turn is unaffected: until a plan exists
+  the guard above decides. The newest plan replaces the earlier one under PLAN, and the repeat
   rule still binds. Absent, the guard above is unchanged. Construction refuses
   it on a route that is not a planner, together with `allowReplan: true`, and
   below 2 or not an integer. `general-next` sets 3: two other route calls

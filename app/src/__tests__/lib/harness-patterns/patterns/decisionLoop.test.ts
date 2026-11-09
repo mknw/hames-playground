@@ -2432,8 +2432,9 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
 
     // MUTATION: `if (record.plan) latestPlan = record.plan` → `latestPlan ??= record.plan`
     // (both places): the route after the re-plan is handed plan 1; red.
-    // general-next's bound: plan, two routes, re-plan, a route and the answer fit in 6.
-    it('the newest plan replaces the earlier one, and plan → 2 routes → re-plan → route → answer fits in 6', async () => {
+    // general-next's bound, with the first plan at iteration 1: plan, two routes,
+    // re-plan, a route and the answer fit in 6.
+    it('the newest plan replaces the earlier one, and with the first plan at iteration 1, plan → 2 routes → re-plan → route → answer fits in 6', async () => {
       const { ctx, seen } = await replan()
       expect(decided(ctx)).toEqual(['think', 'info', 'office', 'think', 'docs', 'answer'])
       expect(seen).toEqual(['1) plan 1.', '1) plan 1.', '1) plan 2.'])
@@ -2542,6 +2543,156 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
         ).toThrow(/route 'think' sets minPrePlanningBranchCalls to .*; it must be an integer >= 2/)
       },
     )
+
+    // rv-1034 (proposed): "since the last planner iteration (succeeded or failed)" — a
+    // FAILED re-plan restarts the gap, and a FAILED other-route record counts toward it.
+    // MUTATION: count from the last plan (`r.plan !== undefined`) instead of the last
+    // planner iteration: think is offered after one route; red.
+    // MUTATION: count only `status === 'succeeded'` records: think is withheld after the
+    // thrown route and one other; red.
+    // MUTATION: offer a gapped planner straight after its own failed re-plan; red.
+    it('a failed re-plan restarts the gap, and a failed other-route record counts toward it', async () => {
+      let n = 0
+      const think = planner<Data>(
+        vi.fn(async () => {
+          n++
+          const text = n === 2 ? '' : `1) plan ${n}.`
+          return {
+            plan: { reasoning: 'r', plan: text, n_steps: text ? 1 : 0 },
+            llmCall: undefined,
+            toolCount: 0,
+          }
+        }) as never,
+        [],
+        { patternId: 'think-p' },
+      )
+      const script = ['think', 'boom', 'info', 'think', 'info', 'info', 'answer']
+      const offeredAt: string[][] = []
+      const decide = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+        const ids = spec.labels.map((l) => l.id)
+        offeredAt.push(ids)
+        const want = script[offeredAt.length - 1] ?? 'answer'
+        const label = ids.includes(want) ? want : 'answer'
+        return {
+          probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, {
+        supportedTypes: ['choice'],
+        limits: () => ({ contextWindow: 131_072 }),
+      })
+      const ctx = await run([
+        build(
+          {
+            think: route(think, { minPrePlanningBranchCalls: 3 }),
+            info: route(looking('i', fresh('x'))),
+            boom: route(
+              fake('simpleLoop', 'boom-p', () => {
+                throw new Error('down')
+              }),
+            ),
+          },
+          decide,
+          { maxIterations: 9 },
+        ),
+      ])
+      expect(offeredAt).toEqual([
+        ['think', 'info', 'boom', 'answer'],
+        ['info', 'boom', 'answer'],
+        ['info', 'boom', 'answer'],
+        // boom (failed) + info since plan 1: the 2 calls the gap needs.
+        ['think', 'info', 'boom', 'answer'],
+        // the re-plan failed: the gap restarts from it, not from plan 1.
+        ['info', 'boom', 'answer'],
+        ['info', 'boom', 'answer'],
+        ['think', 'info', 'boom', 'answer'],
+      ])
+      expect(decided(ctx)).toEqual(['think', 'boom', 'info', 'think', 'info', 'info', 'answer'])
+    })
+
+    // rv-1034 term 1 (proposed; RED at 07d566cb by design): the live trace-1032 run's
+    // scenario 17, attempt 1, turn 1 — office-data, think, read-documents, office-data,
+    // read-documents, think — spent the last of 6 decisions on a re-plan nothing could run.
+    // A re-plan is offered only while a route and the answer can still follow it.
+    // MUTATION (once fixed): drop the remaining-iterations condition: red.
+    // MUTATION: `iteration <= maxIterations - 2` → `- 1`: think is offered at iteration 5; red.
+    it('a re-plan is not offered when fewer than two iterations remain after it', async () => {
+      const script = ['office', 'think', 'docs', 'office', 'docs', 'think']
+      const offeredAt: string[][] = []
+      const decide = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+        const ids = spec.labels.map((l) => l.id)
+        offeredAt.push(ids)
+        const want = script[offeredAt.length - 1] ?? 'answer'
+        const label = ids.includes(want) ? want : 'answer'
+        return {
+          probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, {
+        supportedTypes: ['choice'],
+        limits: () => ({ contextWindow: 131_072 }),
+      })
+      const seen: Array<string | undefined> = []
+      const ctx = await run([
+        build(
+          {
+            office: route(seeing('o', seen)),
+            think: route(replanning(), { minPrePlanningBranchCalls: 3 }),
+            docs: route(seeing('d', seen)),
+          },
+          decide,
+          { maxIterations: 6 },
+        ),
+      ])
+      // Iterations 5 and 6: the gap is met, but at most one decision would follow.
+      expect(offeredAt[4]).toEqual(['office', 'docs', 'answer'])
+      expect(offeredAt[5]).toEqual(['office', 'docs', 'answer'])
+      expect(decided(ctx)).toEqual(['office', 'think', 'docs', 'office', 'docs', 'answer'])
+      expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+    })
+
+    // rv-1034 delta (proposed): the two-iteration condition binds the RE-plan only; the
+    // first plan of a turn is unaffected (#1031), so with no plan yet think is still
+    // offered at iterations 5 and 6 of 6, as before the gap existed.
+    // MUTATION: add `&& iteration <= maxIterations - 2` to the first-plan branch too: red.
+    it('the first plan of a turn is still offered when fewer than two iterations remain', async () => {
+      const script = ['office', 'docs', 'office', 'docs', 'office', 'think']
+      const offeredAt: string[][] = []
+      const decide = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+        const ids = spec.labels.map((l) => l.id)
+        offeredAt.push(ids)
+        const want = script[offeredAt.length - 1] ?? 'answer'
+        const label = ids.includes(want) ? want : 'answer'
+        return {
+          probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, {
+        supportedTypes: ['choice'],
+        limits: () => ({ contextWindow: 131_072 }),
+      })
+      const seen: Array<string | undefined> = []
+      const ctx = await run([
+        build(
+          {
+            office: route(seeing('o', seen)),
+            think: route(replanning(), { minPrePlanningBranchCalls: 3 }),
+            docs: route(seeing('d', seen)),
+          },
+          decide,
+          { maxIterations: 6 },
+        ),
+      ])
+      expect(offeredAt[4]).toEqual(['office', 'think', 'docs', 'answer'])
+      expect(offeredAt[5]).toEqual(['office', 'think', 'docs', 'answer'])
+      expect(decided(ctx)).toEqual(['office', 'docs', 'office', 'docs', 'office', 'think'])
+    })
   })
 })
 

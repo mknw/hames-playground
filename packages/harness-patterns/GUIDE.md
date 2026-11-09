@@ -177,7 +177,8 @@ abstention, a state that would not build — never dispatches a route. A `planne
 route is offered at most once per run of the loop: not straight after itself, and
 not once a plan exists; `allowReplan: true` on the route opts out, and
 `minPrePlanningBranchCalls: N` offers a re-plan once N−1 other route iterations
-ran since the last plan. Any route is
+ran since the last planner iteration, while at least two iterations remain. Any
+route is
 not offered again in the turn once two of its records in a row made no progress:
 the record failed, or none of its tool calls succeeded. A route that keeps
 returning the same failure therefore cannot be dispatched again and again in a

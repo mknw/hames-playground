@@ -2820,13 +2820,14 @@ describe('general-next think route, in isolation', () => {
     ).toBe(false)
   })
 
-  // #1031: think is offered again once two other routes ran since the last plan, and the
-  // bound of 6 holds plan → two routes → re-plan → a route → the answer.
+  // #1031: think is offered again once two other route calls ran since the last planner
+  // iteration, and with the first plan at iteration 1 the bound of 6 holds plan → two
+  // routes → re-plan → a route → the answer.
   // MUTATION: delete `minPrePlanningBranchCalls: 3` from general-next.server.ts: think is
   // absent from the 4th Decide, the scripted choice is a non-decision, red.
   // MUTATION: `maxIterations: 6` → `maxIterations: 5`: the 6th Decide never happens and the
   // turn ends on its bound (budget_exhausted), red.
-  it('T5: re-plans after two other routes, and plan, two routes, re-plan, a route and the answer fit the bound', async () => {
+  it('T5: re-plans after two other route calls, and with the first plan at iteration 1, plan, two routes, re-plan, a route and the answer fit the bound', async () => {
     choices = ['think', 'info-retrieval', 'read-documents', 'think', 'info-retrieval', 'answer']
     mocks.planner
       .mockResolvedValueOnce({ plan: { reasoning: 'r', plan: '1) Look it up.', n_steps: 1 } })
@@ -2914,6 +2915,22 @@ describe('general-next think route, in isolation', () => {
       }
     },
   )
+
+  // rv-1034 (proposed): the #880 bound in the tightest configuration. With the
+  // product-management tools on, info-retrieval's criterion is 447 of 450.
+  // MUTATION: lengthen the Lenny's Data clause by 4 characters (447 → 451): red.
+  it('T7: every Decide criterion stays within 450 characters with the product-management tools on', async () => {
+    gateway.names = [...gateway.names, 'lennys_search_archive']
+    choices = ['answer']
+    await run('anthropic', { ...deps, graphFileIngest: true }, QUESTION)
+    const { criteria } = JSON.parse(String(requests.mock.calls[0][1].body)).questions.next_step as {
+      criteria: Record<string, string>
+    }
+    expect(criteria['info-retrieval']).toContain('product-management archive')
+    for (const route of ['office-data', 'info-retrieval', 'read-documents', 'think']) {
+      expect(criteria[route].length, route).toBeLessThanOrEqual(450)
+    }
+  })
 })
 
 it.each([false, undefined])(

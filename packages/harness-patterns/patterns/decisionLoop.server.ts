@@ -75,9 +75,9 @@
  *   - a planner route is not OFFERED again straight after itself, nor once a plan
  *     exists this turn (`allowReplan` opts a route out; `minPrePlanningBranchCalls`
  *     N offers it again once N−1 other route iterations ran since the last
- *     planner iteration, #1031). The decisions model sees
- *     only each option's description and the state, so a model that likes
- *     `think` picks it every time it is offered — six of six in a recorded run,
+ *     planner iteration, while two iterations remain, #1031). The decisions
+ *     model sees only each option's description and the state, so a model that
+ *     likes `think` picks it every time it is offered — six of six in a recorded run,
  *     which spent the whole bound and never answered. The guard is on the
  *     option SET, not in a prompt: the label is absent from that decision's spec.
  *   - any route is not offered again this turn once two of its records in a row
@@ -220,10 +220,12 @@ export interface DecisionLoopRoute<T> {
   readonly allowReplan?: boolean
   /** Re-planning with a gap (#1031): once a plan exists this turn, the planner
    *  route is offered again only when at least N−1 non-planner iterations have
-   *  run since the previous planner iteration, so a re-plan is at the earliest
-   *  the Nth call. The first plan of a turn is unaffected, the repeat rule still
-   *  binds and the newest plan replaces the earlier one. An integer >= 2, planner
-   *  routes only, and refused together with `allowReplan: true`. */
+   *  run since the previous planner iteration (succeeded or failed), so a re-plan
+   *  is at the earliest the Nth call, and only while at least two iterations
+   *  remain (`iteration <= maxIterations - 2`): a route and the answer must still
+   *  be able to follow it. The first plan of a turn is unaffected, the repeat
+   *  rule still binds and the newest plan replaces the earlier one. An integer
+   *  >= 2, planner routes only, and refused together with `allowReplan: true`. */
   readonly minPrePlanningBranchCalls?: number
 }
 
@@ -1011,11 +1013,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         }
       } else {
         // The options THIS decision offers: a guarded planner is absent straight
-        // after itself and once a plan exists, and a stalled route for the rest of
-        // the run. Only `answer` left means nothing to ask.
+        // after itself and, once a plan exists, until its gap is met (absent
+        // minPrePlanningBranchCalls, for the rest of the run), and a stalled route
+        // for the rest of the run. Only `answer` left means nothing to ask.
         const stalled = stalledRoutes(records)
         // With a plan, a planner that sets minPrePlanningBranchCalls N returns once
-        // N−1 non-planner iterations ran since the last planner iteration (#1031).
+        // N−1 non-planner iterations ran since the last planner iteration, succeeded
+        // or failed, and only while at least two iterations remain: a re-plan
+        // needs a route and the answer after it (#1031, rv-1034).
         const sincePlanner =
           records.length - 1 - records.findLastIndex((r) => kinds.get(r.route) === 'planner')
         const offered = labels.filter(
@@ -1024,7 +1029,8 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             (!guardedPlanners.has(l.id) ||
               (latestPlan === undefined
                 ? records[records.length - 1]?.route !== l.id
-                : sincePlanner >= (routes[l.id].minPrePlanningBranchCalls ?? Infinity) - 1)),
+                : sincePlanner >= (routes[l.id].minPrePlanningBranchCalls ?? Infinity) - 1 &&
+                  iteration <= maxIterations - 2)),
         )
         if (offered.length === 1) {
           ended = 'answer'

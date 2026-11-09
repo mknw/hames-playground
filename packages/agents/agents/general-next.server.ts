@@ -431,7 +431,7 @@ async function createPatterns(
             capability:
               'Read Microsoft 365 mail and file metadata; ' +
               (deps.graphFileIngest === true
-                ? 'copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest; '
+                ? 'copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest, after which read-documents can read their contents; '
                 : 'Graph file ingestion is unavailable. ') +
               'compute and create files in the office sandbox. ' +
               "A file saved under /work/out is kept in this conversation's documents; this route never indexes a saved file. When asked to index one, save it and tell the user they can index a text file from the Data Stash.",
@@ -442,12 +442,12 @@ async function createPatterns(
             description:
               'Look things up in the knowledge graph, on the public web and in library docs' +
               (pmTools.length ? ", and in Lenny's Data's product-management archive" : '') +
-              '; cannot open files uploaded to this conversation.\n' +
+              '; cannot open files uploaded to this conversation. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.\n' +
               'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs)' +
               (pmTools.length ? ', product-management archive (lennys_* tools)' : '') +
               '.',
             capability:
-              'Read the knowledge graph; search or fetch public web sources and library documentation' +
+              'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; search or fetch public web sources and library documentation' +
               (pmTools.length ? "; search Lenny's Data's newsletter and podcast archive" : '') +
               '.',
             siblingResults: ['retriever'],
@@ -455,22 +455,29 @@ async function createPatterns(
           'read-documents': {
             pattern: retrieve,
             description:
-              'Search this conversation’s uploaded and indexed documents and return cited excerpts.\n' +
+              'Search this conversation’s uploaded and indexed documents' +
+              (deps.graphFileIngest === true
+                ? ', including files office-data copied in with graph_file_ingest,'
+                : '') +
+              ' and return cited excerpts.\n' +
               'Tools: document retriever (Data Stash search, cited passages).',
             capability: 'Search this conversation’s Data Stash and return cited excerpts.',
           },
           think: {
             pattern: think,
             description:
-              'Decide and write the steps before acting, from the agent map and earlier results.\n' +
+              'Decide and write the steps before acting, from the agent map and earlier results. Choose this first when a request needs routes working together (one route’s result is another’s input).\n' +
               'Tools: none (planning only).',
-            capability: 'Write a plan using the agent map and earlier step results.',
+            capability:
+              'Write a plan using the agent map and earlier step results. Called first when a request needs routes working together (one route’s result is another’s input), so the plan orders them.',
+            // #1031: a re-plan once two other routes ran since the last plan.
+            minPrePlanningBranchCalls: 3,
           },
         },
         {
           decide: createDecideAdapter(),
           question:
-            'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools.',
+            'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools. When a request needs routes working together (one route’s result is another’s input), choose think first.',
           answer:
             "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",
           handoff: { lastN: 2 },

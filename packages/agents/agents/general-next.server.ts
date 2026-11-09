@@ -470,7 +470,7 @@ async function createPatterns(
               'Tools: none (planning only).',
             capability:
               'Write a plan using the agent map and earlier step results. Called first when a request needs routes working together (one route’s result is another’s input), so the plan orders them.',
-            // #1031: a re-plan once two other routes ran since the last plan.
+            // #1031: a re-plan once two other route calls ran since the last planner iteration.
             minPrePlanningBranchCalls: 3,
           },
         },

@@ -27,10 +27,11 @@
  *     status line keeps the route's failure, so a lookup that could not be done
  *     is still reported;
  *   - `simpleLoop`: its rounds and its terminal `Return` (the route's answer);
- *   - `actorCritic`: every attempt, numbered, with the critic's verdict on it —
- *     `accepted`, `rejected` (the writer's prompt says a rejected attempt's
- *     output is not the answer) or `not judged` (no critic ran after it) — and
- *     each verdict in order with the critic's explanation; plus the record's
+ *   - `actorCritic`: every attempt, numbered, with the critic's verdict on the
+ *     step it was run on — `accepted` or `rejected` (the writer's prompt says a
+ *     rejected attempt's output is not the answer) — and `not judged` on every
+ *     other step (under a critic cadence above 1 the critic runs on one step of
+ *     several), and each verdict in order with the critic's explanation; plus the record's
  *     saved-deliverable lines (#840), the one statement a record makes that no
  *     event carries (where a saved file is kept, and that the route does not
  *     index it), uncapped;
@@ -93,11 +94,22 @@ export function routeTraceRef(
   omit: Record<string, readonly string[]> | undefined,
   saved?: string,
 ): RouteTraceRef {
+  // The rounds the loop ended at its consecutive-recovery cap: those end with
+  // an `error` (kind `recovery_exhausted`) instead of a `loop_recovery`, so the
+  // round numbers ride the ref and the error itself never does (rv-1033 8b).
+  const capped = events.flatMap((e) => {
+    if (e.type !== 'error') return []
+    const d = e.data as { kind?: unknown; turn?: unknown; iteration?: unknown }
+    if (d.kind !== 'recovery_exhausted') return []
+    const round = typeof d.turn === 'number' ? d.turn : d.iteration
+    return typeof round === 'number' ? [round] : []
+  })
   return {
     kind,
     events: events.flatMap((e) => (e.id && TRACE_EVENT_TYPES.has(e.type) ? [e.id] : [])),
     ...(omit && Object.keys(omit).length > 0 ? { omit } : {}),
     ...(saved ? { saved } : {}),
+    ...(capped.length > 0 ? { capped } : {}),
   }
 }
 
@@ -253,7 +265,10 @@ export function renderRouteTrace(
       case 'controller_action': {
         const d = e.data as ControllerActionEventData
         const a = d.action
-        if (!actorCritic && a.tool_name === 'Return') {
+        // A simpleLoop ends on `Return` or on any `is_final` action, without
+        // dispatching it, and the record takes its tool_args as the answer
+        // (`extractSimpleLoop`): the trace does the same (rv-1033 term 8a).
+        if (!actorCritic && (a.tool_name === 'Return' || a.is_final === true)) {
           current = {
             kind: 'return',
             turn: d.turn,
@@ -317,7 +332,14 @@ export function renderRouteTrace(
       case 'critic_result': {
         const d = e.data as CriticResultEventData
         const verdict = d.result.is_sufficient ? 'accepted' : 'rejected'
-        for (const attempt of pending) attempt.verdict = verdict
+        // The critic judged the step it was run on: actorCritic stamps its
+        // rejection on that attempt alone, and under a critic cadence above 1
+        // the steps before it in its window (a data read, say) were never
+        // judged on their own. Rejecting them would tell the writer never to
+        // present the very evidence #1032 delivers.
+        const judged = pending.pop()
+        if (judged) judged.verdict = verdict
+        for (const attempt of pending) attempt.verdict = 'not judged'
         pending = []
         steps.push({ kind: 'critic', verdict, explanation: d.result.explanation ?? '' })
         break
@@ -337,6 +359,16 @@ export function renderRouteTrace(
     }
   }
   for (const attempt of pending) attempt.verdict = 'not judged'
+  // A round the loop ended at its recovery cap is an errored step like any
+  // recovered round; one that recorded no action is still counted.
+  for (const round of ref.capped ?? []) {
+    const step = steps.find(
+      (s): s is BuildingAction | BuildingReturn =>
+        (s.kind === 'action' || s.kind === 'return') && s.turn === round,
+    )
+    if (step) step.errored = true
+    else leftOut++
+  }
 
   const rendered: TraceStep[] = []
   for (const s of steps) {

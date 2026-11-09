@@ -75,6 +75,8 @@ describe('defaultSynthesize and route traces (#1032)', () => {
       true,
       true,
     ])
+    // The compact record that stood in is not flagged; the traces are.
+    expect(turns.map((t) => t.trace === true)).toEqual([false, true, true])
     expect(turns[0].tool_result?.result).toBe(JSON.stringify('record a'))
   })
 
@@ -108,8 +110,11 @@ describe('defaultSynthesize and route traces (#1032)', () => {
     const result = await defaultSynthesize(
       input([iteration(0, trace('a', big), big), iteration(1, trace('b', big), big)]),
     )
-    expect(result.fellBack).toEqual(['1. route-0', '2. route-1'])
     expect(sentTurns(synth)).toHaveLength(1)
+    // Only the call whose compact record the trim kept is named as written
+    // from it; route-0 was dropped whole (rv-1033 term 8c). MUTATION: report
+    // every degraded call (no `kept` filter) → '1. route-0' reappears.
+    expect(result.fellBack).toEqual(['2. route-1'])
   })
 
   // MUTATION: drop the traceTurns branch in synthesisReferences → no references.
@@ -152,11 +157,17 @@ describe('defaultSynthesize and route traces (#1032)', () => {
 })
 
 describe('Synthesize: the trace rule renders only beside a trace (#1032)', () => {
-  const render = (result: unknown) =>
+  const render = (result: unknown, trace = false) =>
     b.request.Synthesize(
       'q',
       'q',
-      [{ n: 0, tool_result: { tool: 'r', result: JSON.stringify(result), success: true } }],
+      [
+        {
+          n: 0,
+          tool_result: { tool: 'r', result: JSON.stringify(result), success: true },
+          ...(trace ? { trace } : {}),
+        },
+      ],
       false,
       null,
       null,
@@ -168,8 +179,9 @@ describe('Synthesize: the trace rule renders only beside a trace (#1032)', () =>
 
   // MUTATION: render the bullet unconditionally → the record case carries it.
   // (synthesis-references.test.ts pins the record bytes; this pins the trace side.)
-  it('says a rejected attempt is not the answer when a turn is a route trace, and nothing otherwise', async () => {
-    const withTrace = (await render(trace('office', 'x'))).body.text()
+  it('says a rejected attempt is not the answer when a turn is flagged a route trace, and nothing otherwise', async () => {
+    // The rule reads the synthesizer's own flag (rv-1033 term 2), not the shape.
+    const withTrace = (await render(trace('office', 'x'), true)).body.text()
     expect(withTrace).toContain('\\"verdict\\": \\"rejected\\" was judged')
     expect(withTrace).toContain('could not do its lookup')
     // The saved-file line is relayed (combined run: the writer named the file and
@@ -178,5 +190,9 @@ describe('Synthesize: the trace rule renders only beside a trace (#1032)', () =>
     expect(withTrace).toContain("is that route's own record of a file it saved")
     const withRecord = (await render('a record')).body.text()
     expect(withRecord).not.toContain('verdict')
+    // A trace-shaped result the synthesizer did not flag renders no rule.
+    expect((await render(trace('office', 'x'))).body.text()).not.toContain(
+      'could not do its lookup',
+    )
   })
 })

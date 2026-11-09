@@ -113,6 +113,8 @@ async function synthesize(
     for (const iteration of input.loopHistory.iterations) {
       const turn = loopTurn(iteration, iteration.result)
       if (iteration.compact && isRouteTrace(iteration.result)) {
+        // The template's trace rule reads this flag, never the result's shape.
+        turn.trace = true
         compacts.set(turns.length, {
           turn: loopTurn(iteration, iteration.compact.result),
           label: iteration.compact.label,
@@ -169,8 +171,14 @@ async function synthesize(
     contextWindow,
     TRACE_CHARS_PER_TOKEN,
   )
-  const fellBack = fitted.degraded.map((i) => compacts.get(i)!.label)
   const trimmedTurns = trimToFit(fitted.items, serialize, 500, contextWindow)
+  // Only the route calls whose compact record the trim kept fell back to it; a
+  // call the trim then dropped whole is not named as written from its record
+  // (rv-1033 term 8c).
+  const kept = new Set(trimmedTurns)
+  const fellBack = fitted.degraded
+    .filter((i) => kept.has(fitted.items[i]))
+    .map((i) => compacts.get(i)!.label)
   const references = synthesisReferences(trimmedTurns, traceTurns)
 
   const variables = {

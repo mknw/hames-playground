@@ -128,6 +128,7 @@ export namespace partial_types {
       additional_calls?: ToolCallRequest[] | null
       tool_result?: ToolResult | null
       expansions?: ExpandedRef[] | null
+      trace?: boolean | null
     }
     export interface MemoryMember {
       content?: string | null

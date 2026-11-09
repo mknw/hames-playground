@@ -16,9 +16,10 @@
 // a turn that ran no route (general-next.server.ts).
 // It answers "what can you do?", "help" and "how do I start?" in any language.
 //
-// The rule about a route's trace (#1032) renders only when a turn's result IS
-// a decisionLoop route trace (its JSON opens with `{"route":`), so every other
-// prompt, decisionLoop's compact records included, is byte-identical without it.
+// The rule about a route's trace (#1032) renders only beside a turn the
+// synthesizer flagged as a decisionLoop route trace (`LoopTurn.trace`, set in
+// code, never read off a result's shape), so every other prompt, decisionLoop's
+// compact records included, is byte-identical without it.
 
 // A projection of supplied locators, never document content. Numbered in the
 // prompt so an answer's [n] has an explicit source/locator to refer to.
@@ -121,7 +122,7 @@ function Synthesize(
       rather than filling the gap.
     {% set traced = namespace(any=false) %}
     {% for turn in turns %}
-    {% if turn.tool_result and '{"route":' in turn.tool_result.result %}
+    {% if turn.trace %}
     {% set traced.any = true %}
     {% endif %}
     {% endfor %}

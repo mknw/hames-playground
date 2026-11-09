@@ -34,6 +34,10 @@ class LoopTurn {
   additional_calls ToolCallRequest[]? @description("Extra tool calls executed in the same turn (multi-call turns only)")
   tool_result ToolResult? @description("Tool execution result if any")
   expansions ExpandedRef[]? @description("Refs resolved into tool_args this turn via ref:<id>")
+  /// Set by the synthesizer on a turn whose result is a decisionLoop route
+  /// call's complete trace (#1032): a code-written flag, never read off the
+  /// result's shape. Optional; absent everywhere else.
+  trace bool? @description("This turn's result is a decisionLoop route trace")
 }
 
 /// A ref:<id> argument that was expanded inline during a turn

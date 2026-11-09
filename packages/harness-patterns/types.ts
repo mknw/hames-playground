@@ -83,6 +83,9 @@ export interface LoopTurn {
   additional_calls?: ToolCallRequest[] | null
   tool_result?: ToolResult | null
   expansions?: ExpandedRef[] | null
+  /** Set by the synthesizer on a turn whose result is a decisionLoop route
+   *  call's complete trace (#1032); a code-written flag. */
+  trace?: boolean | null
 }
 
 /**
@@ -1393,6 +1396,9 @@ export interface RouteTraceRef {
   /** The record's code-written saved-deliverable lines (an `actorCritic`
    *  route's, #840): the one statement a record makes that no event carries. */
   saved?: string
+  /** The rounds the loop ended at its consecutive-recovery cap (their `error`
+   *  events' `turn` / `iteration`): errored steps, left out and counted. */
+  capped?: number[]
 }
 
 /** Data payload for controller_action event */

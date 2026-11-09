@@ -161,6 +161,7 @@ export interface LoopTurn {
   additional_calls?: ToolCallRequest[] | null
   tool_result?: ToolResult | null
   expansions?: ExpandedRef[] | null
+  trace?: boolean | null
   
 }
 

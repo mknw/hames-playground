@@ -2572,10 +2572,10 @@ events and renders, under the route call and its status line (the step line),
 every controller action with its reasoning, every tool call (name and
 arguments) and every successful tool result. Ids, never content: the blob holds
 each result once and the record event stays small. By kind: a `simpleLoop`'s
-rounds and its `Return`; every `actorCritic` attempt, numbered and marked with
-the verdict of the critic that covered it (`accepted`, `rejected`, or `not
-judged` when no critic ran after it), each verdict in order with its
-explanation; and the record's saved-deliverable lines (#840: where a saved file is kept
+rounds and its `Return`; every `actorCritic` attempt, numbered, with the critic's verdict on the
+step it was run on (`accepted` or `rejected`) and `not judged` on every other
+step (under a critic cadence above 1 the critic runs on one step of several),
+each verdict in order with its explanation; and the record's saved-deliverable lines (#840: where a saved file is kept
 and that the route does not index it), the one statement a record makes that
 no event carries; the `planner`'s plan text with its reasoning; the `retriever`'s
 query, every passage in full with its `source` and locator, and its references.
@@ -4461,7 +4461,7 @@ labels come back as `fellBack`. When even the compact records do not fit, the tr
 turns, oldest first, as before. A retriever call inside a trace (`tool: 'retriever'`, read off
 the event, on turns the synthesizer itself marked as traces — never off a result's shape)
 supplies its producer's structured references. The template adds one rule only when a turn's
-result is a route trace (its JSON opens with `{"route":`): an attempt marked
+result is a route trace (the synthesizer's own `LoopTurn.trace` flag, never the result's shape): an attempt marked
 `"verdict": "rejected"` is not the answer, and a route whose status says it failed could not do
 its lookup. A route's `saved` line is relayed: where the file is kept, that it is not indexed
 for search, and where the user can index it. Every other prompt is byte-identical.

@@ -424,6 +424,78 @@ describe('writerEvidence: trace — what the writer reads per route kind', () =>
     expect(iteration.compact?.result).toEqual({ __error: 'the loop ended without returning' })
   })
 
+  // rv-1033 term 8a: a simpleLoop ends on ANY is_final action, without
+  // dispatching it, and the record takes its tool_args as the answer.
+  // MUTATION: recognise only `Return` → the step renders with no calls and the
+  // answer text is lost.
+  it('simpleLoop: an is_final action not named Return is the route’s answer, as in the record', () => {
+    const events = [
+      createEvent('controller_action', 'info', {
+        action: {
+          reasoning: 'enough',
+          tool_name: 'search',
+          tool_args: 'The answer text.',
+          is_final: true,
+        } as ControllerAction,
+        turn: 0,
+        maxTurns: 5,
+      }),
+    ]
+    const trace = renderRouteTrace(
+      routeTraceRef('simpleLoop', events, undefined),
+      new Map(events.map((e) => [e.id!, e])),
+      { route: 'info', status: 's' },
+    )
+    expect(trace.steps).toEqual([{ return: 'The answer text.', reasoning: 'enough' }])
+  })
+
+  // rv-1033 term 8b: a round the loop ended at its consecutive-recovery cap
+  // ends with an `error` (kind `recovery_exhausted`), not a `loop_recovery`.
+  // MUTATION: drop `capped` from routeTraceRef → the refused step renders as an
+  // empty step and nothing is counted.
+  it('leaves out a round ended at the recovery cap and counts it, without reading the error', () => {
+    const refused = createEvent('controller_action', 'info', action('nope', '{}', 'try', 2))
+    const cap = createEvent('error', 'info', {
+      error: 'RAW-ERROR-TEXT',
+      severity: 'recoverable',
+      turn: 2,
+      kind: 'recovery_exhausted',
+    })
+    // An actorCritic cap names its attempt as `iteration`, and an unparseable
+    // answer at the cap records no action at all.
+    const actorCap = createEvent('error', 'doc', {
+      error: 'x',
+      severity: 'recoverable',
+      iteration: 4,
+      kind: 'recovery_exhausted',
+    })
+    const ok = [
+      createEvent('controller_action', 'info', action('search', '{}', 'look')),
+      createEvent('tool_call', 'info', { callId: 'c', tool: 'search', args: {} }),
+      createEvent('tool_result', 'info', {
+        callId: 'c',
+        tool: 'search',
+        result: 'row',
+        success: true,
+      }),
+    ]
+    const events = [...ok, refused, cap]
+    const ref = routeTraceRef('simpleLoop', events, undefined)
+    expect(ref.capped).toEqual([2])
+    const trace = renderRouteTrace(ref, new Map(events.map((e) => [e.id!, e])), {
+      route: 'info',
+      status: 's',
+    })
+    expect(trace.erroredStepsLeftOut).toBe(1)
+    expect(trace.steps).toHaveLength(1)
+    expect(JSON.stringify(trace)).not.toContain('RAW-ERROR-TEXT')
+    const none = routeTraceRef('actorCritic', [actorCap], undefined)
+    expect(none.capped).toEqual([4])
+    expect(
+      renderRouteTrace(none, new Map(), { route: 'office', status: 's' }).erroredStepsLeftOut,
+    ).toBe(1)
+  })
+
   it('leaves out what the controller never saw, and a hidden result', () => {
     const events = [
       createEvent('controller_action', 'info', action('read_neo4j_cypher', '{}', 'q')),

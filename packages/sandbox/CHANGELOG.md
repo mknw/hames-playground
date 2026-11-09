@@ -1,5 +1,61 @@
 # @hames-ai/sandbox
 
+## 0.7.0
+
+### Patch Changes
+
+- 4cd3f85: Record MCP tool failures as failures, and bound stash search (#440, #707).
+  
+  - A gateway tool result with `isError: true` is now `{ success: false, data: null, error }`, whatever its text says. Before, only text starting with `Error:` counted as a failure. The error is the result's text blocks joined by newlines. A result with no text uses its `structuredContent` as JSON, and one with neither uses a fixed message. The `Error:` prefix rule still applies to servers that do not set the flag.
+  - The in-VM sandbox transport now also puts a failure's text on `error`. `data` still holds the parsed payload, because the shell's `{ stdout, stderr, exit_code }` lives there.
+  - `simpleLoop`'s controller turn log truncates a failed call's `error` to `maxResultChars`, as it already truncated `result`. For an all-failed batch, the joined errors are truncated the same way.
+  - `MAX_SEARCH_SPAN` (200) is exported from `stash/document-ingest.server`. The search loop now caps its first query at that ceiling, so a `k` above it no longer sends one oversized vector query.
+- Updated dependencies [22fc71d]
+- Updated dependencies [9b4a8bc]
+- Updated dependencies [439ea4f]
+- Updated dependencies [e59e993]
+- Updated dependencies [a30f690]
+- Updated dependencies [b16e72a]
+- Updated dependencies [0538d36]
+- Updated dependencies [b8d2090]
+- Updated dependencies [15e7432]
+- Updated dependencies [481f557]
+- Updated dependencies [a77515a]
+- Updated dependencies [69c4cf8]
+- Updated dependencies [9b0f08e]
+- Updated dependencies [1ea8d93]
+- Updated dependencies [cb38253]
+- Updated dependencies [c89ca36]
+- Updated dependencies [32424d4]
+- Updated dependencies [264b17d]
+- Updated dependencies [22f8cf4]
+- Updated dependencies [8166f8f]
+- Updated dependencies [bc83e31]
+- Updated dependencies [541b10d]
+- Updated dependencies [e149866]
+- Updated dependencies [f1dfb6f]
+- Updated dependencies [c384ffe]
+- Updated dependencies [9a1c9af]
+- Updated dependencies [c5d0902]
+- Updated dependencies [09d3e3b]
+- Updated dependencies [afdb324]
+- Updated dependencies [a50fedc]
+- Updated dependencies [07d566c]
+- Updated dependencies [f1e289b]
+- Updated dependencies [d9d069a]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+- Updated dependencies [4cd3f85]
+- Updated dependencies [d06a4c6]
+- Updated dependencies [6dac094]
+- Updated dependencies [e2c49d5]
+- Updated dependencies [7b6c517]
+- Updated dependencies [1b31461]
+- Updated dependencies [0a4ec50]
+- Updated dependencies [5c8cdef]
+- Updated dependencies [aa20f63]
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

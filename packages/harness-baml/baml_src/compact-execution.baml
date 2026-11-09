@@ -130,6 +130,9 @@ function Synthesize(
       insufficient by that route's critic: its output is not the answer, so
       never present it as the result. A route whose "status" says it failed
       could not do its lookup; say so rather than filling the gap.
+    - A route's "saved" line is that route's own record of a file it saved:
+      tell the user where the file is kept and, as the line says, that it is
+      not indexed for search and where they can index it.
     {% endif %}
     {% if guide %}
     - The one exception: what you can do, and the link to the example-questions

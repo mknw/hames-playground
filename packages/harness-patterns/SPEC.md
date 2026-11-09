@@ -4451,14 +4451,17 @@ BAML Return → string (assistant response text)
 For a route trace (#1032) `defaultSynthesize` keeps both forms of each such turn. Before
 its existing trim drops any turn, the oldest route calls fall back from the trace to their
 compact record, one at a time, until the prompt fits the window of the client the call will
-take (the same estimate and budget as the trim, `degradeToFit` beside `trimToFit`); their
+take: the prompt text the turns add, counted at `TRACE_CHARS_PER_TOKEN` (2.5 — live trace
+prompts measured 2.74–2.85 characters per provider token, where the trim's chars/4 read a
+77k-token trace as 53k) against the trim's budget (`degradeToFit`, beside `trimToFit`); their
 labels come back as `fellBack`. When even the compact records do not fit, the trim drops whole
 turns, oldest first, as before. A retriever call inside a trace (`tool: 'retriever'`, read off
 the event, on turns the synthesizer itself marked as traces — never off a result's shape)
 supplies its producer's structured references. The template adds one rule only when a turn's
 result is a route trace (its JSON opens with `{"route":`): an attempt marked
 `"verdict": "rejected"` is not the answer, and a route whose status says it failed could not do
-its lookup. Every other prompt is byte-identical.
+its lookup. A route's `saved` line is relayed: where the file is kept, that it is not indexed
+for search, and where the user can index it. Every other prompt is byte-identical.
 
 The BAML companion's `defaultSynthesize` accepts structured references only from the `retriever`
 producer (including multi-call results verified against their call roster). Its text seam accepts

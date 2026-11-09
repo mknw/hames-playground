@@ -661,7 +661,7 @@ describe('writerEvidence: trace — when the traces do not fit', () => {
     const { items: out, degraded } = degradeToFit(
       items,
       (item, i) => (i === 1 ? undefined : 'c'),
-      (arr) => arr.join(''),
+      (arr) => arr.join('').length,
       0,
       // 4096 reserved for output, 3 000 tokens of room: two of the three bigs must go.
       7_096,
@@ -672,7 +672,7 @@ describe('writerEvidence: trace — when the traces do not fit', () => {
       degradeToFit(
         items,
         () => 'c',
-        (a) => a.join(''),
+        (a) => a.join('').length,
         0,
         1_000_000,
       ).degraded,

@@ -55,8 +55,10 @@ describe('defaultSynthesize and route traces (#1032)', () => {
   // MUTATION: skip `degradeToFit` → the trim drops turns 0 and 1 whole instead.
   // MUTATION: degrade newest-first → turn 2 falls back and turn 0 keeps its trace.
   it('falls back to the compact record, oldest route call first, only until the traces fit', async () => {
-    // 4 096 reserved for output; room for about 6 000 tokens = 24 000 characters.
-    vi.spyOn(clients, 'getContextWindow').mockReturnValue(10_096)
+    // 4 096 reserved for output; 10 000 tokens of room at TRACE_CHARS_PER_TOKEN
+    // (2.5) is 25 000 characters, the template's 4 000 included: three 10k
+    // traces do not fit, two do.
+    vi.spyOn(clients, 'getContextWindow').mockReturnValue(14_096)
     const synth = vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
     const big = 'x'.repeat(10_000)
     const result = await defaultSynthesize(
@@ -74,6 +76,22 @@ describe('defaultSynthesize and route traces (#1032)', () => {
       true,
     ])
     expect(turns[0].tool_result?.result).toBe(JSON.stringify('record a'))
+  })
+
+  // The fallback counts the prompt text at the measured characters per token,
+  // not the trim's chars/4: at chars/4 these two traces "fit" a window they
+  // would overflow on the wire (live: 212k characters were 77k tokens, 2.74).
+  // MUTATION: pass no `charsPerToken` (chars/4) → no fallback.
+  it('counts a trace at 2.5 characters per token, so it falls back before the provider would refuse', async () => {
+    // 4 096 reserved for output: 60 000 tokens of room.
+    vi.spyOn(clients, 'getContextWindow').mockReturnValue(64_096)
+    vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
+    const big = 'z'.repeat(80_000)
+    const result = await defaultSynthesize(
+      input([iteration(0, trace('a', big), 'record a'), iteration(1, trace('b', big), 'record b')]),
+    )
+    // 2 × 80k characters: 40k tokens at chars/4 (fits 60k), 64k at 2.5 (does not).
+    expect(result.fellBack).toEqual(['1. route-0'])
   })
 
   it('reports no fallback when every trace fits, and keeps the existing trim behind it', async () => {
@@ -154,6 +172,10 @@ describe('Synthesize: the trace rule renders only beside a trace (#1032)', () =>
     const withTrace = (await render(trace('office', 'x'))).body.text()
     expect(withTrace).toContain('\\"verdict\\": \\"rejected\\" was judged')
     expect(withTrace).toContain('could not do its lookup')
+    // The saved-file line is relayed (combined run: the writer named the file and
+    // dropped "not indexed … Data Stash" on the MUST 17). MUTATION: drop the
+    // sentence from the trace block and regenerate → red.
+    expect(withTrace).toContain("is that route's own record of a file it saved")
     const withRecord = (await render('a record')).body.text()
     expect(withRecord).not.toContain('verdict')
   })

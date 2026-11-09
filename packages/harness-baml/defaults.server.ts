@@ -49,6 +49,21 @@ assertServerOnImport()
 // REQUIRED `synthesize` config (supplied by bamlPatterns().synthesize)
 // ============================================================================
 
+/** Characters per token of a Synthesize prompt carrying route traces (#1032),
+ *  for the trace fallback. Measured on the general-next eval's live trace
+ *  prompts: 2.74 (212,018 prompt characters, 77,280 provider tokens) and 2.85
+ *  (107,417 / 39,021 is 2.75; 26,131 / 9,177 is 2.85). 2.5 keeps a margin, so
+ *  the fallback fires before the provider refuses. */
+export const TRACE_CHARS_PER_TOKEN = 2.5
+
+/** The Synthesize template's own text, in characters: the rendered prompt with
+ *  no turn is about 3,000 (synthesis-before-507.json), with the trace rules a
+ *  little more; rounded up. */
+const SYNTHESIZE_BASE_CHARS = 4_000
+
+/** What one turn adds around its result (`--- Turn n ---`, `Tool:`, `Result:`). */
+const TURN_FRAME_CHARS = 60
+
 export async function defaultSynthesize(input: CompactExecutionInput): Promise<SynthesisResult> {
   return synthesize(input, null)
 }
@@ -140,8 +155,20 @@ async function synthesize(
   }
   // #1032: before any turn is dropped, the oldest route calls whose complete
   // trace does not fit fall back to their compact record, one at a time; the
-  // trim below still drops whole turns when even that is not enough.
-  const fitted = degradeToFit(turns, (_, i) => compacts.get(i)?.turn, serialize, 500, contextWindow)
+  // trim below still drops whole turns when even that is not enough. Measured
+  // as the prompt text the turns add, at the characters per token measured on
+  // live traces — not the trim's chars/4, which read a 77k-token trace as 53k.
+  const promptChars = (retained: LoopTurn[]) =>
+    retained.reduce((n, t) => n + (t.tool_result?.result.length ?? 0) + TURN_FRAME_CHARS, 0) +
+    JSON.stringify(synthesisReferences(retained, traceTurns)).length
+  const fitted = degradeToFit(
+    turns,
+    (_, i) => compacts.get(i)?.turn,
+    promptChars,
+    SYNTHESIZE_BASE_CHARS + input.userMessage.length + (input.memoryContext?.length ?? 0),
+    contextWindow,
+    TRACE_CHARS_PER_TOKEN,
+  )
   const fellBack = fitted.degraded.map((i) => compacts.get(i)!.label)
   const trimmedTurns = trimToFit(fitted.items, serialize, 500, contextWindow)
   const references = synthesisReferences(trimmedTurns, traceTurns)

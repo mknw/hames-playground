@@ -2654,6 +2654,45 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
       expect(decided(ctx)).toEqual(['office', 'think', 'docs', 'office', 'docs', 'answer'])
       expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
     })
+
+    // rv-1034 delta (proposed): the two-iteration condition binds the RE-plan only; the
+    // first plan of a turn is unaffected (#1031), so with no plan yet think is still
+    // offered at iterations 5 and 6 of 6, as before the gap existed.
+    // MUTATION: add `&& iteration <= maxIterations - 2` to the first-plan branch too: red.
+    it('the first plan of a turn is still offered when fewer than two iterations remain', async () => {
+      const script = ['office', 'docs', 'office', 'docs', 'office', 'think']
+      const offeredAt: string[][] = []
+      const decide = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+        const ids = spec.labels.map((l) => l.id)
+        offeredAt.push(ids)
+        const want = script[offeredAt.length - 1] ?? 'answer'
+        const label = ids.includes(want) ? want : 'answer'
+        return {
+          probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, {
+        supportedTypes: ['choice'],
+        limits: () => ({ contextWindow: 131_072 }),
+      })
+      const seen: Array<string | undefined> = []
+      const ctx = await run([
+        build(
+          {
+            office: route(seeing('o', seen)),
+            think: route(replanning(), { minPrePlanningBranchCalls: 3 }),
+            docs: route(seeing('d', seen)),
+          },
+          decide,
+          { maxIterations: 6 },
+        ),
+      ])
+      expect(offeredAt[4]).toEqual(['office', 'think', 'docs', 'answer'])
+      expect(offeredAt[5]).toEqual(['office', 'think', 'docs', 'answer'])
+      expect(decided(ctx)).toEqual(['office', 'docs', 'office', 'docs', 'office', 'think'])
+    })
   })
 })
 

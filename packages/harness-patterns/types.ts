@@ -1169,6 +1169,11 @@ export interface LoopIteration {
   action: ControllerAction
   result: unknown
   timestamp: number
+  /** Set when `result` is a decisionLoop route call's complete trace (#1032):
+   *  the route's compact record in its place, and the route call's name, for a
+   *  synthesizer that cannot fit the trace in its window. Absent on every other
+   *  iteration. */
+  compact?: { result: unknown; label: string }
 }
 
 /** Full history of a loop pattern's execution */
@@ -1220,8 +1225,18 @@ export interface CompactExecutionInput {
   stepsThisTurn?: number
 }
 
+/** What a synthesis implementation returns: the reply and its call record,
+ *  plus the route calls it wrote from their compact record because their
+ *  complete trace did not fit its window (#1032). `compactExecution` records a
+ *  `writer_evidence` warning naming them. */
+export interface SynthesisResult extends LLMResult<string> {
+  /** The `compact.label` of each iteration whose compact record stood in for
+   *  its trace, oldest first. Absent or empty: every trace was used. */
+  fellBack?: readonly string[]
+}
+
 /** Custom synthesis function type */
-export type SynthesisFn = (input: CompactExecutionInput) => Promise<LLMResult<string>>
+export type SynthesisFn = (input: CompactExecutionInput) => Promise<SynthesisResult>
 
 /** Configuration for compactExecution pattern */
 export interface CompactExecutionConfig extends PatternConfig {
@@ -1313,6 +1328,10 @@ export interface ToolResultEventData {
     iteration: number
     budgetErrorId?: string
     supersedes?: { recordId: string; budgetErrorId: string }
+    /** Set when the loop hands the answer writer each route's complete trace
+     *  (`writerEvidence: 'trace'`, #1032): which committed events of the route
+     *  call the trace is built from. Ids, never content. */
+    trace?: RouteTraceRef
   }
   /** Correlation ID linking this result to its call */
   callId?: string
@@ -1356,6 +1375,21 @@ export interface ToolResultEventData {
   /** Carried over from a held placeholder that asked for it: the call is
    *  dispatched again on re-entry (boundary guards slice 10, O15). */
   redispatch?: true
+}
+
+/** What a decisionLoop route record names as its trace (#1032): the route's
+ *  own committed events, by id and in order, and what its controller never saw
+ *  of each result. The writer resolves the ids against the turn's events, so
+ *  the trace is the committed (guard-sanitised) content itself, not a copy. */
+export interface RouteTraceRef {
+  /** The route's kind (`simpleLoop`, `actorCritic`, `retriever`, `planner`). */
+  kind: string
+  /** Ids of the route's own `controller_action`, `tool_call`, `tool_result`,
+   *  `critic_result`, `plan_created` and `loop_recovery` events. */
+  events: string[]
+  /** Per tool, the result fields the route's controller did not see
+   *  (`simpleLoop`'s `resultOmit`); left out of the trace's results too. */
+  omit?: Record<string, readonly string[]>
 }
 
 /** Data payload for controller_action event */
@@ -1493,6 +1527,9 @@ export type WarningTask =
   /** `decisionLoop` could not quote this turn's recalled memories to its decisions
    *  model and counted them instead (#829). */
   | 'decision_memories'
+  /** The answer writer could not fit each route's complete trace in its window and
+   *  wrote from the compact records of the oldest route calls instead (#1032). */
+  | 'writer_evidence'
   /** The egress gate checked outgoing calls with less than it should have: a
    *  damaged roster, a missing or unreadable directory, or Decide down. */
   | 'egress_check'

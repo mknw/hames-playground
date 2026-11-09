@@ -479,6 +479,9 @@ async function createPatterns(
           liveEvents: true,
           documents: deps.createDecisionDocuments?.(sessionId),
           quoteMemories: deps.quoteMemoriesToDecider,
+          // The answer writer reads each route call's complete trace this turn,
+          // not its capped record (#1032); the decisions model keeps the records.
+          writerEvidence: 'trace',
         },
       ),
     ),

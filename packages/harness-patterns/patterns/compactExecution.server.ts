@@ -15,7 +15,9 @@ import type {
   EventView,
   ConfiguredPattern,
   AssistantMessageEventData,
+  ContextEvent,
   ToolResultEventData,
+  WarningEventData,
 } from '../types'
 import { LLMCallError } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
@@ -23,6 +25,7 @@ import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, redactCall } from '../context.server'
 import { supersededRouteEventIds } from '../route-records'
+import { renderRouteTrace } from './decisionLoop-trace.server'
 
 assertServerOnImport()
 
@@ -173,6 +176,17 @@ function buildSynthesisInputFromView(
             .map((e) => e.id),
         )
         const mine = new Set<LoopHistory['iterations'][number]>()
+        // The turn's events by id, built once and only when a record of this
+        // turn names a trace (#1032): a trace is the committed events
+        // themselves, resolved here, so they are read past the pattern scope.
+        let byId: Map<string, ContextEvent> | undefined
+        const eventsById = () =>
+          (byId ??= new Map(
+            view
+              .unfiltered()
+              .get()
+              .flatMap((e) => (e.id ? [[e.id, e] as const] : [])),
+          ))
 
         for (const event of threadView.get()) {
           if (event.id && obsolete.has(event.id)) continue
@@ -211,6 +225,25 @@ function buildSynthesisInputFromView(
                   resultData.success === false
                     ? { __error: resultData.error ?? 'Tool call failed' }
                     : resultData.result
+                // A decisionLoop record of THIS turn that names its route
+                // call's trace (`writerEvidence: 'trace'`, #1032): the writer
+                // reads the trace, and the record stays beside it for a
+                // synthesizer that cannot fit the trace. An earlier turn's
+                // record is never expanded.
+                const trace = resultData.routeRecord?.trace
+                if (trace && thisTurnIds.has(event.id)) {
+                  open.compact = {
+                    result: open.result,
+                    label: `${resultData.routeRecord!.iteration}. ${resultData.tool}`,
+                  }
+                  open.result = renderRouteTrace(trace, eventsById(), {
+                    route: resultData.tool,
+                    status: open.action.status ?? '',
+                    ...(resultData.success === false
+                      ? { error: resultData.error ?? 'Tool call failed' }
+                      : {}),
+                  })
+                }
               } else {
                 const acc = (open.result ?? {}) as Record<string, unknown>
                 acc[String(openReceived)] = resultData.success
@@ -392,7 +425,24 @@ export function compactExecution<T extends CompactExecutionData>(
       // implementation creates its own collector internally instead of being
       // handed one. The implementation is REQUIRED config, supplied at the
       // composition root — core hosts no default import.
-      const { value: synthesizedResponse, call: llmCall } = await synthesize(input)
+      const { value: synthesizedResponse, call: llmCall, fellBack } = await synthesize(input)
+
+      // The writer could not fit each route's complete trace and wrote from
+      // the compact records of the oldest route calls instead (#1032).
+      if (fellBack?.length) {
+        trackEvent(
+          scope,
+          'warning',
+          {
+            task: 'writer_evidence',
+            message: `The answer was written from the compact record of ${fellBack.length} route call(s) — ${fellBack.join(', ')} — because every route's complete trace did not fit the writer's context window.`,
+            fallback:
+              'Those route calls reached the writer as their compact records, oldest first.',
+            detail: { routeCalls: fellBack.length, routes: fellBack.join('; ') },
+          } satisfies WarningEventData,
+          true,
+        )
+      }
 
       // Track assistant message event with LLM call data. `final: true`
       // distinguishes the compactExecution's user-facing response from router

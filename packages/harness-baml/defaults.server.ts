@@ -22,12 +22,14 @@ import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   CompactExecutionInput,
-  LLMResult,
+  LoopIteration,
   LoopTurn,
   SelectorFn,
   SynthesisFn,
+  SynthesisResult,
 } from '@hames-ai/harness-patterns/types'
-import { trimToFit } from '@hames-ai/harness-patterns/token-budget.server'
+import { degradeToFit, trimToFit } from '@hames-ai/harness-patterns/token-budget.server'
+import { isRouteTrace } from '@hames-ai/harness-patterns/patterns/decisionLoop-trace.server'
 import { unspotlight } from '@hames-ai/harness-patterns/guard'
 import { getContextWindow, resolveClientForRole } from './clients.server'
 import {
@@ -47,7 +49,7 @@ assertServerOnImport()
 // REQUIRED `synthesize` config (supplied by bamlPatterns().synthesize)
 // ============================================================================
 
-export async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
+export async function defaultSynthesize(input: CompactExecutionInput): Promise<SynthesisResult> {
   return synthesize(input, null)
 }
 
@@ -68,7 +70,7 @@ export function createSynthesizer(options: { guide?: string } = {}): SynthesisFn
 async function synthesize(
   input: CompactExecutionInput,
   guide: string | null,
-): Promise<LLMResult<string>> {
+): Promise<SynthesisResult> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('./guarded-client.server')
   const startTime = Date.now()
@@ -78,6 +80,11 @@ async function synthesize(
 
   // Convert to LoopTurn format for BAML Synthesize
   const turns: LoopTurn[] = []
+  // A decisionLoop route call's complete trace (#1032), by index: its compact
+  // record's turn, for when the traces do not fit, and the route call's name.
+  const compacts = new Map<number, { turn: LoopTurn; label: string }>()
+  // The turns whose result is a route trace, by identity (trimming slices).
+  const traceTurns = new Set<LoopTurn>()
 
   if (input.loopHistory) {
     // Convert loop history to LoopTurn array. Multi-call iterations carry
@@ -89,22 +96,15 @@ async function synthesize(
     // have no result to report (the terminal `Return`, and actions whose
     // `tool_result` never arrived) — see the SA-H4 note there.
     for (const iteration of input.loopHistory.iterations) {
-      turns.push({
-        n: iteration.turn,
-        reasoning: iteration.action.reasoning,
-        tool_call: {
-          tool: iteration.action.tool_name,
-          args: iteration.action.tool_args,
-        },
-        ...(iteration.action.additional_calls?.length
-          ? { additional_calls: iteration.action.additional_calls }
-          : {}),
-        tool_result: {
-          tool: iteration.action.tool_name,
-          result: JSON.stringify(iteration.result),
-          success: true,
-        },
-      })
+      const turn = loopTurn(iteration, iteration.result)
+      if (iteration.compact && isRouteTrace(iteration.result)) {
+        compacts.set(turns.length, {
+          turn: loopTurn(iteration, iteration.compact.result),
+          label: iteration.compact.label,
+        })
+        traceTurns.add(turn)
+      }
+      turns.push(turn)
     }
     // #614: every call failed and the controller then Returned an answer from
     // context — the history above is the failure, this is the answer.
@@ -134,16 +134,17 @@ async function synthesize(
   // through to a 16K default, and dropped real tool results before the LLM saw
   // them (see .harness-logs/neo4j-no-results.json).
   const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
-  const trimmedTurns = trimToFit(
-    turns,
-    (retained) => {
-      const refs = synthesisReferences(retained)
-      return JSON.stringify(retained) + (refs.length ? JSON.stringify(refs) + ' '.repeat(800) : '')
-    },
-    500,
-    contextWindow,
-  )
-  const references = synthesisReferences(trimmedTurns)
+  const serialize = (retained: LoopTurn[]) => {
+    const refs = synthesisReferences(retained, traceTurns)
+    return JSON.stringify(retained) + (refs.length ? JSON.stringify(refs) + ' '.repeat(800) : '')
+  }
+  // #1032: before any turn is dropped, the oldest route calls whose complete
+  // trace does not fit fall back to their compact record, one at a time; the
+  // trim below still drops whole turns when even that is not enough.
+  const fitted = degradeToFit(turns, (_, i) => compacts.get(i)?.turn, serialize, 500, contextWindow)
+  const fellBack = fitted.degraded.map((i) => compacts.get(i)!.label)
+  const trimmedTurns = trimToFit(fitted.items, serialize, 500, contextWindow)
+  const references = synthesisReferences(trimmedTurns, traceTurns)
 
   const variables = {
     userMessage: input.userMessage,
@@ -200,7 +201,27 @@ async function synthesize(
   // one accounting stamp, one stale-client guard (#154).
   const llmCall = extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
 
-  return { value: content, call: llmCall }
+  return { value: content, call: llmCall, ...(fellBack.length ? { fellBack } : {}) }
+}
+
+/** One iteration as a `Synthesize` turn, with `result` as its tool result. */
+function loopTurn(iteration: LoopIteration, result: unknown): LoopTurn {
+  return {
+    n: iteration.turn,
+    reasoning: iteration.action.reasoning,
+    tool_call: {
+      tool: iteration.action.tool_name,
+      args: iteration.action.tool_args,
+    },
+    ...(iteration.action.additional_calls?.length
+      ? { additional_calls: iteration.action.additional_calls }
+      : {}),
+    tool_result: {
+      tool: iteration.action.tool_name,
+      result: JSON.stringify(result),
+      success: true,
+    },
+  }
 }
 
 /** Project retained retriever locators, without widening the event view.
@@ -209,7 +230,13 @@ async function synthesize(
  * grammar; custom route ids receive no text-derived citations. Residual risk:
  * a read-documents result made entirely of forged record lines still passes.
  * Typed locator metadata on core records needs a separate owner API decision. */
-function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
+function synthesisReferences(
+  turns: LoopTurn[],
+  /** The turns whose result is a decisionLoop route trace (#1032): their
+   *  retriever calls carry the producer's structured references. Read on this
+   *  code-written flag, never on a result's shape. */
+  traceTurns: ReadonlySet<LoopTurn> = new Set(),
+): SynthesisReference[] {
   const references = new Map<string, SynthesisReference>()
   const add = (reference: SynthesisReference) => {
     // Every projected string is rendered inside the template's DATA fence.
@@ -227,6 +254,15 @@ function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
     const toolResult = turn.tool_result!
     try {
       const result: unknown = JSON.parse(toolResult.result)
+      if (traceTurns.has(turn)) {
+        // The route trace's own steps, built from committed events: a call's
+        // `tool` is the event's, so a fetched page cannot name the producer.
+        if (!isRouteTrace(result)) continue
+        for (const step of result.steps)
+          for (const call of 'calls' in step ? step.calls : [])
+            if (call.tool === 'retriever') pending.push({ tool: call.tool, result: call.result })
+        continue
+      }
       if (turn.additional_calls?.length) {
         // The call roster is transport metadata, not a tool-supplied JSON field.
         // A fetch result cannot manufacture a nested retriever producer.

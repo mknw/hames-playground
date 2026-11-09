@@ -57,6 +57,11 @@
  * 'planner' means the leaf pattern's name === 'planner', so any pattern given
  * that name is read as one (the same trust as allowReplan).
  *
+ * With `writerEvidence: 'trace'` (#1032) each record also names the ids of its
+ * route call's committed events, and the answer writer after the loop reads
+ * that call's complete trace instead of the record
+ * (`decisionLoop-trace.server.ts`); the decisions model keeps the records.
+ *
  * ## Failure — never a silent fallback
  *
  *   - a non-decision (error, abstention, a label outside the options, a state
@@ -152,6 +157,7 @@ import {
   type ResolvedDecisionDocuments,
 } from './decisionLoop-documents.server'
 import { renderMemoriesBlock, type DecisionMemories } from './decisionLoop-memories.server'
+import { routeTraceRef, type WriterEvidence } from './decisionLoop-trace.server'
 import type { RecalledMemory } from './memoryRecall.server'
 import type { PlannerData } from './planner.server'
 import {
@@ -280,6 +286,12 @@ export interface DecisionLoopConfig extends PatternConfig {
    *  be resumed inside the run, and a route's `simpleLoop` refuses a batch that
    *  holds one. */
   readonly gatedTools?: readonly string[]
+  /** What the answer writer after the loop reads for each route call of this
+   *  turn (#1032): `'record'` (default) the capped record the decisions model
+   *  reads; `'trace'` the route's complete internal trace, built from its
+   *  committed events (`decisionLoop-trace.server.ts`). Either way the decisions
+   *  model, the handoff and an earlier turn's records stay compact. */
+  readonly writerEvidence?: WriterEvidence
 }
 
 export interface DecisionLoopData extends TypedDecisionData, PlannerData {}
@@ -373,6 +385,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     documentsTimeoutMs: documentsTimeoutConfig,
     quoteMemories,
     gatedTools = [],
+    writerEvidence = 'record',
     ...patternConfig
   } = config
 
@@ -398,6 +411,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       `decisionLoop: documentsTimeoutMs must be an integer >= 1, got ${documentsTimeout}`,
     )
   }
+  if (writerEvidence !== 'record' && writerEvidence !== 'trace') {
+    throw new Error(
+      `decisionLoop: writerEvidence must be 'record' or 'trace', got ${String(writerEvidence)}`,
+    )
+  }
   if (!decideFn.supportedTypes?.includes('choice') && decideFn.supportedTypes !== undefined) {
     throw new Error("decisionLoop: the decide seam does not support 'choice' questions")
   }
@@ -407,6 +425,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   // out of events nobody reviewed, and a record is what the model decides on.
   const kinds = new Map<string, RouteKind>()
   const leafIds = new Map<string, string>()
+  const resultOmits = new Map<string, Record<string, readonly string[]>>()
   for (const name of names) {
     const leaf = leafPattern(routes[name].pattern)
     const kind = routeKind(routes[name].pattern)
@@ -425,6 +444,10 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     }
     kinds.set(name, kind)
     leafIds.set(name, leaf.config.patternId ?? leaf.name)
+    // What the route's controller never saw of a result (simpleLoop's
+    // `resultOmit`): the writer's trace leaves it out too (#1032).
+    const omit = (leaf.config as { resultOmit?: Record<string, readonly string[]> }).resultOmit
+    if (omit) resultOmits.set(name, omit)
   }
 
   // Which patternIds each route owns, and which each route may NOT see.
@@ -1244,6 +1267,17 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         ?.budgetErrorId
       const routeRecord: NonNullable<ToolResultEventData['routeRecord']> = {
         iteration,
+        // The writer's evidence (#1032): the ids of the route call's own
+        // committed events, which the answer writer renders as its trace.
+        ...(writerEvidence === 'trace'
+          ? {
+              trace: routeTraceRef(
+                kinds.get(label)!,
+                iterationEvents.filter((e) => e.patternId === leafIds.get(label)),
+                resultOmits.get(label),
+              ),
+            }
+          : {}),
         ...(budgetErrorId ? { budgetErrorId } : {}),
         ...(record.status === 'succeeded' && previous?.id && previousBudgetError
           ? { supersedes: { recordId: previous.id, budgetErrorId: previousBudgetError } }

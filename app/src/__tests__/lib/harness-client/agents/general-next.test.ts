@@ -1446,8 +1446,13 @@ describe('general-next composition', () => {
   })
 
   // E1: fake synthesis copies ONLY the production route record, never
-  // answerIncludes or raw child calls (the eval fixture's shortcut).
-  // MUTATION: drop the URL from the positive Return below: the eval goes red.
+  // answerIncludes or raw child calls (the eval fixture's shortcut). Since
+  // #1032 the writer reads the route's trace and the record rides beside it
+  // as `compact`: the record still needs the URL in the Return, and the trace
+  // carries it from the tool results whatever the Return says.
+  // MUTATION: drop the URL from the positive Return below: the record check goes
+  // red. MUTATION: build general-next with `writerEvidence: 'record'`: the trace
+  // check goes red.
   it.each(['anthropic', 'self_deployed'])(
     'E1: URL-free Return fails the unchanged eval check on %s',
     async (tier) => {
@@ -1471,7 +1476,7 @@ describe('general-next composition', () => {
         maxIterations: 6,
       }
       mocks.synthesize.mockImplementation(async (input) => ({
-        value: String(input.loopHistory!.iterations[0].result),
+        value: String(input.loopHistory!.iterations[0].compact?.result),
       }))
       for (const cited of [false, true]) {
         choices = ['info-retrieval', 'answer']
@@ -1537,6 +1542,9 @@ describe('general-next composition', () => {
         expect(checks.filter((c) => !c.pass).map((c) => c.name)).toEqual(
           cited ? [] : [`answer contains ${url}`],
         )
+        // The writer's evidence: the search result and the fetch call both name it.
+        const writerInput = mocks.synthesize.mock.calls.at(-1)![0]
+        expect(JSON.stringify(writerInput.loopHistory!.iterations[0].result)).toContain(url)
       }
     },
   )
@@ -2575,7 +2583,7 @@ describe('general-next think route, in isolation', () => {
     expect(result.context.data.response).toBe('synthetic answer')
   })
 
-  it('T1: the plan, not the planner reasoning, is the record Decide and the answer route read', async () => {
+  it('T1: the plan, not the planner reasoning, is the record Decide reads; the answer writer reads both (#1032)', async () => {
     choices = ['think', 'answer']
     mocks.planner.mockResolvedValueOnce({
       plan: { reasoning: PLAN_REASONING, plan: PLAN, n_steps: 1 },
@@ -2606,8 +2614,16 @@ describe('general-next think route, in isolation', () => {
     const synth = mocks.synthesize.mock.calls[0][0]
     expect(synth.mode).toBe('thread')
     expect(synth.loopHistory?.iterations.map((i) => i.action.tool_name)).toEqual(['think'])
-    expect(String(synth.loopHistory?.iterations[0].result)).toContain(PLAN)
-    expect(JSON.stringify(mocks.synthesize.mock.calls)).not.toContain(PLAN_REASONING)
+    // #1032: the writer reads the route's trace, the plan WITH its reasoning; the
+    // record beside it is the plan alone. MUTATION: `writerEvidence: 'record'`.
+    const [step] = synth.loopHistory!.iterations
+    expect(String(step.compact?.result)).toContain(PLAN)
+    expect(String(step.compact?.result)).not.toContain(PLAN_REASONING)
+    expect(step.result).toMatchObject({
+      route: 'think',
+      status: expect.stringContaining('1. think — succeeded'),
+      steps: [{ plan: PLAN, reasoning: PLAN_REASONING, steps: 1 }],
+    })
   })
 
   // MUTATION: screen the plan (reinstate the record sanitise in decisionLoop.server.ts).
@@ -2631,7 +2647,10 @@ describe('general-next think route, in isolation', () => {
     expect(states[1]).toContain(plan)
     expect(states[1]).not.toContain('⟦')
     expect(mocks.controller.mock.calls[0][0].planContext).toContain(plan)
-    expect(String(mocks.synthesize.mock.calls[0][0].loopHistory?.iterations[0].result)).toBe(plan)
+    const [step] = mocks.synthesize.mock.calls[0][0].loopHistory!.iterations
+    expect(step.compact?.result).toBe(plan)
+    // The writer's trace carries the plan as the planner wrote it, unfenced (#1032).
+    expect(step.result).toMatchObject({ steps: [{ plan }] })
     expect(mocks.screen.mock.calls.some(([input]) => input.content?.includes(plan))).toBe(false)
   })
 
@@ -2678,9 +2697,9 @@ describe('general-next think route, in isolation', () => {
     })
     expect(states[1]).toContain(directive)
     expect(mocks.controller.mock.calls[0][0].planContext).toContain(directive)
-    expect(String(mocks.synthesize.mock.calls[0][0].loopHistory?.iterations[0].result)).toContain(
-      directive,
-    )
+    const [step] = mocks.synthesize.mock.calls[0][0].loopHistory!.iterations
+    expect(String(step.compact?.result)).toContain(directive)
+    expect(step.result).toMatchObject({ steps: [{ plan }] })
     expect(result.context.events.some((e) => e.type === 'content_sanitized')).toBe(false)
     expect(mocks.screen).not.toHaveBeenCalled()
   })

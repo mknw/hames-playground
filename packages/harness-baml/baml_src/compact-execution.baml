@@ -15,6 +15,10 @@
 // cache (vLLM's on the private tier) can reuse it. The agent passes it only on
 // a turn that ran no route (general-next.server.ts).
 // It answers "what can you do?", "help" and "how do I start?" in any language.
+//
+// The rule about a route's trace (#1032) renders only when a turn's result IS
+// a decisionLoop route trace (its JSON opens with `{"route":`), so every other
+// prompt, decisionLoop's compact records included, is byte-identical without it.
 
 // A projection of supplied locators, never document content. Numbered in the
 // prompt so an answer's [n] has an explicit source/locator to refer to.
@@ -115,6 +119,18 @@ function Synthesize(
     - Every name, number, and fact in your response must trace to the results
       above. When the data is missing, empty, or negative, report that honestly
       rather than filling the gap.
+    {% set traced = namespace(any=false) %}
+    {% for turn in turns %}
+    {% if turn.tool_result and '{"route":' in turn.tool_result.result %}
+    {% set traced.any = true %}
+    {% endif %}
+    {% endfor %}
+    {% if traced.any %}
+    - In a route's trace, an attempt with "verdict": "rejected" was judged
+      insufficient by that route's critic: its output is not the answer, so
+      never present it as the result. A route whose "status" says it failed
+      could not do its lookup; say so rather than filling the gap.
+    {% endif %}
     {% if guide %}
     - The one exception: what you can do, and the link to the example-questions
       page, may come from the ASSISTANT GUIDE above, exactly as written there.

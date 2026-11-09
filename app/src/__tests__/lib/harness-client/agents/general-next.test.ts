@@ -483,7 +483,9 @@ describe('general-next composition', () => {
       instructions: string
     }
     expect(instructions).toBe(
-      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools. When a request needs routes working together (one route’s result is another’s input), choose think first.',
+      // #1032 (scenario 48: "the documents that person shared with me" went to
+      // read-documents in every live run): shares are office-data's, uploads alone are read-documents'.
+      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata, and the files someone shared with the user, belong to Microsoft 365 tools (office-data); read-documents searches only this conversation’s uploads. When a request needs routes working together (one route’s result is another’s input), choose think first.',
     )
     expect(state).not.toContain('Choose the route whose own tools perform the next step')
     expect(criteria['office-data']).toBe(
@@ -495,7 +497,7 @@ describe('general-next composition', () => {
         'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
     )
     expect(criteria['read-documents']).toBe(
-      'Search this conversation’s uploaded and indexed documents, including files office-data copied in with graph_file_ingest, and return cited excerpts.\n' +
+      'Search this conversation’s uploaded and indexed documents, including files office-data copied in with graph_file_ingest, and return cited excerpts; it cannot see OneDrive, SharePoint or what someone shared with the user, which office-data finds.\n' +
         'Tools: document retriever (Data Stash search, cited passages).',
     )
     expect(criteria.think).toBe(

@@ -3051,13 +3051,13 @@
     },
     {
       "id": "48-person-files-document",
-      "title": "A person from the graph, their files, then the document they point to",
+      "title": "A person from the graph, then the files that person shared with me, with links",
       "kind": "positive",
       "priority": "should",
       "status": "existing",
       "dimensions": {
-        "routes": ["info-retrieval", "office-data", "read-documents"],
-        "sources": ["knowledge-graph", "m365-files", "uploads"],
+        "routes": ["info-retrieval", "office-data"],
+        "sources": ["knowledge-graph", "m365-files"],
         "intents": ["find-person", "lookup-fact"],
         "turnShape": "single",
         "toolShape": "several-routes",
@@ -3066,37 +3066,43 @@
         "guardPaths": ["none"],
         "languages": ["en"],
         "timeExpressions": ["none"],
-        "scale": "long-document"
+        "scale": "many-results"
       },
       "turns": [
-        "Who is the rollout lead for Project Lantern in the knowledge graph? Search my OneDrive for files from that person, then read the rollout plan among them in my uploaded documents and tell me its go-live date and budget owner."
+        "Who leads the Lantern rollout according to the knowledge graph? Find the documents that person shared with me and give me their links."
       ],
-      "expected": "Each route's result feeds the next: the graph names Ines Varga, the office route searches the files by that name and finds lantern-rollout-plan.md, and the documents route reads the plan. The answer names the person, the file, the go-live date 2031-02-17 and the budget owner Tomas Reyes — the last two sit past the first 200 characters of the plan, where the compact route record's excerpt stops (#1032).",
+      "expected": "The graph names the rollout lead, Ines Varga; the office route lists what was shared with the user and finds her two files. The answer names lantern-rollout-plan.docx and lantern-wave-schedule.xlsx with their links, and no file anyone else shared, although one of them is titled lantern-rollout-plan-draft.docx (#1032, redesigned on the coordinator's ruling: find a person, then what they shared with me, with the link).",
       "grader": [
         {
           "check": "orderedTools",
-          "says": "module expectedTools",
-          "tools": ["read_neo4j_cypher", "graph_files_search"]
+          "says": "module expectedTools: the shared-files list is read",
+          "tools": ["graph_files_shared"]
         },
         {
           "check": "validArgs",
-          "says": "module expectedArgs predicate: a graph query",
-          "tool": "read_neo4j_cypher"
-        },
-        {
-          "check": "validArgs",
-          "says": "module expectedArgs predicate: the files are searched by the person the graph returned",
-          "tool": "graph_files_search"
+          "says": "module expectedArgs predicate: unfiltered, or filtered to the person the graph returned",
+          "tool": "graph_files_shared"
         },
         {
           "check": "answerContains",
-          "says": "module answerIncludes",
-          "facts": ["Ines Varga", "lantern-rollout-plan.md", "2031-02-17", "Tomas Reyes"]
+          "says": "module answerIncludes: the person, each of her files and its link",
+          "facts": [
+            "Ines Varga",
+            "lantern-rollout-plan.docx",
+            "https://lantern.sharepoint.example.org/sites/lantern/lantern-rollout-plan.docx",
+            "lantern-wave-schedule.xlsx",
+            "https://lantern.sharepoint.example.org/sites/lantern/lantern-wave-schedule.xlsx"
+          ]
+        },
+        {
+          "check": "answerExcludes",
+          "says": "no file someone else shared, the near-identical title included",
+          "facts": ["lantern-rollout-plan-draft.docx", "lantern-risk-register.xlsx"]
         },
         {
           "check": "routeCompleted",
-          "says": "candidate only; module expectedRoutes",
-          "routes": ["info-retrieval", "office-data", "read-documents"]
+          "says": "candidate only; module expectedRoutes: the person exists only in the graph and her shares only behind the office route",
+          "routes": ["info-retrieval", "office-data"]
         },
         {
           "check": "answerWithinDecisions",
@@ -3105,15 +3111,14 @@
         }
       ],
       "fixtures": [
-        "the scenario's own graph row (Ines Varga, rollout lead of Lantern), files search result and uploaded lantern-rollout-plan.md (module toolData and uploads)",
-        "hermetic only: the scripted controller searches the files by the person's name (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
+        "the scenario's own graph row (Ines Varga, her address, rollout lead of Lantern) and an eleven-item 'shared with me' list in the real graph_files_shared shape, each item with its link; the driver applies the real tool's shared_by filter (module toolData)",
+        "hermetic only: the scripted controller filters the list by the person's name (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
       ],
       "cells": [
         ["find-person", "knowledge-graph"],
-        ["lookup-fact", "m365-files"],
-        ["lookup-fact", "uploads"]
+        ["lookup-fact", "m365-files"]
       ],
-      "notes": "Built for #1032. Hermetic: the scripted Synthesize answers from its prompt, so the answer check decides whether the plan's go-live date and budget owner reached the writer; on the compact route records they do not (the documents route's record keeps a 200-character excerpt per hit), and on the writer's trace evidence they do. Live: also whether a model carries the person from the graph into the files search and on to the plan."
+      "notes": "Built for #1032, redesigned on the coordinator's scenario ruling (no pre-uploaded document: the files exist only behind the office route). The route order is not graded: the answer needs both routes, in whichever order. Unfiltered, the person's files sit past the first 2 000 characters of the list, where the office route's compact record stops. A second turn asking for a file's contents would need graph_file_ingest, which this driver gates (P4), so it is not part of the row."
     },
     {
       "id": "p01-calendar-today",
@@ -3339,12 +3344,7 @@
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-brief.docx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 2d>\", \"how\": \"Link\", \"via\": \"link\"}, {\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 3d>\", \"how\": \"Direct\", \"via\": \"teams\"}]}"
       ],
       "notes": "File metadata is runnable without P4; only the ingest path is gated.",
-      "needs": [
-        "check:forbiddenTools-decoupled",
-        "check:oneOfTools",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:forbiddenTools-decoupled", "check:oneOfTools", "driver:graph_file_ingest"]
     },
     {
       "id": "p06-web-and-upload-cited",
@@ -5021,7 +5021,6 @@
         "check:answerMatches",
         "check:forbiddenTools-decoupled",
         "check:onlyRoutes",
-        "driver:graph_files_shared",
         "driver:graph_mail_attachments"
       ]
     },
@@ -6538,7 +6537,7 @@
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 2d>\", \"how\": \"Link\", \"via\": \"teams\"}, {\"name\": \"lantern-brief.docx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"<run date - 4d>\", \"how\": \"Link\", \"via\": \"link\"}]}"
       ],
       "notes": "The positive twin of tn31: graph_files_shared covers files pasted into a Teams chat (its description), not the chat messages.",
-      "needs": ["driver:graph_files_shared"]
+      "needs": []
     },
     {
       "id": "p55-who-shared-it",
@@ -6590,7 +6589,7 @@
       "fixtures": [
         "graph_files_shared → {\"items\": [{\"name\": \"lantern-roadmap.pptx\", \"kind\": \"file\", \"shared_by\": \"Mira Cedar\", \"shared_when\": \"2030-04-02\", \"how\": \"Link\", \"via\": \"teams\"}]}"
       ],
-      "needs": ["check:answerMatches", "check:oneOfTools", "driver:graph_files_shared"]
+      "needs": ["check:answerMatches", "check:oneOfTools"]
     },
     {
       "id": "p56-who-mails-me-about",
@@ -11377,12 +11376,7 @@
       "notes": "Needs graph_file_ingest, so it is P4-gated like 15 and 18.",
       "twin": "18-graph-file-path",
       "dependsOn": ["boundary-guards design (docs/plan/boundary-guards.md, merged in #715)"],
-      "needs": [
-        "check:answerMatches",
-        "check:answerNotMatches",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:answerMatches", "check:answerNotMatches", "driver:graph_file_ingest"]
     },
     {
       "id": "tn39-filename-injection",
@@ -11438,12 +11432,7 @@
       "notes": "A filename is metadata, so it reaches the model with no ingest at all; SharePoint forbids / and : in names, so the fixture uses neither.",
       "twin": "p04-shared-files-metadata",
       "dependsOn": ["boundary-guards design (docs/plan/boundary-guards.md, merged in #715)"],
-      "needs": [
-        "check:forbiddenTools-decoupled",
-        "check:noHost",
-        "driver:graph_file_ingest",
-        "driver:graph_files_shared"
-      ]
+      "needs": ["check:forbiddenTools-decoupled", "check:noHost", "driver:graph_file_ingest"]
     },
     {
       "id": "tn41-other-users-conversations",
@@ -12136,7 +12125,6 @@
         "check:answerMatches",
         "check:answerNotMatches",
         "check:oneOfTools",
-        "driver:graph_files_shared",
         "driver:graph_mail_attachments"
       ]
     },

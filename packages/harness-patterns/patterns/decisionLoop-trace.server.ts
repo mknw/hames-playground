@@ -30,7 +30,10 @@
  *   - `actorCritic`: every attempt, numbered, with the critic's verdict on it —
  *     `accepted`, `rejected` (the writer's prompt says a rejected attempt's
  *     output is not the answer) or `not judged` (no critic ran after it) — and
- *     each verdict in order with the critic's explanation;
+ *     each verdict in order with the critic's explanation; plus the record's
+ *     saved-deliverable lines (#840), the one statement a record makes that no
+ *     event carries (where a saved file is kept, and that the route does not
+ *     index it), uncapped;
  *   - `planner`: the plan text with its reasoning;
  *   - `retriever`: its query, every passage in full with its source and
  *     locator, and the references citations are built from.
@@ -88,11 +91,13 @@ export function routeTraceRef(
   kind: string,
   events: readonly ContextEvent[],
   omit: Record<string, readonly string[]> | undefined,
+  saved?: string,
 ): RouteTraceRef {
   return {
     kind,
     events: events.flatMap((e) => (e.id && TRACE_EVENT_TYPES.has(e.type) ? [e.id] : [])),
     ...(omit && Object.keys(omit).length > 0 ? { omit } : {}),
+    ...(saved ? { saved } : {}),
   }
 }
 
@@ -131,6 +136,10 @@ export interface RouteTrace {
   /** Steps left out because they errored; absent when none did. */
   readonly erroredStepsLeftOut?: number
   readonly steps: readonly TraceStep[]
+  /** The record's saved-deliverable lines (an `actorCritic` route's, #840):
+   *  where each file the accepted attempt saved is kept, and that this route
+   *  does not index it. Code-written; no event carries it. */
+  readonly saved?: string
 }
 
 /** What the record knows that the events do not. */
@@ -374,6 +383,7 @@ export function renderRouteTrace(
     ...(head.error ? { error: head.error } : {}),
     ...(leftOut > 0 ? { erroredStepsLeftOut: leftOut } : {}),
     steps: rendered,
+    ...(ref.saved ? { saved: ref.saved } : {}),
   }
 }
 

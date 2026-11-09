@@ -849,6 +849,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           stats,
           result: extracted.result,
           reasoning: extracted.reasoning,
+          ...(extracted.saved ? { saved: extracted.saved } : {}),
           ...(kind === 'planner'
             ? {
                 plan: {
@@ -1275,6 +1276,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
                 kinds.get(label)!,
                 iterationEvents.filter((e) => e.patternId === leafIds.get(label)),
                 resultOmits.get(label),
+                record.saved,
               ),
             }
           : {}),

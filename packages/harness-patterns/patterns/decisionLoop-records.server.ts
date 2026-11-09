@@ -99,7 +99,7 @@ export interface RouteStats {
  *  short, CODE-GENERATED reason (never model or tool text) for the one-line step
  *  list; `text` is the failure's own text. */
 export type Extracted =
-  | { ok: true; result: string; reasoning: string; planSteps?: number }
+  | { ok: true; result: string; reasoning: string; planSteps?: number; saved?: string }
   | { ok: false; failure: string; text: string }
 
 /** One finished iteration, as held in memory and rendered into the state. */
@@ -122,6 +122,10 @@ export interface RouteOutput {
    *  `result` this one repeats character for character ({@link repeatOf}): the
    *  decision learned nothing new from it, so it is no progress. */
   readonly repeats?: number
+  /** An `actorCritic` record's saved-deliverable lines (#840), uncapped, even
+   *  when they did not fit `result`: the one code-written statement a record
+   *  carries that no event does, which the writer's trace keeps (#1032). */
+  readonly saved?: string
 }
 
 // ============================================================================
@@ -417,6 +421,7 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
     ok: true,
     result: withLine ? `${blocks.join('\n')}\n${saved}` : blocks.join('\n'),
     reasoning,
+    ...(saved ? { saved } : {}),
   }
 }
 

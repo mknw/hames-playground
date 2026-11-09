@@ -1390,6 +1390,9 @@ export interface RouteTraceRef {
   /** Per tool, the result fields the route's controller did not see
    *  (`simpleLoop`'s `resultOmit`); left out of the trace's results too. */
   omit?: Record<string, readonly string[]>
+  /** The record's code-written saved-deliverable lines (an `actorCritic`
+   *  route's, #840): the one statement a record makes that no event carries. */
+  saved?: string
 }
 
 /** Data payload for controller_action event */

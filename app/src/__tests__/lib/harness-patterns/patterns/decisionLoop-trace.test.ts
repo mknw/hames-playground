@@ -272,6 +272,36 @@ describe('writerEvidence: trace — what the writer reads per route kind', () =>
     ])
   })
 
+  // Run 1 of the pre-merge candidate: without this line the writer lost "index it
+  // from the Data Stash" on 14 and 17 (#840's deterministic line lives only in
+  // the record). MUTATION: drop `record.saved` from the routeTraceRef call in
+  // decisionLoop → no `saved` on the trace.
+  it('actorCritic: the record’s saved-deliverable line rides the trace, uncapped', async () => {
+    const office = fake('actorCritic', 'doc', (s) => {
+      trackEvent(
+        s,
+        'controller_action',
+        action('sandbox_bash', '{"command":"python3 make.py /work/out/report.md"}', 'save it'),
+        true,
+      )
+      call(s, 'b1', 'sandbox_bash', { command: 'python3 make.py /work/out/report.md' })
+      result(s, 'b1', 'sandbox_bash', 'wrote /work/out/report.md')
+      trackEvent(
+        s,
+        'critic_result',
+        { result: { is_sufficient: true, explanation: 'Saved.' } },
+        true,
+      )
+    })
+    const { patterns, synthesize } = chain({ office: route(office) }, ['office', 'answer'], 'trace')
+    await run(patterns)
+    const [iteration] = writerInput(synthesize).loopHistory!.iterations
+    expect((iteration.result as RouteTrace).saved).toBe(
+      'Saved to /work/out/report.md (not indexed by this route; the user can index a text one for search from the Data Stash)',
+    )
+    expect(String(iteration.compact?.result)).toContain((iteration.result as RouteTrace).saved)
+  })
+
   // MUTATION: drop the plan_created case → no step. MUTATION: drop `reasoning`.
   it('planner: the plan text with its reasoning (the record carries the plan alone)', async () => {
     const think = fake('planner', 'think', (s) => {

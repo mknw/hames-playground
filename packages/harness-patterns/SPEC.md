@@ -2559,7 +2559,9 @@ each result once and the record event stays small. By kind: a `simpleLoop`'s
 rounds and its `Return`; every `actorCritic` attempt, numbered and marked with
 the verdict of the critic that covered it (`accepted`, `rejected`, or `not
 judged` when no critic ran after it), each verdict in order with its
-explanation; the `planner`'s plan text with its reasoning; the `retriever`'s
+explanation; and the record's saved-deliverable lines (#840: where a saved file is kept
+and that the route does not index it), the one statement a record makes that
+no event carries; the `planner`'s plan text with its reasoning; the `retriever`'s
 query, every passage in full with its `source` and locator, and its references.
 **Errored steps** — a failed call (with its action when all of the action's calls
 failed) and a round the loop recovered from (a refused tool, unusable

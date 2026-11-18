@@ -14,7 +14,11 @@ import {
   LLMCallError,
   withRunFrame,
 } from '@hames-ai/harness-patterns'
-import type { Attempt, ControllerAction, ScriptExecutionEvent } from '@hames-ai/harness-patterns'
+import type {
+  Attempt,
+  ControllerAction,
+  ScriptExecutionEvent,
+} from '@hames-ai/harness-patterns/types'
 import { b } from '@hames-ai/harness-baml/baml_client'
 import {
   createActorControllerAdapter,
@@ -77,12 +81,17 @@ afterAll(() => {
 })
 
 const pattern = () =>
-  actorCritic(createActorControllerAdapter(['probe']), createCriticAdapter(), ['probe'], {
-    patternId: 'empty-attempt',
-    maxRetries: 4,
-    criticCadence: 99,
-    multiToolCalls: 'sequential',
-  })
+  actorCritic<{ intent?: string; [key: string]: unknown }>(
+    createActorControllerAdapter(['probe']),
+    createCriticAdapter(),
+    ['probe'],
+    {
+      patternId: 'empty-attempt',
+      maxRetries: 4,
+      criticCadence: 99,
+      multiToolCalls: 'sequential',
+    },
+  )
 
 async function run() {
   const scope = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
@@ -97,7 +106,7 @@ async function run() {
 }
 
 describe('empty actor attempts', () => {
-  // Mutation for every case: replace the adapter's labelled fallback with
+  // Mutation for the empty-output cases: replace the adapter's labelled fallback with
   // event.output. Undefined fails BAML validation; empty strings lose the label.
   it('renders a successful tool call with no data instead of BAML refusing the retry', async () => {
     callTool.mockResolvedValueOnce({ success: true, data: undefined })
@@ -189,6 +198,8 @@ describe('empty actor attempts', () => {
   it.each([false, true])(
     'pauses a held call before either adapter can read the pending attempt (batch: %s)',
     async (batch) => {
+      // Mutation: remove actorCritic's hitlPending stop checks. A pending
+      // placeholder then reaches the critic instead of pausing at this boundary.
       actions = [
         action({
           is_final: true,

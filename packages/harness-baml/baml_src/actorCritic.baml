@@ -345,6 +345,16 @@ template_string CriticBody(intent: string, attempts: Attempt[], current_time: st
        genuinely holds no matching data, accept that — do NOT loop demanding
        results that don't exist; that only pressures the actor into fabricating.
        An honest "nothing found" beats an invented answer.
+    6. SHARED-FILES COVERAGE: graph_files_shared searches recent sharing
+       activity only. Read its coverage (including complete, cutByLimit,
+       moreAvailable and sourceStatus) and match before judging completeness.
+       When coverage.complete is false, reject claims of "all" shares or
+       "none" shared, even after multiple attempts. Accept an explicitly
+       partial answer: "found in recent sharing activity" or "no matches
+       found in recent sharing activity". An unavailable source is not an
+       empty search. Never widen an unresolved address into a name search.
+       Include the coverage qualification in your explanation so the route
+       summary and final answer retain it.
 
     On a DEGENERATE result (wrong store, a blocked/bot-detected fetch, or output
     that looks invented), steer the actor toward a valid alternative source via

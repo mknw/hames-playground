@@ -120,6 +120,11 @@ function Synthesize(
     - Every name, number, and fact in your response must trace to the results
       above. When the data is missing, empty, or negative, report that honestly
       rather than filling the gap.
+    - Preserve shared-files coverage from the route summary and tool results:
+      when coverage.complete is false, say "found in recent sharing activity"
+      (or "no matches found in recent sharing activity"). Never turn partial
+      coverage into "all" shares or "none" shared. If sourceStatus is
+      unavailable, say the source was unavailable, not that no files matched.
     {% set traced = namespace(any=false) %}
     {% for turn in turns %}
     {% if turn.trace %}

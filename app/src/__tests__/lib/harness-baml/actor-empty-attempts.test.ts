@@ -186,28 +186,39 @@ describe('empty actor attempts', () => {
     expect(callTool).toHaveBeenCalledTimes(2)
   })
 
-  it('pauses a held call before either adapter can read the pending attempt', async () => {
-    callTool.mockImplementationOnce(async () => {
-      const ask = await askHuman({
-        kind: 'confirmation',
-        question: 'Continue the synthetic call?',
-        options: [
-          { id: 'stop', label: 'Stop', unattended: true, stopsRun: true },
-          { id: 'continue', label: 'Continue' },
-        ],
-        defaultOption: 'stop',
+  it.each([false, true])(
+    'pauses a held call before either adapter can read the pending attempt (batch: %s)',
+    async (batch) => {
+      actions = [
+        action({
+          is_final: true,
+          ...(batch
+            ? { additional_calls: [{ tool_name: 'probe', tool_args: '{"later":true}' }] }
+            : {}),
+        }),
+      ]
+      callTool.mockImplementationOnce(async () => {
+        const ask = await askHuman({
+          kind: 'confirmation',
+          question: 'Continue the synthetic call?',
+          options: [
+            { id: 'stop', label: 'Stop', unattended: true, stopsRun: true },
+            { id: 'continue', label: 'Continue' },
+          ],
+          defaultOption: 'stop',
+        })
+        return { success: true, data: held(ask) }
       })
-      return { success: true, data: held(ask) }
-    })
-    const result = await withRunFrame(
-      { inference: { tier: 'anthropic' }, hitl: { attended: true } },
-      () => harness(pattern())('Synthetic task'),
-    )
-    expect(result.status).toBe('paused')
-    expect(actorAttempts).toEqual([[]])
-    expect(criticAttempts).toEqual([])
-    expect(callTool).toHaveBeenCalledTimes(1)
-  })
+      const result = await withRunFrame(
+        { inference: { tier: 'anthropic' }, hitl: { attended: true } },
+        () => harness(pattern())('Synthetic task'),
+      )
+      expect(result.status).toBe('paused')
+      expect(actorAttempts).toEqual([[]])
+      expect(criticAttempts).toEqual([])
+      expect(callTool).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it.each([undefined, null, ''])('labels a caller-supplied empty output (%s)', async (output) => {
     // Also defend the public adapter against JS callers without a typed output.

@@ -129,6 +129,7 @@ export namespace partial_types {
       tool_result?: ToolResult | null
       expansions?: ExpandedRef[] | null
       trace?: boolean | null
+      shared_files?: boolean | null
     }
     export interface MemoryMember {
       content?: string | null

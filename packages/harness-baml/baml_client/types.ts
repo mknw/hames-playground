@@ -162,6 +162,7 @@ export interface LoopTurn {
   tool_result?: ToolResult | null
   expansions?: ExpandedRef[] | null
   trace?: boolean | null
+  shared_files?: boolean | null
   
 }
 

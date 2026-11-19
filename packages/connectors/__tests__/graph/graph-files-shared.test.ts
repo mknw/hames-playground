@@ -282,7 +282,9 @@ describe('resolved sharer address (#1036)', () => {
   })
 
   it('uses the address even when the supplied name differs', async () => {
-    graphFetch.mockResolvedValue({ value: [shared('one.pdf', 'Alex Reed')] })
+    const row = shared('one.pdf', 'Alex Reed')
+    row.lastShared.sharedBy.address = 'ALEX@EXAMPLE.ORG'
+    graphFetch.mockResolvedValue({ value: [row] })
     const data = (
       await runAppTool('graph_files_shared', {
         shared_by_address: 'alex@example.org',
@@ -292,6 +294,80 @@ describe('resolved sharer address (#1036)', () => {
     expect(data.items.map((r) => r.name)).toEqual(['one.pdf'])
     expect(data.match).toBe('address')
   })
+
+  it('keeps an ignored upstream address filter empty, without relabelling other shares', async () => {
+    const missing = shared('missing-address.pdf', 'Alex Reed')
+    Reflect.deleteProperty(missing.lastShared.sharedBy, 'address')
+    graphFetch.mockResolvedValue({ value: [shared('other.pdf', 'Sam Lee'), missing] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'alex@example.org',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.items).toEqual([])
+    expect(data.match).toBe('address')
+    expect(data.note).toContain('by the resolved address')
+    expect(data.coverage.rawFetched).toBe(2)
+    expect(data.coverage.returned).toBe(0)
+    expect(data.coverage.cutByLimit).toBe(false)
+  })
+
+  it('returns only rows whose address matches when Graph returns a mixed page', async () => {
+    const matching = shared('matching.pdf', 'Alex Reed')
+    matching.lastShared.sharedBy.address = 'alex@example.org'
+    graphFetch.mockResolvedValue({ value: [matching, shared('other.pdf', 'Sam Lee')] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'alex@example.org',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.items.map((r) => r.name)).toEqual(['matching.pdf'])
+    expect(data.coverage.rawFetched).toBe(2)
+    expect(data.coverage.returned).toBe(1)
+  })
+
+  it.each([null, undefined])('treats %s as an absent address', async (address) => {
+    for (const [args, match, names] of [
+      [{}, 'unfiltered', ['plan.docx', 'invoice.pdf', 'dpa.docx']],
+      [{ shared_by: 'adele' }, 'display-name-fallback', ['invoice.pdf', 'dpa.docx']],
+      [{ via: 'email' }, 'unfiltered', ['invoice.pdf']],
+    ] as const) {
+      const res = await runAppTool('graph_files_shared', { ...args, shared_by_address: address })
+      expect(res.success).toBe(true)
+      const data = res.data as GraphSharedFilesResult
+      expect(data.match).toBe(match)
+      expect(data.items.map((r) => r.name)).toEqual(names)
+      expect(graphFetch.mock.calls.at(-1)![1]).not.toContain('$filter')
+    }
+  })
+
+  it.each([400, 429, 500, 503, 401, 'transport', 'non-error'])(
+    'omits the address from the returned and logged Graph error (%s)',
+    async (failure) => {
+      const address = "alex.o'reed+docs@example.org"
+      graphFetch.mockImplementation(async (_user, path) => {
+        const message = `[graph] GET ${path} failed: ${failure}`
+        if (failure === 401) throw new GraphAuthRequiredError(message, 'oid-1', 401)
+        if (failure === 'non-error') throw message
+        throw new Error(message)
+      })
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const res = await runAppTool('graph_files_shared', { shared_by_address: address })
+        expect(res.success).toBe(false)
+        expect(res.error).toContain('query omitted')
+        expect(logged).toHaveBeenCalledTimes(1)
+        for (const output of [res.error!, JSON.stringify(logged.mock.calls)]) {
+          expect(output).not.toContain(address)
+          expect(output).not.toContain(encodeURIComponent(address))
+          expect(output).not.toContain('%40')
+          expect(output).not.toContain('$filter')
+        }
+      } finally {
+        logged.mockRestore()
+      }
+    },
+  )
 
   it('labels the display-name fallback only when no address was supplied', async () => {
     const data = (await runAppTool('graph_files_shared', { shared_by: 'adele' }))
@@ -316,7 +392,7 @@ describe('resolved sharer address (#1036)', () => {
     expect(graphFetch).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['', '   ', null, undefined, 'unresolved', 42, { address: 'alex@example.org' }])(
+  it.each(['', '   ', 'unresolved', 42, { address: 'alex@example.org' }])(
     'refuses an explicitly unresolved/malformed address (%j) without widening',
     async (address) => {
       const res = await runAppTool('graph_files_shared', {

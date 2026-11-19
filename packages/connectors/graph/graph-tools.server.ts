@@ -2214,7 +2214,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
       const address = filterString(args, 'shared_by_address')
       // A supplied but unresolved address must not silently drop the filter.
-      if ('shared_by_address' in args && !/^[^\s@]+@[^\s@]+$/.test(address)) {
+      if (args.shared_by_address != null && !/^[^\s@]+@[^\s@]+$/.test(address)) {
         throw new Error('shared_by_address must be a resolved email address. Do not retry by name.')
       }
       const sharedBy = filterString(args, 'shared_by')
@@ -2258,6 +2258,15 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
               'consent for them) — use graph_files_search with sort="newest" instead.',
           }
         }
+        // A filtered path contains the person's address. Never forward the
+        // supplier's message (or cause): the registry logs it verbatim.
+        if (address) {
+          const message = 'Shared-files request failed (sharer query omitted).'
+          if (err instanceof GraphAuthRequiredError) {
+            throw new GraphAuthRequiredError(message, err.userId, err.status)
+          }
+          throw new Error(message)
+        }
         throw err
       }
       const needle = address ? '' : sharedBy.toLowerCase()
@@ -2267,6 +2276,12 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         .map((it) => {
           const row = shapeSharedInsight(it)
           const by = ((it.lastShared ?? {}) as { sharedBy?: { address?: unknown } }).sharedBy
+          if (
+            address &&
+            (typeof by?.address !== 'string' || by.address.toLowerCase() !== address.toLowerCase())
+          ) {
+            return null
+          }
           return row && stamp(row, provenance([by?.address]))
         })
         .filter((r): r is GraphSharedFile => r !== null)

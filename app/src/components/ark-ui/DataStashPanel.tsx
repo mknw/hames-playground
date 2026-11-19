@@ -11,7 +11,16 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
+import {
+  For,
+  Show,
+  createSignal,
+  createMemo,
+  createEffect,
+  createUniqueId,
+  on,
+  onCleanup,
+} from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import { RadioGroup } from '@ark-ui/solid/radio-group'
@@ -1501,19 +1510,34 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   const totalCount = createMemo(() => toolCount() + docs().length)
 
   const DocumentGallery = (galleryProps: { documents: StashDocumentMeta[] }) => (
-    <div flex="~ wrap" gap="2" p="x-3 y-2">
-      <For each={galleryProps.documents}>
-        {(doc) => (
-          <DocChip
-            doc={doc}
+    <>
+      <div flex="~ wrap" gap="2" p="x-3 y-2">
+        <For each={galleryProps.documents}>
+          {(doc) => (
+            <DocChip
+              doc={doc}
+              sessionId={props.sessionId}
+              onAction={handleDocAction}
+              onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
+              active={viewer()?.doc.id === doc.id}
+            />
+          )}
+        </For>
+      </div>
+      <Show
+        when={galleryProps.documents.some((doc) => doc.id === viewer()?.doc.id) ? viewer() : null}
+      >
+        {(v) => (
+          <FileViewer
             sessionId={props.sessionId}
-            onAction={handleDocAction}
-            onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
-            active={viewer()?.doc.id === doc.id}
+            doc={v().doc}
+            highlights={v().highlights}
+            initialIndex={v().index}
+            onClose={() => setViewer(null)}
           />
         )}
-      </For>
-    </div>
+      </Show>
+    </>
   )
 
   return (
@@ -1625,20 +1649,24 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
           </p>
         </Show>
         <For each={fileGroups()}>
-          {(group) => (
-            <section aria-label={group.label}>
-              <h3
-                p="x-3 y-2"
-                text="xs ui-text-secondary"
-                font="medium"
-                border="b ui-border-primary"
-                break-all
-              >
-                {group.label}
-              </h3>
-              <DocumentGallery documents={group.documents} />
-            </section>
-          )}
+          {(group) => {
+            const headingId = createUniqueId()
+            return (
+              <section aria-labelledby={headingId}>
+                <h2
+                  id={headingId}
+                  p="x-3 y-2"
+                  text="xs ui-text-secondary"
+                  font="medium"
+                  border="b ui-border-primary"
+                  break-all
+                >
+                  {group.label}
+                </h2>
+                <DocumentGallery documents={group.documents} />
+              </section>
+            )
+          }}
         </For>
       </CollapsibleSection>
 
@@ -1646,17 +1674,6 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <CollapsibleSection title="Origin unknown" count={unknown().length} defaultOpen={true}>
           <DocumentGallery documents={unknown()} />
         </CollapsibleSection>
-      </Show>
-      <Show when={viewer()}>
-        {(v) => (
-          <FileViewer
-            sessionId={props.sessionId}
-            doc={v().doc}
-            highlights={v().highlights}
-            initialIndex={v().index}
-            onClose={() => setViewer(null)}
-          />
-        )}
       </Show>
 
       {/* ── Agent Findings ── tool results the agent produced (neo4j, web, …). */}

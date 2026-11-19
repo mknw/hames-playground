@@ -1117,6 +1117,20 @@ export interface GraphSharedFile {
 }
 
 export interface GraphSharedFilesResult {
+  /** This bounded insights feed never proves coverage of all shares. Kept
+   *  before items in the result so capped route records retain the limits. */
+  coverage: {
+    scope: 'recent-insights'
+    complete: false
+    rawFetched: number
+    returned: number
+    cutByLimit: boolean
+    /** No nextLink means this feed offered no further page, not all shares. */
+    moreAvailable: boolean | 'unknown'
+    sourceStatus: 'available' | 'unavailable'
+    reasons: ('upstream-window' | 'not-paged' | 'local-limit' | 'source-unavailable')[]
+  }
+  match: 'address' | 'display-name-fallback' | 'unfiltered'
   items: GraphSharedFile[]
   /** Present when insights were unavailable (tenant policy) or when the
    *  filters matched nothing — steers instead of failing. */
@@ -2152,8 +2166,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       'List what was recently shared WITH the signed-in person — OneDrive/' +
       'SharePoint links, files pasted into a Teams chat, and email attachments — ' +
       'newest first, with who shared it, when and through which channel (via). ' +
-      "Filter to one sharer with shared_by (a person's name) and/or one channel " +
-      'with via. This ' +
+      'Filter to a resolved sharer with shared_by_address (email address); ' +
+      'shared_by (display-name substring) is a fallback only without an address. ' +
+      'Never broaden an unresolved address to a name search. Filter channels with via. ' +
+      'Coverage is always partial: report "found in recent sharing activity", ' +
+      'never all shares or none at all. This ' +
       'answers "what was shared with me" and "what did X share with me". ' +
       'shared_by names whoever performed the share, which is usually someone else ' +
       'but is sometimes the signed-in person — a few of their own outbound shares ' +
@@ -2167,9 +2184,16 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     inputSchema: {
       type: 'object',
       properties: {
+        shared_by_address: {
+          type: 'string',
+          description:
+            'Confirmed sharer email, e.g. alex@example.org; takes precedence over shared_by. ' +
+            'Do not guess an unresolved, stale or external identity or retry it by name.',
+        },
         shared_by: {
           type: 'string',
-          description: 'Only items shared by this person, e.g. "Jan" or "Jan Van Damme".',
+          description:
+            'Display-name substring fallback, e.g. "Alex Reed"; used only without shared_by_address.',
         },
         via: {
           type: 'string',
@@ -2188,35 +2212,76 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     },
     execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
       const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      const address = filterString(args, 'shared_by_address')
+      // A supplied but unresolved address must not silently drop the filter.
+      if (args.shared_by_address != null && !/^[^\s@]+@[^\s@]+$/.test(address)) {
+        throw new Error('shared_by_address must be a resolved email address. Do not retry by name.')
+      }
       const sharedBy = filterString(args, 'shared_by')
       const via = parseVia(args.via)
+      const match: GraphSharedFilesResult['match'] = address
+        ? 'address'
+        : sharedBy
+          ? 'display-name-fallback'
+          : 'unfiltered'
+      const coverage: GraphSharedFilesResult['coverage'] = {
+        scope: 'recent-insights',
+        complete: false,
+        rawFetched: 0,
+        returned: 0,
+        cutByLimit: false,
+        moreAvailable: 'unknown',
+        sourceStatus: 'unavailable',
+        reasons: ['upstream-window', 'source-unavailable'],
+      }
       // Same inflation rationale as graph_files_recent ($top precedes our row
       // filter), amplified when a filter will discard most rows — a via filter
       // over a narrow window would report "no Teams files" when they were merely
       // outside the slice.
-      const top = sharedBy || via ? 50 : Math.min(limit * 2, 50)
+      const top = address || sharedBy || via ? 50 : Math.min(limit * 2, 50)
+      const filter = address
+        ? `&$filter=${encodeURIComponent(`lastshared/sharedby/address eq '${address.replace(/'/g, "''")}'`).replace(/'/g, '%27')}`
+        : ''
       let raw: unknown
       try {
-        raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
+        raw = await graphFetch(userId, `/me/insights/shared?$top=${top}${filter}`, {
           scopes: ['Sites.Read.All'],
         })
       } catch (err) {
         if (err instanceof GraphAuthRequiredError && err.status === 403) {
           return {
+            coverage,
+            match,
             items: [],
             note:
               'Item insights are disabled by tenant policy (or this account lacks ' +
               'consent for them) — use graph_files_search with sort="newest" instead.',
           }
         }
+        // A filtered path contains the person's address. Never forward the
+        // supplier's message (or cause): the registry logs it verbatim.
+        if (address) {
+          const message = 'Shared-files request failed (sharer query omitted).'
+          if (err instanceof GraphAuthRequiredError) {
+            throw new GraphAuthRequiredError(message, err.userId, err.status)
+          }
+          throw new Error(message)
+        }
         throw err
       }
-      const needle = sharedBy.toLowerCase()
+      const needle = address ? '' : sharedBy.toLowerCase()
       const seen = new Set<string>()
-      const rows = rawItems(raw)
+      const fetched = rawItems(raw)
+      const matches = fetched
         .map((it) => {
           const row = shapeSharedInsight(it)
           const by = ((it.lastShared ?? {}) as { sharedBy?: { address?: unknown } }).sharedBy
+          if (
+            address &&
+            (typeof by?.address !== 'string' || by.address.toLowerCase() !== address.toLowerCase())
+          ) {
+            return null
+          }
           return row && stamp(row, provenance([by?.address]))
         })
         .filter((r): r is GraphSharedFile => r !== null)
@@ -2237,7 +2302,18 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           seen.add(key)
           return true
         })
-        .slice(0, limit)
+      const rows = matches.slice(0, limit)
+      const nextLink = (raw as Record<string, unknown> | null)?.['@odata.nextLink']
+      coverage.rawFetched = fetched.length
+      coverage.returned = rows.length
+      coverage.cutByLimit = matches.length > rows.length
+      coverage.moreAvailable = typeof nextLink === 'string' && nextLink.length > 0
+      coverage.sourceStatus = 'available'
+      coverage.reasons = [
+        'upstream-window',
+        ...(coverage.moreAvailable ? (['not-paged'] as const) : []),
+        ...(coverage.cutByLimit ? (['local-limit'] as const) : []),
+      ]
 
       // Several attachments from ONE email arrive as several rows carrying the
       // identical rewritten message URL, so that URL *is* the message key — no
@@ -2259,13 +2335,15 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         for (const r of group) r.email_group = ordinal
       }
 
-      if (rows.length === 0 && (sharedBy || via)) {
+      if (rows.length === 0 && (address || sharedBy || via)) {
         const filters = [
           // Not the `shared_by` text itself: see GraphFileSearchResult.
-          ...(sharedBy ? ['by the person named'] : []),
+          ...(address ? ['by the resolved address'] : sharedBy ? ['by the person named'] : []),
           ...(via ? [`via ${via}`] : []),
         ].join(' and ')
         return {
+          coverage,
+          match,
           items: [],
           note:
             `Nothing in the recent sharing activity was shared ${filters}. ` +
@@ -2273,7 +2351,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
             'author for older files.',
         }
       }
-      return stamp({ items: rows }, resultProvenance(rows))
+      return stamp({ coverage, match, items: rows }, resultProvenance(rows))
     },
   })
 

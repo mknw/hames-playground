@@ -244,6 +244,11 @@ Recorded so nothing here launders a guess into a fact.
   Documented by Microsoft for insights; unverified here. Would let
   "shared with me in the last 3 days" be answered by the API instead of by
   post-filtering a truncated window.
+- **Whether insights applies `$filter=lastshared/sharedby/address eq '<address>'`.**
+  [Documented by Microsoft](https://learn.microsoft.com/en-us/graph/api/insights-list-shared?view=graph-rest-1.0#optional-query-parameters),
+  but not measured here. `graph_files_shared` also checks the returned sharer's
+  address locally, case-insensitively, so an ignored upstream filter cannot
+  label another person's share as an address match (#1036).
 
 ---
 

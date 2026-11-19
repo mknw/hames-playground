@@ -38,6 +38,8 @@ class LoopTurn {
   /// call's complete trace (#1032): a code-written flag, never read off the
   /// result's shape. Optional; absent everywhere else.
   trace bool? @description("This turn's result is a decisionLoop route trace")
+  /// Set by the synthesizer from tool-call metadata, never result text.
+  shared_files bool? @description("This turn carries shared-files evidence")
 }
 
 /// A ref:<id> argument that was expanded inline during a turn

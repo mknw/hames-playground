@@ -115,8 +115,15 @@ async function synthesize(
       if (iteration.compact && isRouteTrace(iteration.result)) {
         // The template's trace rule reads this flag, never the result's shape.
         turn.trace = true
+        const sharedFiles = iteration.result.steps.some(
+          (step) =>
+            'calls' in step && step.calls.some((call) => call.tool === 'graph_files_shared'),
+        )
+        if (sharedFiles) turn.shared_files = true
+        const compact = loopTurn(iteration, iteration.compact.result)
+        if (sharedFiles) compact.shared_files = true
         compacts.set(turns.length, {
-          turn: loopTurn(iteration, iteration.compact.result),
+          turn: compact,
           label: iteration.compact.label,
         })
         traceTurns.add(turn)
@@ -241,9 +248,22 @@ async function synthesize(
 
 /** One iteration as a `Synthesize` turn, with `result` as its tool result. */
 function loopTurn(iteration: LoopIteration, result: unknown): LoopTurn {
+  const tools = [
+    iteration.action.tool_name,
+    ...(iteration.action.additional_calls ?? []).map((c) => c.tool_name),
+  ]
+  const sharedFiles = tools.some((tool, i) => {
+    if (tool !== 'graph_files_shared') return false
+    if (tools.length === 1) return true
+    const call = (result as Record<string, unknown> | null)?.[String(i + 1)]
+    return (
+      !!call && typeof call === 'object' && 'tool' in call && call.tool === tool && 'result' in call
+    )
+  })
   return {
     n: iteration.turn,
     reasoning: iteration.action.reasoning,
+    ...(sharedFiles ? { shared_files: true } : {}),
     tool_call: {
       tool: iteration.action.tool_name,
       args: iteration.action.tool_args,

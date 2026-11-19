@@ -20,6 +20,8 @@
 // synthesizer flagged as a decisionLoop route trace (`LoopTurn.trace`, set in
 // code, never read off a result's shape), so every other prompt, decisionLoop's
 // compact records included, is byte-identical without it.
+// The shared-files coverage rule likewise reads only the synthesizer's
+// `LoopTurn.shared_files` flag, set from tool-call metadata, never result text.
 
 // A projection of supplied locators, never document content. Numbered in the
 // prompt so an answer's [n] has an explicit source/locator to refer to.
@@ -120,6 +122,19 @@ function Synthesize(
     - Every name, number, and fact in your response must trace to the results
       above. When the data is missing, empty, or negative, report that honestly
       rather than filling the gap.
+    {% set shared_files = namespace(any=false) %}
+    {% for turn in turns %}
+    {% if turn.shared_files %}
+    {% set shared_files.any = true %}
+    {% endif %}
+    {% endfor %}
+    {% if shared_files.any %}
+    - Preserve shared-files coverage from the route summary and tool results:
+      when coverage.complete is false, say "found in recent sharing activity"
+      (or "no matches found in recent sharing activity"). Never turn partial
+      coverage into "all" shares or "none" shared. If sourceStatus is
+      unavailable, say the source was unavailable, not that no files matched.
+    {% endif %}
     {% set traced = namespace(any=false) %}
     {% for turn in turns %}
     {% if turn.trace %}

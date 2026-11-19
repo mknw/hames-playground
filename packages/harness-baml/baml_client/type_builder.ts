@@ -49,7 +49,7 @@ export default class TypeBuilder {
     
     FewShot: ClassViewer<'FewShot', "user" | "reasoning" | "tool" | "args">;
     
-    LoopTurn: ClassViewer<'LoopTurn', "n" | "reasoning" | "status" | "tool_call" | "additional_calls" | "tool_result" | "expansions" | "trace">;
+    LoopTurn: ClassViewer<'LoopTurn', "n" | "reasoning" | "status" | "tool_call" | "additional_calls" | "tool_result" | "expansions" | "trace" | "shared_files">;
     
     MemoryMember: ClassViewer<'MemoryMember', "content" | "evidence" | "last_seen">;
     
@@ -141,7 +141,7 @@ export default class TypeBuilder {
         ]);
         
         this.LoopTurn = this.tb.classViewer("LoopTurn", [
-          "n","reasoning","status","tool_call","additional_calls","tool_result","expansions","trace",
+          "n","reasoning","status","tool_call","additional_calls","tool_result","expansions","trace","shared_files",
         ]);
         
         this.MemoryMember = this.tb.classViewer("MemoryMember", [

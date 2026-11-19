@@ -15,6 +15,8 @@
  * hid behind it. See `docs/graph-api-notes.md` for the provenance.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { extract } from '@hames-ai/harness-patterns/patterns/decisionLoop-records.server'
+import type { ContextEvent } from '@hames-ai/harness-patterns/types'
 import { buildGraphHarness } from './harness'
 import { GraphAuthRequiredError } from '../../graph/graph-auth'
 import {
@@ -116,9 +118,10 @@ beforeEach(() => {
 })
 
 describe('advertisement', () => {
-  it('takes shared_by + via + limit and nothing else — no credential/user/session field', () => {
+  it('takes address + name fallback + via + limit — no credential/user/session field', () => {
     const tool = appToolDescriptions().find((t) => t.name === 'graph_files_shared')!
     expect(Object.keys((tool.inputSchema as { properties: object }).properties)).toEqual([
+      'shared_by_address',
       'shared_by',
       'via',
       'limit',
@@ -138,6 +141,269 @@ describe('advertisement', () => {
     expect(tool.description).toMatch(/NOT a reliable record of what they shared with others/)
     expect(tool.description).not.toMatch(/CANNOT list what the signed-in person shared/)
   })
+})
+
+describe('coverage on every shared-files result (#1036)', () => {
+  it('counts actual raw and returned rows; a short page never proves all shares', async () => {
+    const data = (await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult
+    expect(data.coverage).toEqual({
+      scope: 'recent-insights',
+      complete: false,
+      rawFetched: 4,
+      returned: 3,
+      cutByLimit: false,
+      moreAvailable: false,
+      sourceStatus: 'available',
+      reasons: ['upstream-window'],
+    })
+    expect(data.match).toBe('unfiltered')
+    // decisionLoop caps a route record from its head: coverage must precede items.
+    expect(Object.keys(data).indexOf('coverage')).toBeLessThan(Object.keys(data).indexOf('items'))
+  })
+
+  it('retains coverage in a capped office route summary even with a long item list', async () => {
+    graphFetch.mockResolvedValue({
+      value: Array.from({ length: 25 }, (_, n) => shared(`example-${n}.pdf`, 'Alex Reed')),
+    })
+    const data = (await runAppTool('graph_files_shared', { limit: 25 })).data
+    const event = (type: ContextEvent['type'], body: unknown): ContextEvent => ({
+      type,
+      data: body,
+      ts: 0,
+      patternId: 'doc',
+    })
+    const summary = extract(
+      'actorCritic',
+      [
+        event('controller_action', {
+          action: { tool_name: 'graph_files_shared', tool_args: '{}' },
+        }),
+        event('tool_result', { tool: 'graph_files_shared', result: data, success: true }),
+        event('critic_result', {
+          result: {
+            is_sufficient: true,
+            explanation: 'Found in recent sharing activity; partial coverage.',
+          },
+        }),
+      ],
+      2000,
+    )
+    expect(summary.ok).toBe(true)
+    if (!summary.ok) throw new Error(summary.text)
+    expect(summary.result.length).toBeLessThan(JSON.stringify(data).length)
+    expect(summary.result).toContain('"complete":false')
+    expect(summary.result).toContain('"scope":"recent-insights"')
+    expect(summary.reasoning).toContain('recent sharing activity; partial coverage')
+  })
+
+  it('reports a local cut only when distinct matching rows were discarded', async () => {
+    const data = (await runAppTool('graph_files_shared', { limit: 2 }))
+      .data as GraphSharedFilesResult
+    expect(data.coverage.rawFetched).toBe(4)
+    expect(data.coverage.returned).toBe(2)
+    expect(data.coverage.cutByLimit).toBe(true)
+    expect(data.coverage.reasons).toEqual(['upstream-window', 'local-limit'])
+
+    const duplicate = shared('same.pdf', 'Alex Reed')
+    graphFetch.mockResolvedValue({ value: [duplicate, duplicate, shared('other.pdf', 'Sam Lee')] })
+    const filtered = (await runAppTool('graph_files_shared', { shared_by: 'Alex', limit: 1 }))
+      .data as GraphSharedFilesResult
+    expect(filtered.coverage.rawFetched).toBe(3)
+    expect(filtered.coverage.returned).toBe(1)
+    expect(filtered.coverage.cutByLimit).toBe(false)
+    expect(filtered.coverage.reasons).not.toContain('local-limit')
+  })
+
+  it('reports another upstream page without following it', async () => {
+    graphFetch.mockResolvedValue({
+      value: [shared('one.pdf', 'Alex Reed')],
+      '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/insights/shared?$skiptoken=next',
+    })
+    const data = (await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult
+    expect(data.coverage.moreAvailable).toBe(true)
+    expect(data.coverage.reasons).toEqual(['upstream-window', 'not-paged'])
+    expect(data.coverage.complete).toBe(false)
+    expect(graphFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    {},
+    { shared_by: 'Unknown Person' },
+    { shared_by_address: 'alex@example.org' },
+    { via: 'email' },
+  ])('keeps empty searches partial with known counts: %j', async (args) => {
+    graphFetch.mockResolvedValue({ value: [] })
+    const data = (await runAppTool('graph_files_shared', args)).data as GraphSharedFilesResult
+    expect(data.items).toEqual([])
+    expect(data.coverage).toEqual({
+      scope: 'recent-insights',
+      complete: false,
+      rawFetched: 0,
+      returned: 0,
+      cutByLimit: false,
+      moreAvailable: false,
+      sourceStatus: 'available',
+      reasons: ['upstream-window'],
+    })
+  })
+
+  it('distinguishes an unavailable source from an empty search', async () => {
+    graphFetch.mockRejectedValue(new GraphAuthRequiredError('denied', 'oid-1', 403))
+    const data = (await runAppTool('graph_files_shared', { shared_by_address: 'alex@example.org' }))
+      .data as GraphSharedFilesResult
+    expect(data.items).toEqual([])
+    expect(data.match).toBe('address')
+    expect(data.coverage).toEqual({
+      scope: 'recent-insights',
+      complete: false,
+      rawFetched: 0,
+      returned: 0,
+      cutByLimit: false,
+      moreAvailable: 'unknown',
+      sourceStatus: 'unavailable',
+      reasons: ['upstream-window', 'source-unavailable'],
+    })
+  })
+})
+
+describe('resolved sharer address (#1036)', () => {
+  it('escapes the OData literal and URL-encodes the whole predicate', async () => {
+    await runAppTool('graph_files_shared', { shared_by_address: "alex.o'reed+docs@example.org" })
+    const path = graphFetch.mock.calls[0][1] as string
+    const url = new URL(path, 'https://graph.microsoft.com/v1.0')
+    expect(url.searchParams.get('$filter')).toBe(
+      "lastshared/sharedby/address eq 'alex.o''reed+docs@example.org'",
+    )
+    expect(path).toContain('%2F')
+    expect(path).toContain('%20eq%20%27')
+    expect(path).toContain('alex.o%27%27reed%2Bdocs%40example.org%27')
+    expect(url.searchParams.get('$top')).toBe('50')
+    expect(graphFetch.mock.calls[0][2]).toEqual({ scopes: ['Sites.Read.All'] })
+  })
+
+  it('uses the address even when the supplied name differs', async () => {
+    const row = shared('one.pdf', 'Alex Reed')
+    row.lastShared.sharedBy.address = 'ALEX@EXAMPLE.ORG'
+    graphFetch.mockResolvedValue({ value: [row] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'alex@example.org',
+        shared_by: 'Different Display Name',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.items.map((r) => r.name)).toEqual(['one.pdf'])
+    expect(data.match).toBe('address')
+  })
+
+  it('keeps an ignored upstream address filter empty, without relabelling other shares', async () => {
+    const missing = shared('missing-address.pdf', 'Alex Reed')
+    Reflect.deleteProperty(missing.lastShared.sharedBy, 'address')
+    graphFetch.mockResolvedValue({ value: [shared('other.pdf', 'Sam Lee'), missing] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'alex@example.org',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.items).toEqual([])
+    expect(data.match).toBe('address')
+    expect(data.note).toContain('by the resolved address')
+    expect(data.coverage.rawFetched).toBe(2)
+    expect(data.coverage.returned).toBe(0)
+    expect(data.coverage.cutByLimit).toBe(false)
+  })
+
+  it('returns only rows whose address matches when Graph returns a mixed page', async () => {
+    const matching = shared('matching.pdf', 'Alex Reed')
+    matching.lastShared.sharedBy.address = 'alex@example.org'
+    graphFetch.mockResolvedValue({ value: [matching, shared('other.pdf', 'Sam Lee')] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'alex@example.org',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.items.map((r) => r.name)).toEqual(['matching.pdf'])
+    expect(data.coverage.rawFetched).toBe(2)
+    expect(data.coverage.returned).toBe(1)
+  })
+
+  it.each([null, undefined])('treats %s as an absent address', async (address) => {
+    for (const [args, match, names] of [
+      [{}, 'unfiltered', ['plan.docx', 'invoice.pdf', 'dpa.docx']],
+      [{ shared_by: 'adele' }, 'display-name-fallback', ['invoice.pdf', 'dpa.docx']],
+      [{ via: 'email' }, 'unfiltered', ['invoice.pdf']],
+    ] as const) {
+      const res = await runAppTool('graph_files_shared', { ...args, shared_by_address: address })
+      expect(res.success).toBe(true)
+      const data = res.data as GraphSharedFilesResult
+      expect(data.match).toBe(match)
+      expect(data.items.map((r) => r.name)).toEqual(names)
+      expect(graphFetch.mock.calls.at(-1)![1]).not.toContain('$filter')
+    }
+  })
+
+  it.each([400, 429, 500, 503, 401, 'transport', 'non-error'])(
+    'omits the address from the returned and logged Graph error (%s)',
+    async (failure) => {
+      const address = "alex.o'reed+docs@example.org"
+      graphFetch.mockImplementation(async (_user, path) => {
+        const message = `[graph] GET ${path} failed: ${failure}`
+        if (failure === 401) throw new GraphAuthRequiredError(message, 'oid-1', 401)
+        if (failure === 'non-error') throw message
+        throw new Error(message)
+      })
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const res = await runAppTool('graph_files_shared', { shared_by_address: address })
+        expect(res.success).toBe(false)
+        expect(res.error).toContain('query omitted')
+        expect(logged).toHaveBeenCalledTimes(1)
+        for (const output of [res.error!, JSON.stringify(logged.mock.calls)]) {
+          expect(output).not.toContain(address)
+          expect(output).not.toContain(encodeURIComponent(address))
+          expect(output).not.toContain('%40')
+          expect(output).not.toContain('$filter')
+        }
+      } finally {
+        logged.mockRestore()
+      }
+    },
+  )
+
+  it('labels the display-name fallback only when no address was supplied', async () => {
+    const data = (await runAppTool('graph_files_shared', { shared_by: 'adele' }))
+      .data as GraphSharedFilesResult
+    expect(data.match).toBe('display-name-fallback')
+    expect(data.items.map((r) => r.name)).toEqual(['invoice.pdf', 'dpa.docx'])
+    expect(graphFetch.mock.calls[0][1]).not.toContain('$filter')
+  })
+
+  it('never retries an unmatched address with a broader name query', async () => {
+    graphFetch.mockResolvedValue({ value: [] })
+    const data = (
+      await runAppTool('graph_files_shared', {
+        shared_by_address: 'former.external@example.org',
+        shared_by: 'Alex',
+      })
+    ).data as GraphSharedFilesResult
+    expect(data.match).toBe('address')
+    expect(data.items).toEqual([])
+    expect(data.note).toContain('by the resolved address')
+    expect(data.note).not.toContain('former.external@example.org')
+    expect(graphFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['', '   ', 'unresolved', 42, { address: 'alex@example.org' }])(
+    'refuses an explicitly unresolved/malformed address (%j) without widening',
+    async (address) => {
+      const res = await runAppTool('graph_files_shared', {
+        shared_by_address: address,
+        shared_by: 'Alex',
+      })
+      expect(res.success).toBe(false)
+      expect(res.error).toMatch(/shared_by_address/)
+      expect(graphFetch).not.toHaveBeenCalled()
+    },
+  )
 })
 
 describe('shapeSharedInsight', () => {

@@ -86,6 +86,9 @@ export interface LoopTurn {
   /** Set by the synthesizer on a turn whose result is a decisionLoop route
    *  call's complete trace (#1032); a code-written flag. */
   trace?: boolean | null
+  /** Set by the synthesizer from tool-call metadata for shared-files evidence.
+   *  Never read from a tool result's text or fields. */
+  shared_files?: boolean | null
 }
 
 /**

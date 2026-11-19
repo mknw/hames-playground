@@ -14,9 +14,11 @@
  * to today's behaviour: keep-warm while a page is open, then scale down.
  *
  * Three facts sit beside the switch:
- *  - the boxes' live state (cold / starting / ready), read from
+ *  - the 27B's live state (cold / starting / ready), read from
  *    `getPreviewHeaderState()` — the SAME payload the header strip renders,
- *    so the two surfaces cannot disagree about the one box;
+ *    so the two surfaces cannot disagree about that box — plus the 4B's
+ *    state and both boxes' up-since, which no strip renders and which ride
+ *    this page's own admin payload (`getGpuAdminState`) instead;
  *  - "running since", from the switch's own persisted stamp; and
  *  - the per-hour price the app already computes (`cost-rates.server.ts`),
  *    because a switch that keeps an H100 up is a switch that spends about
@@ -188,15 +190,17 @@ export default function Admin() {
   // meter's own footnote already excludes.
   //
   // The first up observation of a switch-on charges from the SERVER's
-  // recorded ready time (`lastAnsweredAt` in the same payload — when the box
-  // answered, not when the switch went on), so a reload in the middle of a run
-  // does not charge the cold start the boxes were switched on into: the
-  // footnote excludes that span, and the meter must not add it back. The
-  // ready time is clamped at the switch-on stamp, because a box that was
-  // already up when the switch flipped has been billed from the flip, not
-  // from before it. With no server record the meter starts from its own
-  // observation — under-stating, never over-stating, which is the direction a
-  // floor may err in.
+  // per-box up-since (`upSince` in the admin payload — when each box first
+  // came up after being cold, not when the switch went on, and not the last
+  // keep-warm ping), so a reload in the middle of a run re-bills the time the
+  // boxes were actually up and neither re-adds the cold start the switch-on
+  // woke into nor restarts the count at ~zero because a ping refreshed the
+  // completion clock. The up-since is clamped at the switch-on stamp, because
+  // a box that was already up when the switch flipped has been billed from
+  // the flip, not from before it. It is process-local: a server restart
+  // loses it, and the meter then starts from its own observation —
+  // under-stating, never over-stating, which is the direction a floor may
+  // err in.
   const [accruedEur, setAccruedEur] = createSignal<number | null>(null)
   let accrualStamp: number | null = null
   let lastTickAt = Date.now()
@@ -214,18 +218,22 @@ export default function Admin() {
     // resource refresh either way.
     let since: number | null
     let up: Record<'large' | 'small', boolean>
-    let readyAt: Record<'large' | 'small', number | null>
+    let upSince: Record<'large' | 'small', number | null>
     let rates: Record<'large' | 'small', number>
     try {
       since = runningSince()
       const w = warmth()
+      const s = state()
+      // The 27B's up-state from the header payload (the strip renders it);
+      // the 4B's from the admin payload — the per-box fields no strip
+      // renders, moved off the payload every signed-in user receives.
       up = {
         large: w?.warmth.state === 'ready' || w?.warmth.state === 'answering',
-        small: w?.smallWarmth?.state === 'ready',
+        small: s?.smallState === 'ready',
       }
-      readyAt = {
-        large: w?.warmth.lastAnsweredAt ?? null,
-        small: w?.smallWarmth?.lastAnsweredAt ?? null,
+      upSince = {
+        large: s?.largeUpSince ?? null,
+        small: s?.smallUpSince ?? null,
       }
       rates = perBoxRates()
     } catch {
@@ -250,11 +258,12 @@ export default function Admin() {
         if (!up[box]) continue
         if (!seeded[box]) {
           seeded[box] = true
-          const ready = readyAt[box]
-          // From the server's recorded ready time when there is one — never
-          // the cold start before it — clamped at the stamp; from this
-          // observation when there is not.
-          const from = ready !== null ? Math.max(ready, since) : lastTickAt
+          const boxUpSince = upSince[box]
+          // From the server's recorded up-since when there is one — never
+          // the cold start before the box first came up — clamped at the
+          // stamp (a box already up at the flip is billed from the flip);
+          // from this page's own observation when there is not.
+          const from = boxUpSince !== null ? Math.max(boxUpSince, since) : lastTickAt
           accruedUpMs[box] = now - from
         } else {
           accruedUpMs[box] += now - lastTickAt
@@ -460,7 +469,7 @@ export default function Admin() {
                 <Show when={accruedEur() !== null}>
                   <p
                     text="xs ui-text-secondary"
-                    title="A floor: it counts, for each box, the time that box was actually up since the switch was turned on — charging from the box's own recorded ready time, so neither the cold start before it was up nor a reload re-adds that span — and adds neither the spans a box was down in nor the scale-down window after the last."
+                    title="A floor: it counts, for each box, the time that box was actually up since the switch was turned on — charging from the box's recorded up-since, so neither the cold start before it first came up nor a reload re-adds that span — and adds neither the spans a box was down in nor the scale-down window after the last answer. A server restart loses the up-since, and the count then starts from what this page observed itself."
                   >
                     ≥ <span font="mono">{fmtEur(accruedEur()!)}</span> so far — a floor, not the
                     bill.

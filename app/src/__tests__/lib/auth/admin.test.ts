@@ -89,4 +89,14 @@ describe('isAdminEmail', () => {
     // address still matches the lowercased entry.
     expect(isAdminEmail('ADA@EXAMPLE.COM', ['ada@example.com'])).toBe(true)
   })
+
+  it('refuses a Kelvin-sign look-alike whose lowercase folds into the listed address', () => {
+    // U+212A (KELVIN SIGN) is the one homoglyph the fullwidth cases above do
+    // not cover: it is outside printable ASCII (so the ASCII check refuses
+    // it) and NFKC-unstable (it folds to "K", so the NFKC-unchanged check
+    // refuses it) — but `toLowerCase` alone folds it to a plain "k", which
+    // is exactly the comparison those two checks exist to keep from
+    // matching. Remove BOTH and this reddens: the look-alike would match.
+    expect(isAdminEmail('\u212Aate@example.com', ['kate@example.com'])).toBe(false)
+  })
 })

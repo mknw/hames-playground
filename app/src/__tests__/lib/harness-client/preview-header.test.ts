@@ -493,65 +493,45 @@ describe('a wake in flight (#1045)', () => {
   })
 })
 
-// The 4B's live state and both boxes' recorded ready times (#1047 round 3):
-// the admin panel's cost meter prices each box only while THAT box is up, and
-// seeds itself after a reload from the server's own record of when each box
-// answered — so this payload has to carry both, read from the same clocks the
-// states themselves come from.
-describe('the small box’s state and the recorded ready times', () => {
+// The per-box fields the admin panel's cost meter meters with (#1047
+// rounds 3 and 4) are NOT in this payload: every field here is what a
+// signed-in user receives on every poll, while the per-box up-since
+// timestamps and the 4B's live state serve only that panel — so they ride the
+// admin-only payload instead (`gpu-admin.server.ts`, behind `requireAdmin`).
+//
+// Pinned by a KEY SCAN rather than a field list, because the failure it
+// guards against is a field moving back in, not one being left out: a key
+// named `upSince`, `lastAnsweredAt` or `smallWarmth` anywhere in the payload
+// is the admin-only surface leaking to every signed-in user again. MUTATION:
+// move either box's timestamp (or the 4B's state) back into
+// `getPreviewHeaderState` and this reddens.
+describe('the admin-only per-box fields are not in this payload', () => {
   beforeEach(configureSelfDeployed)
 
-  it('carries the 4B cold with no record before anything has answered', async () => {
+  it('carries no per-box timestamp and no 4B state, while the 27B warmth it renders stays', async () => {
+    // Both boxes answered, so every per-box field has a value it could leak:
+    // the scan is against populated fields, not empty ones.
+    noteLargeCallCompleted()
+    noteSmallCallCompleted()
     const state = await getPreviewHeaderState()
-    expect(state.smallWarmth.state).toBe('cold')
-    expect(state.smallWarmth.lastAnsweredAt).toBeNull()
-  })
 
-  it('carries the 4B ready with its recorded ready time once it has answered', async () => {
-    const at = Date.now() - 60_000
-    noteSmallCallCompleted(at)
-
-    const state = await getPreviewHeaderState()
-    expect(state.smallWarmth.state).toBe('ready')
-    expect(state.smallWarmth.lastAnsweredAt).toBe(at)
-  })
-
-  it('carries the 4B starting while one of its own wakes is in flight', async () => {
-    // `resetSmallActivity` in the outer beforeEach leaves no completion, so
-    // the parked health poll is the only fact: the box is engaged but not up,
-    // and the cold start it may end in is not billed time either way.
-    const releases: Array<() => void> = []
-    fetchMock.mockImplementation(
-      () =>
-        new Promise<Response>((resolve) =>
-          releases.push(() => resolve(new Response('{}', { status: 200 }))),
-        ),
-    )
-    const wake = ensureSmallAwake(Date.now())
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect((await getPreviewHeaderState()).smallWarmth.state).toBe('starting')
-
-    releases.forEach((release) => release())
-    await wake
-    // The answered wake is itself the completion: ready, with a record.
-    const state = await getPreviewHeaderState()
-    expect(state.smallWarmth.state).toBe('ready')
-    expect(state.smallWarmth.lastAnsweredAt).not.toBeNull()
-  })
-
-  it('carries the 27B’s recorded ready time beside its state, from the same clock', async () => {
-    // `warmth.state` and `warmth.lastAnsweredAt` come from the one clock: a
-    // `ready` with no timestamp would be a state the meter cannot seed from,
-    // and a timestamp with no state one it cannot trust.
-    expect((await getPreviewHeaderState()).warmth.lastAnsweredAt).toBeNull()
-
-    const at = Date.now() - 60_000
-    noteLargeCallCompleted(at)
-
-    const state = await getPreviewHeaderState()
+    const leak = (value: object, path: string): string[] => {
+      const found: string[] = []
+      for (const [key, v] of Object.entries(value)) {
+        if (key === 'upSince' || key === 'lastAnsweredAt' || key === 'smallWarmth') {
+          found.push(`${path}${key}`)
+        }
+        if (v !== null && typeof v === 'object') {
+          found.push(...leak(v as object, `${path}${key}.`))
+        }
+      }
+      return found
+    }
+    expect(leak(state, '')).toEqual([])
+    // The 27B's warmth — the half the strip renders — still rides here,
+    // state and countdown, which is what keeps the two surfaces honest.
     expect(state.warmth.state).toBe('ready')
-    expect(state.warmth.lastAnsweredAt).toBe(at)
+    expect(state.warmth.secondsUntilScaledown).toBeGreaterThan(0)
   })
 })
 

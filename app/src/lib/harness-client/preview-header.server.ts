@@ -6,6 +6,13 @@
  * on. One action rather than three, because the strip refreshes on a timer and
  * three polls would be three connections for one row of numbers.
  *
+ * The per-box "up since" timestamps and the 4B summarizer box's live state
+ * are NOT here: every field of this payload is what a SIGNED-IN USER receives
+ * on every poll, and those serve only the admin panel's cost meter, so they
+ * ride the admin-only payload instead (`getGpuAdminState`,
+ * `harness-client/gpu-admin.server.ts`, behind `requireAdmin`). The 27B's
+ * warmth stays here because the strip renders it.
+ *
  * **It no longer CHANGES the tier.** That control moved beside the agent
  * selector and became per-conversation (`harness-client/actions.server.ts`'s
  * `setConversationTier`), because the thing people want is to start an
@@ -34,25 +41,16 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import { resolveTier } from '../inference/tier.server'
 import { selfDeployedConfigured, type InferenceTier } from '../inference/config.server'
-import {
-  largeLastCallCompletedAt,
-  largeWarmth,
-  type LargeWarmth,
-} from '../inference/large-activity.server'
+import { largeWarmth, type LargeWarmth } from '../inference/large-activity.server'
 import {
   probeVerdaReplicas,
   type VerdaControlPlaneProbe,
 } from '../inference/verda-control-plane.server'
-import {
-  coldStartEstimate,
-  smallLastCallCompletedAt,
-  smallProvenWarm,
-} from '../inference/cold-start.server'
+import { coldStartEstimate } from '../inference/cold-start.server'
 import {
   ensurePrivateTierAwake,
   keepWarmIntervalMs,
   largeWakeInFlight,
-  smallWakeInFlight,
   warmIdleCapMs,
   warmWhileOpenEnabled,
 } from '../inference/wake.server'
@@ -126,44 +124,6 @@ export interface HeaderWarmth {
    * the state machine below is what decides what the fact means.
    */
   waking: boolean
-  /**
-   * When this process last saw the 27B answer, epoch ms — its recorded ready
-   * time — or `null` if it never has. The strip does not render it; the admin
-   * panel's cost meter seeds itself from it after a reload, so it charges the
-   * span the box was actually up rather than the switch-on stamp with the cold
-   * start inside it. Read from the same clock that makes a state `ready`
-   * (`largeLastCallCompletedAt`), so the state and the timestamp cannot
-   * disagree about the same observation.
-   */
-  lastAnsweredAt: number | null
-}
-
-/** The 4B summarizer box's live state — the SECOND box the private tier wakes
- *  (`wake.server.ts` wakes both), carried beside the 27B's so the surface that
- *  meters both boxes (the admin panel's cost meter) prices each box only while
- *  that box is actually up. The header strip renders the 27B and ignores this
- *  field; it is here rather than in the admin payload so ONE read answers for
- *  both boxes and the panel's meter cannot disagree with the strip's own
- *  payload about either of them. */
-export interface SmallWarmth {
-  /**
-   * - `ready` — the box answered within its idle window: up, and being billed
-   *   to stay up. The same evidence class as the 27B's `ready`/`answering` —
-   *   a real answer (the health check a wake completes, or a real call), never
-   *   a timer.
-   * - `starting` — a small-box wake is in flight on the server right now,
-   *   from any entry point: the box is engaged but nothing proves it is up, so
-   *   the cold start it may end in is not billed time.
-   * - `cold` — nothing recent: not up. The 4B has no control-plane probe, so
-   *   there is no `unknown` display state here — `cold` covers both "this
-   *   process saw it scale down" and "this process has never seen it", the
-   *   pessimistic direction the 27B's own clock errs in.
-   */
-  state: 'ready' | 'starting' | 'cold'
-  /** When this process last saw the 4B answer, epoch ms — its recorded ready
-   *  time, the small sibling of `HeaderWarmth.lastAnsweredAt` — or `null` if
-   *  it never has. */
-  lastAnsweredAt: number | null
 }
 
 /** Everything the header strip renders, in one payload. */
@@ -180,8 +140,6 @@ export interface PreviewHeaderState {
    *  countdown for a box this deployment cannot reach is noise. */
   selfDeployedAvailable: boolean
   warmth: HeaderWarmth
-  /** The 4B summarizer box's live state — see `SmallWarmth`. */
-  smallWarmth: SmallWarmth
   /** Distinct users with chat activity in the last {@link activeWindowMinutes}
    *  minutes. */
   activeUsers: number
@@ -263,20 +221,6 @@ function displayWarmth(
     coldStartBasis: estimate?.basis ?? null,
     coldStartSamples: estimate?.samples ?? null,
     waking,
-    lastAnsweredAt: largeLastCallCompletedAt(),
-  }
-}
-
-/** The 4B's live state, from the same per-box clock its proven-warmth check
- *  reads (`cold-start.server.ts`): `ready` when a completion inside the idle
- *  window proves it up, `starting` while one of the shared wake polls is on
- *  the wire for it, `cold` otherwise. Pure w.r.t. `now`, like
- *  `displayWarmth`, which is what lets the admin meter compare the two boxes'
- *  readings without a second clock. */
-function smallWarmth(now: number = Date.now()): SmallWarmth {
-  return {
-    state: smallProvenWarm(now) ? 'ready' : smallWakeInFlight() ? 'starting' : 'cold',
-    lastAnsweredAt: smallLastCallCompletedAt(),
   }
 }
 
@@ -306,7 +250,6 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     tier,
     selfDeployedAvailable: selfDeployedConfigured(),
     warmth: displayWarmth(largeWarmth(), probe, largeWakeInFlight()),
-    smallWarmth: smallWarmth(),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,

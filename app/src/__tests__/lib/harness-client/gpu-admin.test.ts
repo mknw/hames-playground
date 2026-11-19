@@ -52,9 +52,19 @@ import {
   isAdminUser,
   setGpuKeepRunning,
 } from '../../../lib/harness-client/gpu-admin.server'
-import { resetLargeWake, resetSmallWake } from '../../../lib/inference/wake.server'
-import { resetLargeActivity } from '../../../lib/inference/large-activity.server'
-import { resetSmallActivity } from '../../../lib/inference/cold-start.server'
+import {
+  ensureSmallAwake,
+  resetLargeWake,
+  resetSmallWake,
+} from '../../../lib/inference/wake.server'
+import {
+  noteLargeCallCompleted,
+  resetLargeActivity,
+} from '../../../lib/inference/large-activity.server'
+import {
+  noteSmallCallCompleted,
+  resetSmallActivity,
+} from '../../../lib/inference/cold-start.server'
 
 const ADMIN = 'owner@example.invalid'
 const PEON = 'someone@example.invalid'
@@ -75,6 +85,8 @@ const ENV_KEYS = [
   'LARGE_LLM_EUR_PER_HOUR',
   'SMALL_LLM_EUR_PER_HOUR',
   'LARGE_LLM_ROUTE',
+  'LARGE_LLM_SCALEDOWN_SECONDS',
+  'SMALL_LLM_SCALEDOWN_SECONDS',
 ] as const
 let saved: Record<string, string | undefined>
 let fetchMock: ReturnType<typeof vi.fn>
@@ -209,6 +221,10 @@ describe('the panel state', () => {
     getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt })
 
     const state = await getGpuAdminState()
+    // The per-box fields ride this payload too (nothing has answered in this
+    // test, so both up-sinces are null and the 4B reads cold) — the whole
+    // shape in one `toEqual`, so a field added to one and not the other
+    // reddens rather than passing silently.
     expect(state).toEqual({
       keepRunning: true,
       switchedOnAt,
@@ -216,6 +232,9 @@ describe('the panel state', () => {
       largeEurPerHour: 4.6,
       smallEurPerHour: 1.07418,
       largeOnOpenRouter: false,
+      largeUpSince: null,
+      smallState: 'cold',
+      smallUpSince: null,
     })
   })
 
@@ -229,6 +248,104 @@ describe('the panel state', () => {
     expect((await getGpuAdminState()).largeOnOpenRouter).toBe(true)
     delete process.env.LARGE_LLM_ROUTE
     expect((await getGpuAdminState()).largeOnOpenRouter).toBe(false)
+  })
+})
+
+// The per-box fields the cost meter meters with (#1047 round 4): each box's
+// up-since — when THIS process first observed it up in its current
+// up-period — and the 4B's live state, which no strip renders and which
+// therefore ride this admin-only payload rather than the one every signed-in
+// user receives (`preview-header.test.ts` pins that half from the other
+// side). The up-since rules are the meter's: it seeds each box's accrual
+// from max(upSince, switch-on), so what has to hold is that the value OPENS
+// at the first answer after cold, does NOT move with the keep-warm pings that
+// refresh the completion clock (a reload reading `lastCompletedAt` re-billed
+// the whole switch-on as ~zero — the round-3 defect), and CLOSES with the
+// idle window. `large-activity.test.ts` and `cold-start.test.ts` pin the
+// clocks themselves; what is pinned here is that THIS payload carries them.
+describe('the per-box fields the cost meter meters with', () => {
+  beforeEach(configureDeployment)
+
+  it('carries both boxes un-up before anything has answered: no up-since, the 4B cold', async () => {
+    const state = await getGpuAdminState()
+    expect(state.largeUpSince).toBeNull()
+    expect(state.smallState).toBe('cold')
+    expect(state.smallUpSince).toBeNull()
+  })
+
+  it('carries each box’s up-since from the moment it first answered after being cold', async () => {
+    const at = Date.now() - 60_000
+    noteLargeCallCompleted(at)
+    noteSmallCallCompleted(at)
+
+    const state = await getGpuAdminState()
+    expect(state.largeUpSince).toBe(at)
+    expect(state.smallState).toBe('ready')
+    expect(state.smallUpSince).toBe(at)
+  })
+
+  it('keeps the up-since at the period’s start across the keep-warm pings that refresh the completion clock', async () => {
+    // The box came up 4 minutes ago and has been pinged since (keep-warm
+    // touches it roughly every 100s): the pings refresh `lastCompletedAt`,
+    // but the up-period is ONE, and `upSince` must stay where it opened —
+    // the property a reload's seed depends on. MUTATION: seed the meter from
+    // `lastCompletedAt` instead and this reddens (the ping wins).
+    const first = Date.now() - 240_000
+    noteLargeCallCompleted(first)
+    noteSmallCallCompleted(first)
+    const later = Date.now() - 100_000
+    noteLargeCallCompleted(later)
+    noteSmallCallCompleted(later)
+
+    const state = await getGpuAdminState()
+    expect(state.largeUpSince).toBe(first)
+    expect(state.smallUpSince).toBe(first)
+  })
+
+  it('carries the 4B starting — and with no up-since — while its own wake is in flight', async () => {
+    // `starting` is a wake engaged with no evidence the box is up, so it has
+    // no up-since either: the cold start it may end in is not billed time,
+    // and the meter must not count the 4B while it reads this (the surviving
+    // mutant of round 3, pinned from the payload side here and from the
+    // page side in `routes/admin.test.tsx`).
+    const releases: Array<() => void> = []
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+    const wake = ensureSmallAwake(Date.now())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = await getGpuAdminState()
+    expect(state.smallState).toBe('starting')
+    expect(state.smallUpSince).toBeNull()
+
+    releases.forEach((release) => release())
+    await wake
+    // The answered wake is itself the completion: the period opened at it.
+    const answered = await getGpuAdminState()
+    expect(answered.smallState).toBe('ready')
+    expect(answered.smallUpSince).not.toBeNull()
+  })
+
+  it('clears each box’s up-since once its idle window has passed the last answer', async () => {
+    // Answered 60s ago, on a 10s window (set for this case, restored by the
+    // ENV_KEYS harness): the period is over, and the payload must not carry
+    // its start as if it were open — the read itself is what clears, which is
+    // also what a failed wake ends in (no answer, so unproven, so the next
+    // read clears the same way).
+    const at = Date.now() - 60_000
+    noteLargeCallCompleted(at)
+    noteSmallCallCompleted(at)
+    process.env.LARGE_LLM_SCALEDOWN_SECONDS = '10'
+    process.env.SMALL_LLM_SCALEDOWN_SECONDS = '10'
+
+    const state = await getGpuAdminState()
+    expect(state.largeUpSince).toBeNull()
+    expect(state.smallState).toBe('cold')
+    expect(state.smallUpSince).toBeNull()
   })
 })
 

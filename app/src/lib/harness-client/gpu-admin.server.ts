@@ -49,7 +49,9 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { isAdminEmail } from '../auth/admin'
 import { getGpuState, setGpuState } from '../db/gpu-state.server'
 import { selfDeployedConfigured } from '../inference/config.server'
-import { ensurePrivateTierAwake } from '../inference/wake.server'
+import { largeUpSince } from '../inference/large-activity.server'
+import { smallProvenWarm, smallUpSince } from '../inference/cold-start.server'
+import { ensurePrivateTierAwake, smallWakeInFlight } from '../inference/wake.server'
 import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
 
@@ -92,10 +94,12 @@ async function requireAdmin(): Promise<{ id: string; email: string }> {
 /** Everything the admin panel renders, in one payload — the switch and its
  *  provenance, plus the per-hour prices the app already computes
  *  (`cost-rates.server.ts`, the same figures every time-priced cost renders
- *  from). The boxes' live warm/cold/starting state is deliberately NOT in
- *  here: the panel reads it from `getPreviewHeaderState()`, the same source
- *  the header strip renders, so the two surfaces cannot disagree about the
- *  one box. */
+ *  from), plus the per-box fields the cost meter meters with. The 27B's live
+ *  warm/cold/starting state is deliberately NOT in here: the panel reads it
+ *  from `getPreviewHeaderState()`, the same source the header strip renders,
+ *  so the two surfaces cannot disagree about that box. The per-box fields
+ *  below serve only this panel, so they ride this admin-only payload rather
+ *  than the one every signed-in user receives (#1047 review round 4). */
 export interface GpuAdminState {
   keepRunning: boolean
   /** When the switch was last turned ON, epoch ms; null while it is off —
@@ -114,6 +118,26 @@ export interface GpuAdminState {
    *  reason, `wake.server.ts`) — and the panel's per-hour figure must skip
    *  its rate for exactly as long, or it prices a box nobody is keeping. */
   largeOnOpenRouter: boolean
+  /** When this process first observed the 27B UP in its current up-period,
+   *  epoch ms, or `null` — before it has seen an answer, after a restart
+   *  (the clock is process-local), and once the scale-down window has passed
+   *  the last answer (`large-activity.server.ts`, `largeUpSince`). The meter
+   *  seeds the 27B's accrual from `max(this, switchedOnAt)` after a reload,
+   *  so it re-bills the time the box was actually up through this switch-on
+   *  and neither re-adds the cold start before it first came up nor restarts
+   *  at ~zero because a keep-warm ping refreshed the completion clock. */
+  largeUpSince: number | null
+  /** The 4B summarizer box's live state, from its own per-box clocks
+   *  (`cold-start.server.ts`): `ready` when an answer inside its idle window
+   *  proves it up, `starting` while one of the shared small-box wake polls
+   *  is on the wire for it, `cold` otherwise. The same evidence class as the
+   *  27B's `ready`/`answering` — a real answer, never a timer — and
+   *  `starting` does NOT count as up: the cold start it may end in is not
+   *  billed time. */
+  smallState: 'ready' | 'starting' | 'cold'
+  /** The 4B's own `upSince` (`cold-start.server.ts`), seeding the small
+   *  half of the meter exactly as `largeUpSince` seeds the 27B's. */
+  smallUpSince: number | null
 }
 
 /** Is THIS caller an admin? Never throws: a signed-out visitor is simply not
@@ -141,6 +165,9 @@ export async function getGpuAdminState(): Promise<GpuAdminState> {
     largeEurPerHour: largeEurPerHour(),
     smallEurPerHour: smallLlmEurPerHour(),
     largeOnOpenRouter: largeOnOpenRouter(),
+    largeUpSince: largeUpSince(),
+    smallState: smallProvenWarm() ? 'ready' : smallWakeInFlight() ? 'starting' : 'cold',
+    smallUpSince: smallUpSince(),
   }
 }
 

@@ -1632,6 +1632,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
                 text="xs ui-text-secondary"
                 font="medium"
                 border="b ui-border-primary"
+                break-all
               >
                 {group.label}
               </h3>

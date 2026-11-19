@@ -6,6 +6,12 @@
  * when the var is unset, matching is case- and space-insensitive, and the
  * `*@domain` wildcard behaves exactly as `allowList.ts`'s does — the two
  * lists share one syntax so an operator who learned one learned both.
+ *
+ * The two sides of the comparison are pinned SEPARATELY, because they are
+ * treated differently on purpose: the list is canonicalized (NFKC + trim +
+ * lowercase — the operator's spelling), while the checked address is refused
+ * unless it is already plain printable ASCII and NFKC-stable, then compared
+ * lowercased. A look-alike must never fold into the address it imitates.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { getAdminEmails, isAdminEmail } from '../../../lib/auth/admin'
@@ -35,15 +41,14 @@ describe('getAdminEmails', () => {
     warn.mockRestore()
   })
 
-  it('NFKC-normalizes entries, so compatibility characters fold before the comparison', () => {
-    // Fullwidth Latin — the NFKC class that stands in for plain ASCII. On the
-    // LIST side and on the CHECKED side the same fold applies, so one
-    // spelling written with compatibility characters is one address, not a
-    // second one to keep in step by hand.
+  it('NFKC-normalizes LIST entries, so one spelling typed with compatibility characters is one address', () => {
+    // Fullwidth Latin — the NFKC class that stands in for plain ASCII. The
+    // fold applies to the LIST side only, so an entry written with
+    // compatibility characters is one address, not a second one to keep in
+    // step by hand.
     const fullwidth = 'ａｄａ＠ｅｘａｍｐｌｅ．ｃｏｍ'
     expect(getAdminEmails(fullwidth)).toEqual(['ada@example.com'])
     expect(isAdminEmail('ada@example.com', [fullwidth])).toBe(true)
-    expect(isAdminEmail(fullwidth, ['ada@example.com'])).toBe(true)
     // The fold is form, not identity: a different address still does not match.
     expect(isAdminEmail('mallory@example.com', [fullwidth])).toBe(false)
   })
@@ -66,5 +71,22 @@ describe('isAdminEmail', () => {
     expect(isAdminEmail(null, [])).toBe(false)
     expect(isAdminEmail(undefined, [])).toBe(false)
     expect(isAdminEmail('ada@example.com', [])).toBe(false)
+  })
+
+  it('refuses a CHECKED address that is not plain ASCII — a look-alike never folds into the address it imitates', () => {
+    // A fullwidth spelling of the whole address, checked against the plain
+    // entry: folding it would make it match, so it must NOT be folded — the
+    // checked side is refused, not canonicalized.
+    expect(isAdminEmail('ａｄａ＠ｅｘａｍｐｌｅ．ｃｏｍ', ['ada@example.com'])).toBe(false)
+    // A mathematical-bold glyph reads as the word it imitates ("owner") and
+    // must not reach the comparison at all.
+    expect(isAdminEmail('ｏwner@example.com', ['owner@example.com'])).toBe(false)
+    expect(isAdminEmail('\u{1D428}wner@example.com', ['owner@example.com'])).toBe(false)
+    // A fullwidth letter inside an otherwise plain address is the same refusal:
+    // the address is not plain ASCII, so it is not the plain address.
+    expect(isAdminEmail('ada@ｅxample.com', ['ada@example.com'])).toBe(false)
+    // The refusal is about folding, not case: a plain uppercase ASCII
+    // address still matches the lowercased entry.
+    expect(isAdminEmail('ADA@EXAMPLE.COM', ['ada@example.com'])).toBe(true)
   })
 })

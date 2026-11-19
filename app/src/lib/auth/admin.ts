@@ -10,8 +10,8 @@
  * accessible to me.").
  *
  * The list is the `ADMIN_EMAILS` env var: comma-separated email addresses,
- * matched case-insensitively after trimming, plus the same `*@domain` wildcard
- * form `allowList.ts` accepts (there because a second tenant admin should be
+ * matched case-insensitively, plus the same `*@domain` wildcard form
+ * `allowList.ts` accepts (there because a second tenant admin should be
  * one line, not a per-person edit). Unset means NOBODY is an admin — the panel
  * is hidden, its server functions refuse, and the app is exactly what it was.
  *
@@ -28,9 +28,10 @@ export const ADMIN_EMAILS_ENV = 'ADMIN_EMAILS'
 /**
  * The admin addresses from `ADMIN_EMAILS`, in canonical form: NFKC-normalized
  * (compatibility characters folded to the ones they resemble), then trimmed,
- * then lowercased — on BOTH sides of every comparison, so two spellings of
- * one address cannot compare differently and a look-alike cannot compare
- * equal to the address it imitates.
+ * then lowercased. Canonicalization is for the LIST side — the operator's own
+ * spelling — so two spellings of one address typed into the env var are one
+ * entry, not two to keep in step by hand. The CHECKED (session) address is
+ * never canonicalized; see `isAdminEmail` for why.
  */
 export function getAdminEmails(
   runtimeValue: string | undefined = typeof process !== 'undefined'
@@ -55,7 +56,7 @@ export function getAdminEmails(
     })
 }
 
-/** One canonical form for every address this module compares. NFKC FIRST: it
+/** One canonical form for the LIST side of the comparison. NFKC FIRST: it
  *  is the fold that turns fullwidth letters and no-break spaces into the
  *  plain characters they stand in for, so the trim and the case fold below
  *  see what the operator sees. */
@@ -76,17 +77,34 @@ function warnBareWildcard(): void {
 /**
  * Is this address an admin? Exact match, or a `*@domain` wildcard entry that
  * covers it — the same two rules `allowList.ts` applies to sign-in, so an
- * operator who knows one syntax knows both. The entries are canonicalized
- * HERE as well rather than trusted to have passed through the parser: the
- * comparison is on canonical forms on BOTH sides, whatever the caller handed
- * in as the list.
+ * operator who knows one syntax knows both.
+ *
+ * The two sides are deliberately NOT canonicalized the same way:
+ *
+ *  - The entries are canonicalized HERE as well rather than trusted to have
+ *    passed through the parser — the list is the operator's own spelling, and
+ *    folding it is what makes a fullwidth entry typed once still match.
+ *  - The CHECKED (session) address is NEVER folded: an address that is not
+ *    plain printable ASCII, or that would CHANGE under NFKC, is refused
+ *    outright, and only its lowercase form is compared. Folding the checked
+ *    side would let a look-alike — fullwidth letters, a mathematical-bold
+ *    glyph — normalize INTO the address it imitates and match it, which is
+ *    the one comparison an admin gate must never make.
  */
 export function isAdminEmail(
   email: string | null | undefined,
   adminEmails: string[] = getAdminEmails(),
 ): boolean {
   if (!email) return false
-  const normalized = canonicalAddress(email)
+  const addr = email.trim()
+  // Plain printable ASCII only: no spaces, no control characters, nothing a
+  // different font could render as the address it is standing in for.
+  if (!/^[\x21-\x7e]+$/.test(addr)) return false
+  // NFKC-stable only: an address that folds under NFKC is not the address it
+  // would fold into, and the fold below is exactly what must not happen to
+  // it.
+  if (addr.normalize('NFKC') !== addr) return false
+  const normalized = addr.toLowerCase()
   for (const entry of adminEmails) {
     const canonical = canonicalAddress(entry)
     if (canonical === normalized) return true

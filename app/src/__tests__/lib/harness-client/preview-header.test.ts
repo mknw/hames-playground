@@ -493,6 +493,68 @@ describe('a wake in flight (#1045)', () => {
   })
 })
 
+// The 4B's live state and both boxes' recorded ready times (#1047 round 3):
+// the admin panel's cost meter prices each box only while THAT box is up, and
+// seeds itself after a reload from the server's own record of when each box
+// answered — so this payload has to carry both, read from the same clocks the
+// states themselves come from.
+describe('the small box’s state and the recorded ready times', () => {
+  beforeEach(configureSelfDeployed)
+
+  it('carries the 4B cold with no record before anything has answered', async () => {
+    const state = await getPreviewHeaderState()
+    expect(state.smallWarmth.state).toBe('cold')
+    expect(state.smallWarmth.lastAnsweredAt).toBeNull()
+  })
+
+  it('carries the 4B ready with its recorded ready time once it has answered', async () => {
+    const at = Date.now() - 60_000
+    noteSmallCallCompleted(at)
+
+    const state = await getPreviewHeaderState()
+    expect(state.smallWarmth.state).toBe('ready')
+    expect(state.smallWarmth.lastAnsweredAt).toBe(at)
+  })
+
+  it('carries the 4B starting while one of its own wakes is in flight', async () => {
+    // `resetSmallActivity` in the outer beforeEach leaves no completion, so
+    // the parked health poll is the only fact: the box is engaged but not up,
+    // and the cold start it may end in is not billed time either way.
+    const releases: Array<() => void> = []
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+    const wake = ensureSmallAwake(Date.now())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect((await getPreviewHeaderState()).smallWarmth.state).toBe('starting')
+
+    releases.forEach((release) => release())
+    await wake
+    // The answered wake is itself the completion: ready, with a record.
+    const state = await getPreviewHeaderState()
+    expect(state.smallWarmth.state).toBe('ready')
+    expect(state.smallWarmth.lastAnsweredAt).not.toBeNull()
+  })
+
+  it('carries the 27B’s recorded ready time beside its state, from the same clock', async () => {
+    // `warmth.state` and `warmth.lastAnsweredAt` come from the one clock: a
+    // `ready` with no timestamp would be a state the meter cannot seed from,
+    // and a timestamp with no state one it cannot trust.
+    expect((await getPreviewHeaderState()).warmth.lastAnsweredAt).toBeNull()
+
+    const at = Date.now() - 60_000
+    noteLargeCallCompleted(at)
+
+    const state = await getPreviewHeaderState()
+    expect(state.warmth.state).toBe('ready')
+    expect(state.warmth.lastAnsweredAt).toBe(at)
+  })
+})
+
 // The SETTER moved with the switch: it is `setConversationTier` in
 // `harness-client/actions.server.ts` now, and its tests moved with it (the
 // owner-from-session rule, the unknown-tier refusal, the unconfigured-self_deployed

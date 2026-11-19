@@ -133,17 +133,27 @@ export default function Admin() {
 
   const state = () => admin()
 
-  /** The per-hour price of the boxes the keep-running loop actually keeps up:
-   *  the small box's rate always — the loop keeps it in every configuration —
-   *  plus the 27B's rate only when there IS a 27B box to keep. On the
-   *  OpenRouter route the 27B is a public per-token API, not a scale-to-zero
-   *  box of ours, and the loop skips it exactly as the wake does
-   *  (`wake.server.ts`) — pricing it here would bill a box nobody is keeping.
+  /** The per-hour rate of each box the keep-running loop actually keeps up:
+   *  the small box's always — the loop keeps it in every configuration — plus
+   *  the 27B's only when there IS a 27B box of ours to keep. On the OpenRouter
+   *  route the 27B is a public per-token API, not a scale-to-zero box of ours,
+   *  and the loop skips it exactly as the wake does (`wake.server.ts`) —
+   *  pricing it here would bill a box nobody is keeping, and metering it would
+   *  read a box nobody is keeping.
    */
-  const perHour = () => {
+  const perBoxRates = (): { large: number; small: number } => {
     const s = state()
-    if (!s) return 0
-    return (s.largeOnOpenRouter ? 0 : s.largeEurPerHour) + s.smallEurPerHour
+    if (!s) return { large: 0, small: 0 }
+    return {
+      large: s.largeOnOpenRouter ? 0 : s.largeEurPerHour,
+      small: s.smallEurPerHour,
+    }
+  }
+
+  /** The per-hour price the "billed at" line shows: both kept boxes, summed. */
+  const perHour = () => {
+    const r = perBoxRates()
+    return r.large + r.small
   }
 
   /** The same figure's breakdown, naming which boxes the rate is for — so on
@@ -159,37 +169,41 @@ export default function Admin() {
 
   const runningSince = () => (state()?.keepRunning ? (state()?.switchedOnAt ?? null) : null)
 
-  /** Whether the live payload shows a box actually up. `ready` and
-   *  `answering` are completion evidence — the deployment answered a real
-   *  request. `starting` is a wake in flight with no evidence yet, so it does
-   *  NOT count: the cold start it may end in is one of the spans the meter's
-   *  own footnote already excludes. */
-  const boxUp = () => {
-    const s = warmth()?.warmth.state
-    return s === 'ready' || s === 'answering'
-  }
-
   // ---- The "so far" meter ---------------------------------------------
   //
-  // Two properties a recomputed `(now - stamp) × rate` cannot have (#1047
-  // review round 2): it must MOVE while the page is open (a meter frozen at
-  // page load reads as a hung page), and it must NOT move while no box is up
-  // — with the switch on but every wake failing, no GPU time is being bought
-  // and the figure must not grow. So the meter ACCRUES: it adds time only
-  // while the live payload shows a box up, and freezes while it does not.
+  // Three properties a recomputed `(now - stamp) × rate` cannot have (#1047
+  // review rounds 2 and 3): it must MOVE while the page is open (a meter
+  // frozen at page load reads as a hung page); it must NOT move while no box
+  // is up — with the switch on but every wake failing, no GPU time is being
+  // bought and the figure must not grow; and it must accrue PER BOX — each
+  // box's rate only while THAT box is up, so on the OpenRouter route, where
+  // the loop keeps no 27B, the meter still runs on the 4B the loop IS
+  // keeping up and paying for.
   //
-  // What this page cannot see, it does not guess: the stamp says when the
-  // switch went on, not when the boxes came up, so the first up observation
-  // charges the whole span from the stamp — unless the page has already
-  // watched the boxes be down for this switch-on, because a span observed
-  // down is known unbilled time and is never charged. A reload starts the
-  // observation over; the figure is a floor and its footnote says so.
+  // So the meter ACCRUES per box: it adds time only while the live payload
+  // shows that box up, and freezes for a box while it does not. `ready` and
+  // `answering` are completion evidence — the deployment answered a real
+  // request — while `starting` is a wake in flight with no evidence yet, so
+  // it does NOT count: the cold start it may end in is one of the spans the
+  // meter's own footnote already excludes.
+  //
+  // The first up observation of a switch-on charges from the SERVER's
+  // recorded ready time (`lastAnsweredAt` in the same payload — when the box
+  // answered, not when the switch went on), so a reload in the middle of a run
+  // does not charge the cold start the boxes were switched on into: the
+  // footnote excludes that span, and the meter must not add it back. The
+  // ready time is clamped at the switch-on stamp, because a box that was
+  // already up when the switch flipped has been billed from the flip, not
+  // from before it. With no server record the meter starts from its own
+  // observation — under-stating, never over-stating, which is the direction a
+  // floor may err in.
   const [accruedEur, setAccruedEur] = createSignal<number | null>(null)
   let accrualStamp: number | null = null
-  let accrualSeeded = false
-  let accrualSawDown = false
-  let accruedMs = 0
   let lastTickAt = Date.now()
+  /** Each box's accrued UP-time in ms for this switch-on. */
+  const accruedUpMs: Record<'large' | 'small', number> = { large: 0, small: 0 }
+  /** Which boxes have had their first up observation of this switch-on. */
+  const seeded: Record<'large' | 'small', boolean> = { large: false, small: false }
 
   const accrue = (now: number) => {
     // Every input is read first, under one guard: reading a REJECTED resource
@@ -199,14 +213,21 @@ export default function Admin() {
     // recomputes it. The reads still TRACK: an effect running this sees the
     // resource refresh either way.
     let since: number | null
-    let up: boolean
-    let payloadArrived: boolean
-    let rate: number
+    let up: Record<'large' | 'small', boolean>
+    let readyAt: Record<'large' | 'small', number | null>
+    let rates: Record<'large' | 'small', number>
     try {
       since = runningSince()
-      up = boxUp()
-      payloadArrived = warmth() !== undefined
-      rate = perHour()
+      const w = warmth()
+      up = {
+        large: w?.warmth.state === 'ready' || w?.warmth.state === 'answering',
+        small: w?.smallWarmth?.state === 'ready',
+      }
+      readyAt = {
+        large: w?.warmth.lastAnsweredAt ?? null,
+        small: w?.smallWarmth?.lastAnsweredAt ?? null,
+      }
+      rates = perBoxRates()
     } catch {
       return
     }
@@ -214,26 +235,35 @@ export default function Admin() {
       // A new switch-on, or this page's first observation of one: the meter
       // restarts from its own stamp.
       accrualStamp = since
-      accrualSeeded = false
-      accrualSawDown = false
-      accruedMs = 0
+      accruedUpMs.large = 0
+      accruedUpMs.small = 0
+      seeded.large = false
+      seeded.small = false
       lastTickAt = now
     }
+    let eur = 0
     if (since !== null) {
-      if (up) {
-        if (!accrualSeeded) {
-          accruedMs = accrualSawDown ? now - lastTickAt : now - since
-          accrualSeeded = true
+      for (const box of ['large', 'small'] as const) {
+        // A box the loop does not keep — the 27B on the OpenRouter route —
+        // has no rate and no meter state: nothing is being bought for it.
+        if (rates[box] <= 0) continue
+        if (!up[box]) continue
+        if (!seeded[box]) {
+          seeded[box] = true
+          const ready = readyAt[box]
+          // From the server's recorded ready time when there is one — never
+          // the cold start before it — clamped at the stamp; from this
+          // observation when there is not.
+          const from = ready !== null ? Math.max(ready, since) : lastTickAt
+          accruedUpMs[box] = now - from
         } else {
-          accruedMs += now - lastTickAt
+          accruedUpMs[box] += now - lastTickAt
         }
-      } else if (payloadArrived) {
-        // A payload arrived and says no box is up — unbilled time from here.
-        accrualSawDown = true
+        eur += (accruedUpMs[box] / 3_600_000) * rates[box]
       }
     }
     lastTickAt = now
-    setAccruedEur(since === null ? null : (accruedMs / 3_600_000) * rate)
+    setAccruedEur(since === null ? null : eur)
   }
 
   // The strip's own 1-second countdown tick (TICK_INTERVAL_MS), reused rather
@@ -430,7 +460,7 @@ export default function Admin() {
                 <Show when={accruedEur() !== null}>
                   <p
                     text="xs ui-text-secondary"
-                    title="A floor: it counts the time a box was actually up since the switch was turned on, and adds neither the cold start before the first call, the spans no box was up in, nor the scale-down window after the last."
+                    title="A floor: it counts, for each box, the time that box was actually up since the switch was turned on — charging from the box's own recorded ready time, so neither the cold start before it was up nor a reload re-adds that span — and adds neither the spans a box was down in nor the scale-down window after the last."
                   >
                     ≥ <span font="mono">{fmtEur(accruedEur()!)}</span> so far — a floor, not the
                     bill.

@@ -39,6 +39,11 @@ const ADMIN_STATE = {
   largeOnOpenRouter: false,
 } as const
 
+/** A payload with BOTH boxes up — and up since before any switch-on in the
+ *  tests that use it unmodified: `lastAnsweredAt: 1` predates every stamp, so
+ *  the meter charges from the stamp (a box already up when the switch flipped
+ *  has been billed from the flip). The tests that pin the reload rule
+ *  override the ready times. */
 const WARM_READY = {
   tier: 'self_deployed',
   selfDeployedAvailable: true,
@@ -49,7 +54,9 @@ const WARM_READY = {
     coldStartEstimateMs: null,
     coldStartBasis: null,
     coldStartSamples: null,
+    lastAnsweredAt: 1,
   },
+  smallWarmth: { state: 'ready', lastAnsweredAt: 1 },
   activeUsers: 1,
   activeWindowMinutes: 15,
   usage: {},
@@ -119,13 +126,21 @@ describe('the admin page', () => {
     expect(soFar.textContent).toMatch(/€11\.\d\d/)
   })
 
-  it('prices only the boxes the loop keeps: the 27B drops out on the OpenRouter route', async () => {
+  it('accrues the 4B’s rate on the OpenRouter route while the 4B is up — the 27B is not ours to meter there', async () => {
     const since = Date.now() - 2 * 3_600_000 // two hours of the 4B alone
     mocks.admin.mockResolvedValue({
       ...ADMIN_STATE,
       keepRunning: true,
       switchedOnAt: since,
       largeOnOpenRouter: true,
+    })
+    // The 27B is a public per-token API on that route, not a box of ours:
+    // the wake skips it, so nothing reports it up and its reading is cold.
+    // The 4B is up — the loop keeps it in every configuration — and it is
+    // billed the whole time, so the meter must run on it.
+    mocks.header.mockResolvedValue({
+      ...WARM_READY,
+      warmth: { ...WARM_READY.warmth, state: 'cold', secondsUntilScaledown: null },
     })
     render(() => (
       <MemoryRouter>
@@ -138,9 +153,56 @@ describe('the admin page', () => {
     expect(line.textContent).toContain('€1.07/hour')
     expect(line.textContent).not.toContain('€4.60')
     expect(line.textContent).toContain('OpenRouter')
-    // Two hours at €1.07/h, not at €5.67/h.
+    // Two hours at €1.07/h, not at €5.67/h — and not at €0 while the 4B is
+    // billed, which is what metering the 27B's up-state alone would show.
     const soFar = await screen.findByText(/so far/)
     expect(soFar.textContent).toMatch(/€2\.15/)
+  })
+
+  it('charges from the boxes’ recorded ready time after a reload — never through the cold start', async () => {
+    // The reload case (#1047 review round 3): the switch went on two hours
+    // ago, the boxes answered an hour later — the cold start — and this page
+    // is opened now. The first up observation must charge from the SERVER's
+    // recorded ready time, not from the switch-on stamp: the footnote says
+    // the cold start is excluded, and a reload must not add it back.
+    const since = Date.now() - 2 * 3_600_000
+    const readyAt = Date.now() - 3_600_000
+    mocks.admin.mockResolvedValue({ ...ADMIN_STATE, keepRunning: true, switchedOnAt: since })
+    mocks.header.mockResolvedValue({
+      ...WARM_READY,
+      warmth: { ...WARM_READY.warmth, lastAnsweredAt: readyAt },
+      smallWarmth: { state: 'ready', lastAnsweredAt: readyAt },
+    })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    const soFar = await screen.findByText(/so far/)
+    // One hour since the boxes answered, at both rates — not two hours.
+    expect(soFar.textContent).toMatch(/€5\.67/)
+  })
+
+  it('accrues only from its own up observation when the server has no recorded ready time', async () => {
+    // The defensive half of the same rule: with no server record of when the
+    // boxes came up, the page charges from what it observed itself — which
+    // starts the meter at this page's up observation, never at the
+    // switch-on stamp with the cold start inside it. A floor may under-state;
+    // it may not invent billed time it cannot show.
+    const since = Date.now() - 2 * 3_600_000
+    mocks.admin.mockResolvedValue({ ...ADMIN_STATE, keepRunning: true, switchedOnAt: since })
+    mocks.header.mockResolvedValue({
+      ...WARM_READY,
+      warmth: { ...WARM_READY.warmth, lastAnsweredAt: null },
+      smallWarmth: { state: 'ready', lastAnsweredAt: null },
+    })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    const soFar = await screen.findByText(/so far/)
+    expect(soFar.textContent).toMatch(/€0\.00/)
   })
 
   it('ticks the "so far" figure while the page is open and a box is up', async () => {
@@ -163,6 +225,7 @@ describe('the admin page', () => {
     mocks.header.mockResolvedValue({
       ...WARM_READY,
       warmth: { ...WARM_READY.warmth, state: 'cold', secondsUntilScaledown: null },
+      smallWarmth: { state: 'cold', lastAnsweredAt: null },
     })
     render(() => (
       <MemoryRouter>

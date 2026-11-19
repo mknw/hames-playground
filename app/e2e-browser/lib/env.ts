@@ -129,7 +129,7 @@ export const COLD_START_HEADLINE = 'starting GPU'
  * page, so a rename in the component turns that scenario red rather than
  * quietly weakening it.
  */
-export const IGNITE_LABEL = 'start RTX PRO 6000'
+export const IGNITE_LABEL = 'start self-deployed GPUs'
 
 /**
  * `LARGE_LLM_SCALEDOWN_SECONDS` for the dev server under test.

@@ -1358,10 +1358,10 @@ describe('ObservabilityPanel — export menu', () => {
     expect(consoleError).toHaveBeenCalledWith('Save failed', expect.any(Error))
   })
 
-  // Mutation guard (rv-1010 review): grouping is display-only, so the export
-  // must still carry every raw event — one folded behind a controller section
-  // and one beside it. Mutating the serialiser to read the projection instead
-  // of `props.events` reddens only this test.
+  // Mutation guard (#1010 review): grouping is display-only, so the export
+  // must still carry every raw event — three folded behind a controller
+  // section and one (user_message) beside it. Mutating the serialiser to read
+  // the projection instead of `props.events` reddens only this test.
   it('exports every event, not the projection — grouping is display-only', async () => {
     const writeText = vi.fn(async (_s: string) => {})
     stubClipboard(writeText)
@@ -1377,13 +1377,7 @@ describe('ObservabilityPanel — export menu', () => {
 
     expect(writeText).toHaveBeenCalledOnce()
     const payload = JSON.parse(writeText.mock.calls[0][0])
-    expect(payload.events).toHaveLength(4)
-    expect(payload.events.map((e: ContextEvent) => e.type)).toEqual([
-      'user_message',
-      'controller_action',
-      'tool_call',
-      'tool_result',
-    ])
+    expect(payload.events).toEqual(events)
   })
 })
 

@@ -13,6 +13,7 @@
  */
 import { test, expect } from '../lib/fixtures'
 import { newChat, open, send, waitForReplies } from '../lib/chat'
+import { openSupportTab } from '../lib/support'
 import { FAKE_ORG_MESSAGE } from '../../e2e/lib/fake-llm'
 
 /** The proposal arrives after the reply, on the card's poll (2s, 8s, 30s). */
@@ -46,7 +47,10 @@ test('a proposal is added to Org.graph only on Add, and the added node is painte
 }) => {
   await open(page, appUrl)
   const card = page.getByTestId('org-proposal-card')
-  const orgTab = page.getByRole('tab', { name: 'Org.graph', exact: true })
+  // The panel boots collapsed to its rail (#1046); the helper opens it onto
+  // the Org.graph tab and re-selects the tab on the later, already-expanded
+  // passes.
+  const openOrgGraph = () => openSupportTab(page, 'neo4j-graph')
 
   // ---- Discard: nothing written, nothing drawn ------------------------------
   await send(page, FAKE_ORG_MESSAGE)
@@ -59,7 +63,7 @@ test('a proposal is added to Org.graph only on Add, and the added node is painte
     page.getByRole('status').filter({ hasText: 'Nothing was added to Org.graph.' }),
   ).toBeVisible()
   await expect(card).toHaveCount(0)
-  await orgTab.click()
+  await openOrgGraph()
   await expect(page.getByTestId('graph-legend-added')).toHaveCount(0)
   expect(await addedPixels(page)).toBe(0)
 
@@ -70,7 +74,7 @@ test('a proposal is added to Org.graph only on Add, and the added node is painte
   await expect(card).toBeVisible({ timeout: CARD_TIMEOUT_MS })
   await card.getByRole('button', { name: 'Add to Org.graph' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Added 1 to Org.graph.' })).toBeVisible()
-  await orgTab.click()
+  await openOrgGraph()
   await expect(page.getByTestId('graph-legend-added')).toHaveText('added')
   await expect.poll(() => addedPixels(page), { timeout: 10_000 }).toBeGreaterThan(0)
 })

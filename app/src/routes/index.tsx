@@ -25,6 +25,18 @@ import { createThreadListStore } from '~/lib/thread-list-store'
 import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 import type { RunOutcome } from '~/lib/run-registry'
 
+/** The support panel's expanded width (#1046): the right-hand share of the
+ *  60/40 layout that was the splitter's `defaultSize` before the default
+ *  flipped to collapsed. Every `expandPanel('support', …)` passes it as the
+ *  min-size floor, because the splitter otherwise expands to the panel's own
+ *  `minSize` (30) when no pre-collapse width was recorded — which, for a
+ *  panel that now STARTS collapsed, is the first expansion of every fresh
+ *  session. A recorded width at or above the floor still wins — a drag to 45
+ *  then collapse then expand restores 45 — while one below it (the panel can
+ *  be dragged to 30) is bumped up to the floor rather than restored, the same
+ *  gentle correction the pre-#1046 first expand made. */
+const SUPPORT_EXPANDED_SIZE = 40
+
 export default function Home() {
   // ---------------------------------------------------------------------------
   // The route composes three stores and renders three panels. It owns only
@@ -97,12 +109,22 @@ export default function Home() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
-  // The right panel's collapsed state (#933). Persisted per browser, not per
-  // user — localStorage with both halves try/catch, so a refused write or an
-  // SSR render costs nothing. The splitter's onCollapse/onExpand (below) are
-  // the single writers: they fire for the toggle AND for a drag past the
-  // panel's min size, so every way of collapsing records the same choice.
-  const [supportCollapsed, setSupportCollapsed] = createSignal(loadSupportCollapsePref())
+  // The right panel's collapsed state (#933; collapsed by default since
+  // #1046). Persisted per browser, not per user — localStorage with both
+  // halves try/catch, so a refused write or an SSR render costs nothing. The
+  // splitter's onCollapse/onExpand (below) are the single writers: they fire
+  // for the toggle AND for a drag past the panel's min size, so every way of
+  // collapsing records the same choice.
+  //
+  // Seeded COLLAPSED rather than from localStorage, because the first paint
+  // must agree between the server and the browser: the server has no
+  // localStorage, so a client-side read would hydrate a different layout
+  // from the HTML it was handed — the classic render-expanded-then-jump,
+  // now as a hydration mismatch. The initial render is collapsed everywhere
+  // (the splitter's `defaultSize` below says the same), and the stored
+  // choice is applied in onMount, where the only value that changes
+  // anything is an explicit expanded ('false').
+  const [supportCollapsed, setSupportCollapsed] = createSignal(true)
   // A rail-icon click expands the panel onto that tab; the signal rides down
   // to SupportPanel as its `openTab` prop. undefined = keep the open tab.
   const [requestedSupportTab, setRequestedSupportTab] = createSignal<SupportTabId>()
@@ -256,17 +278,23 @@ export default function Home() {
   }
   const toggleSupportPanel = () => {
     const api = splitterApi()
-    if (supportCollapsed()) api.expandPanel('support')
+    if (supportCollapsed()) api.expandPanel('support', SUPPORT_EXPANDED_SIZE)
     else api.collapsePanel('support')
   }
   const openSupportTab = (tab?: SupportTabId) => {
     if (tab) setRequestedSupportTab(tab)
-    splitterApi().expandPanel('support')
+    splitterApi().expandPanel('support', SUPPORT_EXPANDED_SIZE)
   }
 
   const splitterApi = useSplitter({
     orientation: 'horizontal',
-    defaultSize: [60, 40],
+    // Collapsed from the FIRST paint (#1046), so SSR HTML and hydrated
+    // layout both show the rail and no mount-time collapse call has to run —
+    // that call was the render-expanded-then-jump the old default made. A 0
+    // for the support panel is valid: validateSizes clamps anything under
+    // half the collapsedSize→minSize gap to collapsedSize for a collapsible
+    // panel, so [100, 0] survives initialization as the collapsed layout.
+    defaultSize: [100, 0],
     panels: [
       // Chat's max is 100, not the old 80: resizeByDelta refuses any result
       // whose sizes don't sum to 100, so with chat capped at 80 the support
@@ -286,10 +314,15 @@ export default function Home() {
   })
 
   onMount(() => {
-    // A browser that left the panel collapsed gets it collapsed again. The
-    // mount call rather than a seeded defaultSize: the splitter's own min/max
-    // constraints own the initial layout, and collapsePanel respects them.
-    if (supportCollapsed()) splitterApi().collapsePanel('support')
+    // The stored choice, applied against a first paint that is collapsed
+    // everywhere (#1046): an explicit expanded ('false') is the only value
+    // that changes anything. The expansion goes through the splitter, so its
+    // onExpand remains the single writer of the choice, as for every other
+    // way of expanding; SUPPORT_EXPANDED_SIZE is the width it restores, for
+    // the reason that constant documents.
+    if (!loadSupportCollapsePref()) {
+      splitterApi().expandPanel('support', SUPPORT_EXPANDED_SIZE)
+    }
 
     const onUnload = () => registry.abortAll()
     window.addEventListener('beforeunload', onUnload)

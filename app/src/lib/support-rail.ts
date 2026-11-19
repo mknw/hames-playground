@@ -79,12 +79,14 @@ export const SUPPORT_RAIL_TABS: readonly SupportTabMeta[] = [
  *  or an SSR render with no `localStorage` must not break the panel. */
 export const SUPPORT_COLLAPSE_KEY = 'support-panel.collapsed'
 
-/** Absent key = expanded, the today behaviour. */
+/** Collapsed is the DEFAULT (#1046): an absent key — a first visit, a new
+ *  browser, a storage error on read — reads collapsed, and the one value that
+ *  reads expanded is an explicit 'false', the browser that chose expanded. */
 export function loadSupportCollapsePref(): boolean {
   try {
-    return localStorage.getItem(SUPPORT_COLLAPSE_KEY) === 'true'
+    return localStorage.getItem(SUPPORT_COLLAPSE_KEY) !== 'false'
   } catch {
-    return false
+    return true
   }
 }
 

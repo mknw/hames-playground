@@ -14,6 +14,7 @@ import AxeBuilder from '@axe-core/playwright'
 import type { Locator, Page } from '@playwright/test'
 import { test, expect } from '../lib/fixtures'
 import { open } from '../lib/chat'
+import { openSupportTab } from '../lib/support'
 import { rowStatus, savedMemories, seedMemory, seedProposal } from '../lib/memory-fixtures'
 
 const HOSTILE = '<img src=x onerror="window.__pwned=1">'
@@ -23,7 +24,7 @@ const ITEMS = [
 ]
 
 async function enableMemory(page: Page): Promise<void> {
-  await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+  await openSupportTab(page, 'memory')
   const toggle = page
     .getByRole('region', { name: 'What I remember about you' })
     .getByRole('checkbox', { name: 'Memory enabled' })
@@ -176,7 +177,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page.getByTestId('memory-proposal-notice')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Waiting on you: 1' })).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     const panel = page.getByRole('region', { name: 'What I remember about you' })
     await expect(panel.getByText('I prefer synthetic examples', { exact: true })).toBeVisible()
     await panel.getByRole('button', { name: 'Forget everything' }).click()
@@ -212,7 +213,7 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(page.getByTestId('memory-proposal-notice')).toBeVisible()
       await expect(page.getByRole('button', { name: 'Waiting on you: 1' })).toBeVisible()
 
-      await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+      await openSupportTab(page, 'memory')
       const panel = page.getByRole('region', { name: 'What I remember about you' })
       await panel.getByRole('checkbox', { name: 'Memory enabled' }).press('Space')
       if (withMemory) {

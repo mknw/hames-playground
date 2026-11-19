@@ -10,6 +10,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '../lib/fixtures'
 import { open } from '../lib/chat'
+import { openSupportTab } from '../lib/support'
 import { rowStatus as rowStatusOf, savedMemories, seedProposal } from '../lib/memory-fixtures'
 
 const REQUEST = '3b1f6c1e-2f55-4f0e-9d0f-6a0b9d8f4e11'
@@ -23,7 +24,7 @@ for (const theme of ['dark', 'light'] as const) {
   }) => {
     await open(page, appUrl, { theme })
     // The user's memory switch must be ON for a proposal to be offered at all.
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     const toggle = page
       .getByRole('region', { name: 'What I remember about you' })
       .getByRole('checkbox', { name: 'Memory enabled' })

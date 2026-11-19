@@ -1229,7 +1229,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       group.documents.push(doc)
       groups.set(key, group)
     }
-    return [...groups.values()]
+    return groups
   })
 
   // Tool-result actions go through the route's optimistic handler, which
@@ -1648,8 +1648,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             Files copied or created by the agent appear here.
           </p>
         </Show>
-        <For each={fileGroups()}>
-          {(group) => {
+        <For each={[...fileGroups().keys()]}>
+          {(key) => {
+            const group = () => fileGroups().get(key)!
             const headingId = createUniqueId()
             return (
               <section aria-labelledby={headingId}>
@@ -1661,9 +1662,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
                   border="b ui-border-primary"
                   break-all
                 >
-                  {group.label}
+                  {group().label}
                 </h2>
-                <DocumentGallery documents={group.documents} />
+                <DocumentGallery documents={group().documents} />
               </section>
             )
           }}

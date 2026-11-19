@@ -486,6 +486,86 @@ describe('DataStashPanel — uploads', () => {
     expect(screen.getAllByText('Synthetic file viewer content')).toHaveLength(1)
   })
 
+  it.each([
+    { origin: 'graph-file' as const, grouping: 'turn' },
+    { origin: 'graph-file' as const, grouping: 'type' },
+    { origin: 'user-upload' as const, grouping: 'turn' },
+  ])(
+    'keeps the $origin viewer mounted through events and a list refresh ($grouping)',
+    async ({ origin, grouping }) => {
+      const documents = [doc({ origin, originTurnId: 'turn-1' })]
+      const plan: FetchPlan = {
+        documents,
+        documentBody: { document: { content: 'alpha\nbravo\ncharlie' } },
+      }
+      stubFetch(plan)
+      const [events, setEvents] = createSignal<ContextEvent[]>([
+        { ...userMessage(), id: 'turn-1' },
+        toolResult('retriever', {
+          result: {
+            references: [
+              { docId: 'doc-1', filename: 'notes.md', startOffset: 0, endOffset: 5, chunkIndex: 0 },
+              {
+                docId: 'doc-1',
+                filename: 'notes.md',
+                startOffset: 6,
+                endOffset: 11,
+                chunkIndex: 1,
+              },
+            ],
+          },
+        }),
+      ])
+      const sessionId = newSession()
+      render(() => (
+        <DataStashPanel events={events()} sessionId={sessionId} onStashAction={noopAction} />
+      ))
+      await settle()
+      if (grouping === 'type') {
+        fireEvent.click(screen.getByText('By type'))
+        await settle()
+      }
+      const owner = () =>
+        origin === 'user-upload'
+          ? screen.getByRole('button', { name: /Your uploads/ }).parentElement!
+          : screen.getByRole('region', { name: grouping === 'type' ? 'text/markdown' : 'Turn 1' })
+      fireEvent.click(within(owner()).getByTitle('View file'))
+      await settle()
+      const viewer = within(owner()).getByTitle('Close viewer').parentElement!.parentElement!
+      const scroll = viewer.children[1] as HTMLElement
+      fireEvent.click(within(viewer).getByTitle('Next reference'))
+      scroll.scrollTop = 37
+      const reads = () => calls.filter((c) => c.url.startsWith('/api/stash/document/')).length
+      expect(reads()).toBe(1)
+      const assertPreserved = () => {
+        expect(within(owner()).getByTitle('Close viewer').parentElement!.parentElement).toBe(viewer)
+        expect(reads()).toBe(1)
+        expect(within(viewer).getByText('2/2')).toBeTruthy()
+        expect(scroll.scrollTop).toBe(37)
+        expect(within(viewer).getByText('bravo')).toBeTruthy()
+      }
+      setEvents((previous) => [
+        ...previous,
+        {
+          type: 'assistant_message',
+          ts: ++evSeq,
+          patternId: 'harness',
+          data: { content: 'Synthetic update' },
+        },
+      ])
+      await settle()
+      assertPreserved()
+      const listsBefore = calls.filter((c) => c.url.startsWith('/api/stash/upload')).length
+      plan.documents = documents.map((d) => ({ ...d }))
+      setEvents((previous) => [...previous, toolResult('graph_file_ingest')])
+      await settle()
+      expect(calls.filter((c) => c.url.startsWith('/api/stash/upload'))).toHaveLength(
+        listsBefore + 1,
+      )
+      assertPreserved()
+    },
+  )
+
   const upload = async (container: HTMLElement, files: File[]) => {
     const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
     Object.defineProperty(input, 'files', { value: files, configurable: true })

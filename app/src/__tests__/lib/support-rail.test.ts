@@ -36,9 +36,11 @@ beforeEach(() => {
 })
 
 describe('collapse preference — per browser, guarded', () => {
-  it('reads expanded when nothing was ever saved', () => {
+  // #1046: collapsed is the default. This is the case the change is about —
+  // an absent key (a first visit, a new browser) used to read expanded.
+  it('reads collapsed when nothing was ever saved (#1046)', () => {
     expect(localStorage.getItem(SUPPORT_COLLAPSE_KEY)).toBeNull()
-    expect(loadSupportCollapsePref()).toBe(false)
+    expect(loadSupportCollapsePref()).toBe(true)
   })
 
   it('round-trips the choice', () => {
@@ -49,12 +51,17 @@ describe('collapse preference — per browser, guarded', () => {
     expect(loadSupportCollapsePref()).toBe(false)
   })
 
-  it('fails closed to expanded when storage refuses to read', () => {
+  it('keeps an explicit expanded choice — the one value that reads false', () => {
+    saveSupportCollapsePref(false)
+    expect(loadSupportCollapsePref()).toBe(false)
+  })
+
+  it('fails closed to collapsed when storage refuses to read', () => {
     const getItem = vi.fn(() => {
       throw new Error('denied')
     })
     vi.stubGlobal('localStorage', { getItem, setItem: vi.fn() })
-    expect(loadSupportCollapsePref()).toBe(false)
+    expect(loadSupportCollapsePref()).toBe(true)
   })
 
   it('swallows a refused write instead of breaking the toggle', () => {

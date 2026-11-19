@@ -185,7 +185,7 @@ export const TICK_INTERVAL_MS = 1_000
 /** The label the cold indicator swaps to under the pointer, and the accessible
  *  name of the button it becomes. Exported so a test asserts the string a user
  *  reads rather than one it chose itself. */
-export const IGNITE_LABEL = 'start RTX PRO 6000'
+export const IGNITE_LABEL = 'start self-deployed GPUs'
 
 /** What the strip says when a start this browser asked for did not happen.
  *  Deliberately NOT "stale", which is the word for numbers that are merely old:

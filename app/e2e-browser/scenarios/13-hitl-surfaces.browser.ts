@@ -43,6 +43,24 @@ async function arrive(page: Page, toast: Locator): Promise<void> {
     .toBe(1)
 }
 
+/** The chat's first proposals read must have COMPLETED before the proposal
+ *  "arrives": a read that lands after the row was seeded correctly treats the
+ *  proposal as already on screen when the conversation opened — card and badge,
+ *  no toast — and the toast this scenario drives never comes (#1055).
+ *  `networkidle` was the old proxy and races: it is a NETWORK signal, and it
+ *  fires inside a CPU stall of dev-server hydration, after the last module
+ *  request and before the prompt's first read was even issued. The read is
+ *  identified by its `X-Server-Id` header plus the conversation id in the POST
+ *  body, and the RESPONSE is what matters — only a landed answer proves the
+ *  prompt took its baseline (`baselined` in `MemoryProposalPrompt`). */
+const firstProposalsRead = (page: Page, sessionId: string) =>
+  page.waitForResponse(async (response) => {
+    const request = response.request()
+    if (request.method() !== 'POST') return false
+    if (!(await request.headerValue('X-Server-Id'))?.includes('--listMemoryProposals')) return false
+    return ((await request.postData()) ?? '').includes(sessionId)
+  })
+
 const serious = (r: { violations: { impact?: string | null }[] }) =>
   r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
 
@@ -120,9 +138,10 @@ for (const theme of ['dark', 'light'] as const) {
     await enableMemory(page)
     // the conversation is open with nothing pending; the proposal ARRIVES afterwards
     await seedProposal(id, request, ITEMS, null, 'conversation')
+    const firstRead = firstProposalsRead(page, id)
     await page.goto(`${appUrl}/?c=${id}`)
     // the chat's first read must have COMPLETED before the proposal arrives
-    await page.waitForLoadState('networkidle')
+    await firstRead
     await expect(page.getByTestId('memory-proposal-notice')).toHaveCount(0)
     await seedProposal(id, request, ITEMS, null, 'payload')
     const focusedBefore = await page.evaluate(() => document.activeElement?.tagName)
@@ -168,8 +187,9 @@ for (const theme of ['dark', 'light'] as const) {
     await enableMemory(page)
     await seedMemory(`m-s8-${theme}`, 'I prefer synthetic examples')
     await seedProposal(id, request, ITEMS, null, 'conversation')
+    const firstRead = firstProposalsRead(page, id)
     await page.goto(`${appUrl}/?c=${id}`)
-    await page.waitForLoadState('networkidle')
+    await firstRead
     await seedProposal(id, request, ITEMS, null, 'payload')
     await arrive(page, page.getByTestId('memory-proposal-toast'))
     await expect(page.getByTestId('memory-proposal-toast')).toBeVisible()
@@ -205,8 +225,9 @@ for (const theme of ['dark', 'light'] as const) {
       await enableMemory(page)
       if (withMemory) await seedMemory(`m-s8-off-${tag}`, 'I prefer synthetic examples')
       await seedProposal(id, request, ITEMS, null, 'conversation')
+      const firstRead = firstProposalsRead(page, id)
       await page.goto(`${appUrl}/?c=${id}`)
-      await page.waitForLoadState('networkidle')
+      await firstRead
       await seedProposal(id, request, ITEMS, null, 'payload')
       await arrive(page, page.getByTestId('memory-proposal-toast'))
       await expect(page.getByTestId('memory-proposal-notice')).toBeVisible()

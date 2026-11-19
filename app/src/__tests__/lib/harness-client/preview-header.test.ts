@@ -86,6 +86,8 @@ import {
 import {
   resetSmallWake,
   resetLargeWake,
+  ensureLargeAwake,
+  ensureSmallAwake,
   keepWarmIntervalMs,
   warmIdleCapMs,
   LARGE_LLM_WAKE_FAILED,
@@ -383,6 +385,111 @@ describe('the warmth display mapping', () => {
     expect(warmth.coldStartEstimateMs).toBeGreaterThan(0)
     expect(warmth.coldStartBasis).toBeDefined()
     expect(warmth.coldStartSamples).toBeGreaterThanOrEqual(0)
+  })
+})
+
+// #1045: a wake is SERVER state — the tab that started it can go away, and a
+// reloaded page still has to read "starting" rather than "cold" while the poll
+// runs. The display half of the fix; the strip's spinner is the component
+// suite's.
+//
+// MUTATION: drop the `waking` arm from `displayWarmth` → every `starting`
+// below reddens as `cold`, which is exactly what the owner saw after a
+// Ctrl+R mid-wake.
+describe('a wake in flight (#1045)', () => {
+  beforeEach(configureSelfDeployed)
+
+  /** Start a REAL large wake and park it: the fetch never answers until the
+   *  test releases it, so the in-flight poll — the server-side state a
+   *  reloaded page reads — is established exactly as the start button, a turn
+   *  or keep-warm establishes it. */
+  const parkLargeWake = (start: () => Promise<boolean> = () => ensureLargeAwake(Date.now())) => {
+    const releases: Array<() => void> = []
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+    const wake = start()
+    // The caller drains the microtask queue so the flight is parked before
+    // its assertions; the wake is returned so it can be settled.
+    return { wake, release: () => releases.forEach((release) => release()) }
+  }
+
+  it('shows starting while a wake is in flight with no turn and no replica', async () => {
+    // THE OBSERVED CASE: a wake retrying while the control plane reports no
+    // replicas used to read as `cold` — and a cold indicator is a start
+    // button, offered to a user whose start is already running.
+    const parked = parkLargeWake()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('starting')
+    expect(warmth.waking).toBe(true)
+    expect(warmth.coldStartEstimateMs).toBeGreaterThan(0)
+
+    await parked.release()
+    await parked.wake
+  })
+
+  it('keeps completion evidence outranking the wake', async () => {
+    // A keep-warm touch can run against a box the completion clock already
+    // proves warm — the wake is in flight, the box is UP, and `ready` is the
+    // truth. `waking` still reports the fact; the state machine decides what
+    // the fact means.
+    //
+    // The entry point has to be keep-warm's (`keepWarm: true`): an ordinary
+    // wake short-circuits on proven warmth, while keep-warm touches a box
+    // past a third of its idle window — inside the window, so the completion
+    // clock still proves it warm.
+    noteLargeCallCompleted(Date.now() - 120_000)
+    const parked = parkLargeWake(() => ensureLargeAwake(Date.now(), undefined, true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('ready')
+    expect(warmth.waking).toBe(true)
+
+    await parked.release()
+    await parked.wake
+  })
+
+  it('clears the flag once the wake has succeeded or failed', async () => {
+    // "Until it succeeds or fails": the flight parks exactly as long as the
+    // shared poll runs, and a wake that answered is proven warm besides.
+    const parked = parkLargeWake()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect((await getPreviewHeaderState()).warmth.waking).toBe(true)
+
+    await parked.release()
+    await parked.wake
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.waking).toBe(false)
+    expect(warmth.state).toBe('ready')
+  })
+
+  it('does not claim the 27B is waking when only the small box is', async () => {
+    // The indicator describes the 27B; the small box's health poll is not its
+    // subject, and saying "starting" about a cold 27B would offer nothing the
+    // cold state does not already say.
+    const releases: Array<() => void> = []
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+    const wake = ensureSmallAwake(Date.now())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('cold')
+    expect(warmth.waking).toBe(false)
+
+    releases.forEach((release) => release())
+    await wake
   })
 })
 

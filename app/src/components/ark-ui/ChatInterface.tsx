@@ -41,9 +41,10 @@ import {
   getAgentList,
   type OpenReferenceTarget,
   type LoadedConversation,
+  type ConversationTurnState,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
-import { runTurn, type TurnRecovery, type TurnSink } from '~/lib/turn-stream'
+import { adoptRunningTurn, runTurn, type TurnRecovery, type TurnSink } from '~/lib/turn-stream'
 import type { Message } from './ChatMessages'
 import { startTrailingRefresh } from '~/lib/trailing-refresh'
 import { warningBubble } from '@hames-ai/agents/replay'
@@ -387,6 +388,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           console.warn('[ChatInterface] failed to replay events:', err)
         }
         showPersisted(sid, toMessages(loaded.messages), ctx)
+        // #1045: the turn may still be RUNNING on the server — this tab was
+        // (re)loaded mid-run, or the thread was opened elsewhere. Server
+        // state, not per-tab memory: the lease says a turn holds this
+        // conversation, and `watchServerTurn` re-derives the running view
+        // from it.
+        void watchServerTurn(sid)
       })
       .catch(() => {
         // Either a brand-new session id or no row yet. Nothing to plant: the
@@ -480,6 +487,39 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   }
 
   /**
+   * The turn's trailing pass (the post-turn summaries) runs detached, after the
+   * answer reached the caller, so its describe calls, memory writes and the
+   * summaries they leave behind reach the panels only through the persisted
+   * context (#784 item 12). Poll for it rather than holding the stream open —
+   * see `trailing-refresh.ts`. Shared by the live run and an adopted one
+   * (#1045): both settled a turn whose trailing pass is still to land.
+   */
+  const startTrailingRefreshFor = (sid: string) => {
+    startTrailingRefresh({
+      local: () => registry.events(sid),
+      fetch: async () => {
+        const loaded = await loadConversation(sid)
+        return (JSON.parse(loaded.serialized) as UnifiedContext).events ?? []
+      },
+      append: (events) => {
+        registry.appendEvents(sid, [...events])
+        // A summarizer-failure `warning` reaches the transcript as the same
+        // amber bubble the live stream (`turn-stream.ts`) and replay
+        // (`replay.ts`) paint, so all three views agree without a reload.
+        for (const evt of events) {
+          if (evt.type !== 'warning') continue
+          registry.appendMessage(sid, {
+            id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            timestamp: new Date(),
+            ...warningBubble(evt.data as WarningEventData),
+          })
+        }
+      },
+      map: (map) => registry.mapEvents(sid, map),
+    })
+  }
+
+  /**
    * Run one turn: a message, or (`mode: 'resume'`) the continuation of a paused
    * run whose answers the blocking prompt has just recorded — the same stream,
    * the same sink, and no user message in the transcript.
@@ -504,11 +544,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       })
     }
 
-    // Settle any tier flip first — see `pendingTierWrite`.
-    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
-
+    // Claim the run BEFORE the tier-write await (#1045 review): the await is
+    // a round trip, and until the stream's first state lands nothing marks
+    // this session as running — so an adoption whose turn-state read resolved
+    // inside the window adopted over this send, the server refused the send
+    // (a turn still holds the row), and the `finally` below then unregistered
+    // the abort handle, leaving the adoption polling with a Stop that no
+    // longer reached it. Marked here, `watchServerTurn`'s local-run guard
+    // reads the send and stands down. The abort handle moves up with the mark
+    // so a Stop pressed inside the window reaches this run too; `finally`
+    // clears both exactly as before.
     const abortController = new AbortController()
     registry.registerAbort(runSessionId, abortController)
+    registry.updateRunState(runSessionId, { isProcessing: true })
+
+    // Settle any tier flip first — see `pendingTierWrite`.
+    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
 
     try {
       const { outcome, aborted } = await runTurn(
@@ -537,35 +588,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         })
       }
       if (!aborted) {
-        // The turn's trailing pass (the post-turn summaries) runs detached,
-        // after this stream closed, so its describe calls, memory writes and
-        // the summaries they leave behind reach the panels only through the
-        // persisted context (#784 item 12). Poll for it rather than holding
-        // the stream open — see `trailing-refresh.ts`.
-        if (outcome === 'done') {
-          startTrailingRefresh({
-            local: () => registry.events(runSessionId),
-            fetch: async () => {
-              const loaded = await loadConversation(runSessionId)
-              return (JSON.parse(loaded.serialized) as UnifiedContext).events ?? []
-            },
-            append: (events) => {
-              registry.appendEvents(runSessionId, [...events])
-              // A summarizer-failure `warning` reaches the transcript as the
-              // same amber bubble the live stream (`turn-stream.ts`) and replay
-              // (`replay.ts`) paint, so all three views agree without a reload.
-              for (const evt of events) {
-                if (evt.type !== 'warning') continue
-                registry.appendMessage(runSessionId, {
-                  id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                  timestamp: new Date(),
-                  ...warningBubble(evt.data as WarningEventData),
-                })
-              }
-            },
-            map: (map) => registry.mapEvents(runSessionId, map),
-          })
-        }
+        if (outcome === 'done') startTrailingRefreshFor(runSessionId)
         props.onRunSettled?.(runSessionId, outcome)
         if (runSessionId === props.sessionId) setSettledTick((n) => n + 1)
       }
@@ -580,6 +603,91 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         warming: null,
       })
       registry.unregisterAbort(runSessionId)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // A turn found already running on the server (#1045)
+  // ---------------------------------------------------------------------------
+
+  /** Sessions whose server-side turn this tab has adopted. Guarding the read
+   *  as well as the write: two hydrations of one thread must not start two
+   *  watches, and a watch must never adopt over a local run. */
+  const watched = new Set<string>()
+
+  /**
+   * Adopt a turn the SERVER says is running in this conversation — what a page
+   * (re)loaded mid-run shows (#1045).
+   *
+   * `isProcessing` used to be per-tab memory: the tab that sent the message
+   * knew the turn was running, and a Ctrl+R in the middle of a minutes-long
+   * GPU wait left the conversation looking idle until the turn's final save
+   * arrived. The server has the fact all along — the turn's lease
+   * (`turn_claimed_at`) says a turn holds this conversation — so a hydration
+   * asks once and, when the answer is yes, drives the ordinary turn sink from
+   * the adoption poller: the composer blocks, the sidebar strip runs, the GPU
+   * wait (when that is what the turn is still inside) puts the notice back on
+   * screen from the server's estimate, and the outcome lands when the turn
+   * releases the row — the same recovery path a lost stream takes.
+   *
+   * Stop means what it means for a lost stream: this tab stops watching. The
+   * turn keeps running server-side and persists its result either way.
+   */
+  const watchServerTurn = async (sid: string) => {
+    let server: ConversationTurnState | null = null
+    try {
+      server = await getConversationTurnState(sid)
+    } catch {
+      // A brand-new chat has no row to ask about; anything else here is a read
+      // that the next hydration will retry.
+      return
+    }
+    if (!server?.turnInFlight || watched.has(sid)) return
+    // A run in THIS tab won the race (the user sent while the read was out):
+    // its stream is the live view and needs no adoption. The transcript the
+    // hydration planted does NOT count — `hasLocalTurn` is true after every
+    // rehydrate, because the persisted history is exactly what an adoption
+    // has to watch over. A run live in this tab is the thing to defer to,
+    // and after one truly settles the server says no turn holds the row.
+    // Untracked for `hasLocalTurn`'s reason: this is a policy read at adoption
+    // time, not a subscription.
+    if (untrack(() => registry.runState(sid).isProcessing)) return
+    watched.add(sid)
+    const controller = new AbortController()
+    registry.registerAbort(sid, controller)
+    registry.updateRunState(sid, { watching: true })
+    try {
+      const { outcome, aborted } = await adoptRunningTurn(
+        sid,
+        recoveryFor(sid),
+        sinkFor(sid),
+        controller.signal,
+        server.warming,
+      )
+      if (aborted && stoppedSessions.has(sid)) {
+        registry.appendMessage(sid, {
+          id: `stop-${Date.now()}`,
+          role: 'warning',
+          content: 'Stopped watching this response.',
+          hint: 'The agent finishes server-side — reopen this chat to see the result.',
+          timestamp: new Date(),
+        })
+      }
+      if (!aborted) {
+        if (outcome === 'done') startTrailingRefreshFor(sid)
+        props.onRunSettled?.(sid, outcome)
+        if (sid === props.sessionId) setSettledTick((n) => n + 1)
+      }
+    } finally {
+      stoppedSessions.delete(sid)
+      watched.delete(sid)
+      registry.updateRunState(sid, {
+        isProcessing: false,
+        runningTool: null,
+        warming: null,
+        watching: false,
+      })
+      registry.unregisterAbort(sid)
     }
   }
 
@@ -656,7 +764,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
               // the turn's FIRST event, so the bar is already projectable while
               // the box is still starting, and would sit at 0/N for the whole
               // wait. The notice takes the slot until the box answers.
-              (!!warming() || currentSnapshot().maxProjection > 0)
+              //
+              // An ADOPTED turn (#1045) has the opposite problem: no stream
+              // will ever arrive to seed the denominator, so without this the
+              // running state would block the composer while showing nothing
+              // where the answer will land.
+              (!!warming() || currentSnapshot().maxProjection > 0 || currentRunState().watching)
             }
           />
         )}

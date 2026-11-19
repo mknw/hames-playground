@@ -43,6 +43,7 @@ import { coldStartEstimate } from '../inference/cold-start.server'
 import {
   ensurePrivateTierAwake,
   keepWarmIntervalMs,
+  largeWakeInFlight,
   warmIdleCapMs,
   warmWhileOpenEnabled,
 } from '../inference/wake.server'
@@ -101,6 +102,21 @@ export interface HeaderWarmth {
   coldStartBasis: 'measured' | 'default' | null
   /** How many cold starts the median is over; `0` on the fallback. */
   coldStartSamples: number | null
+  /**
+   * A wake of the 27B is in flight on the server RIGHT NOW, from any entry
+   * point — a turn waiting on the box, the start button, a keep-warm touch
+   * (#1045). Server state, which is the whole point: the strip's own pending
+   * signal is per tab and dies with it, so before this field a reload in the
+   * middle of a wake left the header reading `cold` — the exact report the
+   * owner made ("we're not just 'not giving anything'").
+   *
+   * What the strip renders from it is the spinning wheel, and only in the
+   * `starting` state: a keep-warm touch against a box the completion clock
+   * already proves warm leaves the display at `ready`, which is the truth
+   * about the box even with a wake in flight. The field is fact, not display —
+   * the state machine below is what decides what the fact means.
+   */
+  waking: boolean
 }
 
 /** Everything the header strip renders, in one payload. */
@@ -147,11 +163,23 @@ export interface PreviewHeaderState {
  * already had); and only the no-turn, no-evidence cases ask the control plane,
  * where an unavailable probe — the one error path — is `unknown`.
  */
-function displayWarmth(w: LargeWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
+function displayWarmth(
+  w: LargeWarmth,
+  probe: VerdaControlPlaneProbe | null,
+  waking: boolean,
+): HeaderWarmth {
   let state: WarmthDisplayState
   if (w.state === 'running') state = 'answering'
   else if (w.state === 'warm') state = 'ready'
   else if (w.state === 'starting') state = 'starting'
+  // A wake is ENGAGED (#1045): the poll is on the wire from any entry point,
+  // so the box is neither `cold` (the process parking the flight is itself the
+  // observation that a start is under way) nor `unknown` (a probe being down
+  // does not unmake the wake this process is running) — the same reasoning
+  // that makes a TURN in flight `starting` without completion evidence, one
+  // source later. Completion evidence still outranks it: a keep-warm touch
+  // against a proven-warm box leaves `ready` standing.
+  else if (waking) state = 'starting'
   else if (!probe || !probe.ok) state = 'unknown'
   else state = (probe.replicaCount ?? 0) > 0 ? 'starting' : 'cold'
 
@@ -185,6 +213,7 @@ function displayWarmth(w: LargeWarmth, probe: VerdaControlPlaneProbe | null): He
     coldStartEstimateMs: estimateMs,
     coldStartBasis: estimate?.basis ?? null,
     coldStartSamples: estimate?.samples ?? null,
+    waking,
   }
 }
 
@@ -213,7 +242,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   return {
     tier,
     selfDeployedAvailable: selfDeployedConfigured(),
-    warmth: displayWarmth(largeWarmth(), probe),
+    warmth: displayWarmth(largeWarmth(), probe, largeWakeInFlight()),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,

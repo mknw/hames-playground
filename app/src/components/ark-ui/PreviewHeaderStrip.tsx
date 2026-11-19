@@ -331,7 +331,9 @@ const igniteGlyph = () => (
  *  chat notice's spinner class (`uno.config.ts`), which carries the
  *  reduced-motion branch attributify has nowhere to put — so the glyph stops
  *  rotating for a user who asked for that, and the word beside it still says
- *  what is happening. */
+ *  what is happening. `data-testid` because the difference between this and the
+ *  hourglass a bare `starting` state wears is the thing #1045 is about, and a
+ *  browser scenario can find it without asserting on a class. */
 const ignitingGlyph = () => (
   <span
     class="cold-start-spin i-material-symbols-autorenew"
@@ -339,6 +341,7 @@ const ignitingGlyph = () => (
     h="3.5"
     text="amber-500"
     aria-hidden="true"
+    data-testid="warmth-spinner"
   />
 )
 
@@ -580,10 +583,20 @@ export const PreviewHeaderStrip = () => {
     return `${WARMTH_PRESENTATION.starting.hint} ${coldStartBasisHint(w.coldStartBasis, w.coldStartSamples)}`
   }
 
-  /** The word in the indicator: what the box is doing, unless this browser is
-   *  mid-wake or offering to start one. */
+  /** A wake is pending: this browser pressed start, or the server says one is
+   *  in flight with nothing proving the box up (so the state reads `starting`).
+   *  The local half is what makes the response to a click instant; the server
+   *  half is what survives a reload (#1045) — the tab that pressed start dies
+   *  with its signal, and the wake it left running used to leave the indicator
+   *  reading `cold` on the reloaded page. A wake against a box the completion
+   *  clock already proves warm — a keep-warm touch inside the window — keeps
+   *  the display at `ready`, and so does this: the box IS up. */
+  const waking = () => igniting() || (state()?.warmth.waking === true && warmthKey() === 'starting')
+
+  /** The word in the indicator: what the box is doing, unless a wake is
+   *  pending or the cold indicator is offering to start one. */
   const ignitionWord = () =>
-    igniting()
+    waking()
       ? COLD_START_HEADLINE
       : canIgnite() && hovering()
         ? IGNITE_LABEL
@@ -624,7 +637,7 @@ export const PreviewHeaderStrip = () => {
    *  differ in what they ARE without differing in what they say. */
   const indicatorBody = () => (
     <>
-      <Show when={!igniting()} fallback={ignitingGlyph()}>
+      <Show when={!waking()} fallback={ignitingGlyph()}>
         <Show when={canIgnite() && hovering()} fallback={WARMTH_PRESENTATION[warmthKey()].glyph()}>
           {igniteGlyph()}
         </Show>

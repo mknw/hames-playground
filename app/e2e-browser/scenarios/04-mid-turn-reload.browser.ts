@@ -35,6 +35,7 @@ import { FAKE_TITLE, LARGE_LLM_MODEL } from '../lib/env'
 import { expectHeld } from '../lib/control'
 import { conversationRows } from '../lib/db'
 import {
+  composer,
   newChat,
   open,
   replies,
@@ -108,6 +109,17 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   await row.click()
   await expect(userBubbles(page).filter({ hasText: 'first question' })).toHaveCount(1)
   await expect(replies(page)).toHaveCount(1)
+
+  // ---- 2b. And the turn reads as RUNNING, from the server's lease ----------
+  // #1045: the same reload used to leave a running turn invisible — the tab's
+  // `isProcessing` was per-tab memory the teardown erased, and nothing
+  // re-derived it from the server, where the turn's lease says a turn holds
+  // this conversation. The parked request above is what makes this a fact
+  // rather than a race: the turn cannot have finished while the page rebuilt.
+  // The composer is held and Stop is offered, exactly as the tab that sent the
+  // message saw it.
+  await expect(stopButton(page)).toBeVisible()
+  await expect(composer(page)).not.toBeEditable()
 
   // ---- 3. The run nobody was watching still landed -----------------------
   // Let it go: disarm first, so the calls AFTER the parked one are not parked in

@@ -32,10 +32,12 @@ const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
 const {
   PreviewHeaderStrip,
   POLL_INTERVAL_MS,
+  ACTIVE_POLL_INTERVAL_MS,
   IGNITE_LABEL,
   IGNITE_FAILED_LABEL,
   TICK_INTERVAL_MS,
 } = await import('../../../components/ark-ui/PreviewHeaderStrip')
+const { COLD_START_HEADLINE } = await import('~/lib/cold-start-format')
 
 type State = Awaited<
   ReturnType<typeof import('~/lib/harness-client/preview-header.server').getPreviewHeaderState>
@@ -288,6 +290,83 @@ describe('the warm indicator', () => {
     expect(container.textContent).not.toContain('answering')
     // No countdown: there is nothing measured to count down from.
     expect(container.textContent).not.toMatch(/\d:\d\d/)
+  })
+
+  // #1045: the word `starting` has two sources with two different glyphs — the
+  // control plane's hourglass, and a wake on the wire, which spins. The owner
+  // asked for the spinning wheel by name after a Ctrl+R mid-wake showed
+  // "cold", so the glyph is what these cases pin.
+  it('shows the SPINNING wheel for a wake the server says is in flight', async () => {
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        warmth: warmth({
+          state: 'starting',
+          waking: true,
+          secondsUntilScaledown: null,
+          coldStartEstimateMs: 157_000,
+          coldStartBasis: 'default',
+          coldStartSamples: 0,
+        }),
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).toContain(COLD_START_HEADLINE)
+    expect(container.querySelector('[data-testid="warmth-spinner"]')).not.toBeNull()
+    // Not a start button: the start it would offer is already running.
+    expect(container.querySelector('button[aria-label="start self-deployed GPUs"]')).toBeNull()
+  })
+
+  it('keeps saying ready while a wake runs against a proven-warm box', async () => {
+    // The keep-warm touch: `waking` is fact, the state machine decides what it
+    // means — and a box the completion clock proves up is `ready`, spinning
+    // glyph or not.
+    getPreviewHeaderState.mockResolvedValue(
+      state({ warmth: warmth({ state: 'ready', waking: true }) }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).toContain('ready')
+    expect(container.textContent).not.toContain(COLD_START_HEADLINE)
+    expect(container.querySelector('[data-testid="warmth-spinner"]')).toBeNull()
+  })
+
+  it('retracts the spinning wheel when the next poll says the wake is over', async () => {
+    // "Until it succeeds or fails": the flag is re-read with every poll, so
+    // the word and the wheel leave as soon as the server says the wake ended —
+    // nothing may keep saying "starting GPU" about a settled box.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValueOnce(
+        state({
+          warmth: warmth({
+            state: 'starting',
+            waking: true,
+            secondsUntilScaledown: null,
+            coldStartEstimateMs: 157_000,
+            coldStartBasis: 'default',
+            coldStartSamples: 0,
+          }),
+        }),
+      )
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-testid="warmth-spinner"]')).not.toBeNull(),
+      )
+
+      // The wake settled: the poll answers ready, and the strip follows.
+      getPreviewHeaderState.mockResolvedValue(state({ warmth: warmth({ state: 'ready' }) }))
+      await vi.advanceTimersByTimeAsync(ACTIVE_POLL_INTERVAL_MS + 1)
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-testid="warmth-spinner"]')).toBeNull(),
+      )
+      expect(container.textContent).toContain('ready')
+      expect(container.textContent).not.toContain(COLD_START_HEADLINE)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('lets the local clock expire the window early, but never extend it', async () => {

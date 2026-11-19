@@ -300,12 +300,27 @@ function estimateFor(box: WakeBox): ColdStartEstimate {
     : { estimateMs: measured, basis: 'measured', samples: values.length }
 }
 
-/** The larger outstanding wait owns the countdown, including its actual basis. */
-function pendingEstimate(now: number): ColdStartEstimate {
+/**
+ * The estimate for whatever is outstanding RIGHT NOW: the larger of the two
+ * boxes' figures, over the boxes that are not proven warm. This is what the
+ * warming frame sends a turn that is about to wait, and — since #1045 — what
+ * the turn-state action sends a page that LOADED while a turn was already
+ * waiting, so a reload can put the same notice back on screen.
+ *
+ * The larger wait owns the countdown, including its actual basis.
+ *
+ * `null` when every box is proven warm: no start is outstanding, so there is
+ * nothing to count down (#1045 review). Returned rather than thrown — the list
+ * is empty exactly then, and a `reduce` with no initial value turns an empty
+ * list into a `TypeError`, which the turn-state action would answer a reload
+ * with while a keep-warm touch ran against two warm boxes.
+ */
+export function pendingColdStartEstimate(now: number): ColdStartEstimate | null {
   const estimates = [
     ...(!largeProvenWarm(now) ? [estimateFor('large')] : []),
     ...(!smallProvenWarm(now) ? [estimateFor('small')] : []),
   ]
+  if (estimates.length === 0) return null
   return estimates.reduce((a, b) => (b.estimateMs > a.estimateMs ? b : a))
 }
 
@@ -428,7 +443,10 @@ export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
   if (watch.fired) return
   watch.fired = true
   try {
-    watch.notify(pendingEstimate(now))
+    const estimate = pendingColdStartEstimate(now)
+    // Cannot be null here: the gate above proved THIS box is not warm, so its
+    // own figure is in the list. The guard is for the type, not a case.
+    if (estimate) watch.notify(estimate)
   } catch (err) {
     console.error('[cold-start] the warming listener threw; the turn is unaffected:', err)
   }

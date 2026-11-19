@@ -45,6 +45,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 import {
   ensureLargeAwake,
+  largeWakeInFlight,
   resetLargeWake,
   LARGE_LLM_WAKE_FAILED,
   LARGE_LLM_WAKE_PROMPT,
@@ -829,5 +830,37 @@ describe('what the wait teaches the estimate', () => {
     // it still runs, silently.
     await expect(ensureLargeAwake()).resolves.toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1045: whether a wake is in flight is server state a reloaded page reads —
+// the header's `starting` display and the chat's re-derived notice both hang
+// off it, so its boundaries are pinned here rather than at either consumer.
+describe('largeWakeInFlight', () => {
+  it('is true exactly while the shared poll runs', async () => {
+    let release: () => void = () => {}
+    fetchMock.mockImplementation(
+      () => new Promise<Response>((resolve) => (release = () => resolve(ok()))),
+    )
+
+    expect(largeWakeInFlight()).toBe(false)
+    const wake = ensureLargeAwake()
+    await Promise.resolve()
+    // The flight is up with the first attempt — before any answer, which is
+    // the whole point: this is what a page sees DURING the minutes-long wait.
+    expect(largeWakeInFlight()).toBe(true)
+
+    release()
+    await wake
+    // And down again the moment the poll settles, success or failure: a wake
+    // that ended must not keep claiming "starting".
+    expect(largeWakeInFlight()).toBe(false)
+  })
+
+  it('is false when proven warmth skipped the wake entirely', async () => {
+    noteLargeCallCompleted()
+    await ensureLargeAwake()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(largeWakeInFlight()).toBe(false)
   })
 })

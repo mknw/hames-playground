@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
+  adoptRunningTurn,
   runTurn,
   IDLE_TURN,
   RECOVERY_MISSING_POLLS,
@@ -18,6 +19,7 @@ import {
   type TurnRecovery,
   type TurnSink,
   type TurnState,
+  type TurnWarmingEstimate,
 } from '~/lib/turn-stream'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
@@ -900,6 +902,143 @@ describe('runTurn — a stream lost before the answer', () => {
     expect(recovery.turnState).toHaveBeenCalledTimes(RECOVERY_MISSING_POLLS)
     expect(recovery.load).not.toHaveBeenCalled()
     expect(result.outcome).toBe('error')
+    expect(rec.messages.at(-1)).toMatchObject({ role: 'error' })
+  })
+})
+
+// #1045: a page (re)loaded mid-run has no stream, so it adopts the turn the
+// server says is running — the running state at once, the GPU wait from the
+// server's estimate while that is what the turn is inside, and the outcome
+// through the same lease poll a lost stream takes.
+//
+// MUTATION: revert `adoptRunningTurn` to announce nothing (no initial
+// `transition`) → the first case reddens on `rec.states`. MUTATION: drop the
+// `observe` retraction → the first case reddens on its mid-watch `warmings`.
+describe('adoptRunningTurn — a turn found already running', () => {
+  const ESTIMATE: TurnWarmingEstimate = { estimateMs: 157_000, basis: 'default', samples: 0 }
+
+  /** A recovery double scripted poll by poll: each entry is one poll's answer
+   *  (or `null` — no row), and the LAST entry repeats. */
+  const adoptionDouble = (
+    polls: Array<{ turnInFlight: boolean; warming?: TurnWarmingEstimate | null } | null>,
+    saved: PersistedTurn = savedAnswer(),
+  ) => {
+    let i = 0
+    const rehydrated: PersistedTurn[] = []
+    const recovery: TurnRecovery = {
+      turnState: vi.fn(async () => polls[Math.min(i++, polls.length - 1)]),
+      load: vi.fn(async () => saved),
+      rehydrate: (turn) => rehydrated.push(turn),
+    }
+    return { recovery, rehydrated }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('announces the running state and the wait at once, then settles with what the turn saved', async () => {
+    // Turn 1's polls: still waiting on the box; past the wake but still
+    // running; released. The estimate is what the server's turn-state action
+    // would send a page that loaded mid-wake.
+    const rec = recorder()
+    const { recovery, rehydrated } = adoptionDouble([
+      { turnInFlight: true, warming: ESTIMATE },
+      { turnInFlight: true, warming: null },
+      { turnInFlight: false },
+    ])
+    let settled = false
+    const watch = adoptRunningTurn(
+      's1',
+      recovery,
+      rec.sink,
+      new AbortController().signal,
+      ESTIMATE,
+    ).then((r) => {
+      settled = true
+      return r
+    })
+
+    // Before any timer: the running state is already on the record — a
+    // reloaded page must not wait a poll to stop looking idle — and the GPU
+    // wait is on screen from the estimate, though no frame ever arrived.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rec.states).toEqual([{ status: 'streaming', runningTool: null }])
+    expect(rec.warmings).toEqual([{ sessionId: 's1', ...ESTIMATE }])
+    expect(settled).toBe(false)
+
+    // The wake ends but the turn does not: the notice comes down while the
+    // turn still runs, because no frame will ever arrive to clear it.
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS)
+    expect(rec.warmings).toEqual([{ sessionId: 's1', ...ESTIMATE }, null])
+    expect(rec.states).toEqual([{ status: 'streaming', runningTool: null }])
+    expect(settled).toBe(false)
+
+    // The turn releases; the saved transcript replaces the view, once.
+    const result = await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS).then(() => watch)
+
+    expect(result).toEqual({ state: { status: 'done' }, outcome: 'done', aborted: false })
+    expect(rehydrated).toEqual([savedAnswer()])
+    expect(rec.warmings).toEqual([{ sessionId: 's1', ...ESTIMATE }, null])
+    expect(rec.finished).toBe(1)
+    expect(rec.states.at(-1)).toEqual({ status: 'done' })
+  })
+
+  it('runs with no wait to show when the turn is past the box', async () => {
+    // The mid-harness half: turn live, wake over. Running state only, and the
+    // answer still lands.
+    const rec = recorder()
+    const { recovery, rehydrated } = adoptionDouble([
+      { turnInFlight: true },
+      { turnInFlight: false },
+    ])
+
+    const watch = adoptRunningTurn('s1', recovery, rec.sink, new AbortController().signal, null)
+    // The first poll finds the turn held; the sleep it takes is the one poll
+    // interval before the release.
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS)
+    const result = await watch
+
+    expect(result.outcome).toBe('done')
+    expect(rec.warmings).toEqual([])
+    expect(rehydrated).toEqual([savedAnswer()])
+  })
+
+  it('treats Stop as a teardown of the watch, not a failure', async () => {
+    // The turn keeps running server-side regardless; what stops is this tab's
+    // watching, so nothing paints as an error.
+    const rec = recorder()
+    const controller = new AbortController()
+    const { recovery } = adoptionDouble([{ turnInFlight: true }])
+
+    const watch = adoptRunningTurn('s1', recovery, rec.sink, controller.signal, null)
+    await vi.advanceTimersByTimeAsync(0)
+    controller.abort()
+    const result = await watch
+
+    expect(result).toEqual({ state: { status: 'stopped' }, outcome: 'done', aborted: true })
+    expect(rec.messages).toEqual([])
+    expect(rec.finished).toBe(1)
+  })
+
+  it('ends in an error when the conversation row goes away', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rec = recorder()
+    // `null` is a poll that found no row: the conversation was deleted while
+    // this tab was watching it.
+    const { recovery } = adoptionDouble([null])
+
+    const watch = adoptRunningTurn('s1', recovery, rec.sink, new AbortController().signal, null)
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * RECOVERY_MISSING_POLLS)
+    const result = await watch
+
+    expect(result.outcome).toBe('error')
+    expect(recovery.load).not.toHaveBeenCalled()
     expect(rec.messages.at(-1)).toMatchObject({ role: 'error' })
   })
 })

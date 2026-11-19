@@ -404,6 +404,17 @@ function createWake(target: WakeTarget) {
       state.inFlight = null
     },
     /**
+     * Whether a wake of this box is in flight in this process right now — any
+     * entry point: a turn waiting on it, the header's start button, or a
+     * keep-warm touch. Read by the preview header so the `starting` display
+     * and its spinner SURVIVE A PAGE RELOAD (#1045), which the browser's own
+     * pending signal never could. True for exactly as long as the shared poll
+     * runs: the flight clears itself in the poll's own `finally`, so a wake
+     * that succeeded or failed is no longer in flight, whatever the warm clock
+     * then says.
+     */
+    inFlight: () => state.inFlight !== null,
+    /**
      * Ensure this box is up before real calls. Only proven warmth skips the
      * poll; unknown state pays a probe rather than risking a silent cold wait.
      * Inside a turn's watch, announce BEFORE the first attempt so the warming
@@ -528,6 +539,10 @@ export const ensureLargeAwake = largeWake.ensure
 export const resetLargeWake = largeWake.reset
 export const ensureSmallAwake = smallWake.ensure
 export const resetSmallWake = smallWake.reset
+/** The 27B's wake is in flight in this process right now — any entry point. */
+export const largeWakeInFlight = largeWake.inFlight
+/** The small box's wake is in flight in this process right now. */
+export const smallWakeInFlight = smallWake.inFlight
 
 /** Both subscriptions finish before returning, including cancellation on failure.
  *

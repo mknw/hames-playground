@@ -11,6 +11,15 @@
  */
 
 import { DEFAULT_AGENT_ID } from '../../../lib/harness-client/agent-ids'
+import {
+  noteSmallCallCompleted,
+  resetSmallActivity,
+  SMALL_COLD_START_FALLBACK_MS,
+} from '../../../lib/inference/cold-start.server'
+import {
+  noteLargeCallCompleted,
+  resetLargeActivity,
+} from '../../../lib/inference/large-activity.server'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -104,7 +113,16 @@ vi.mock('../../../lib/db/user-prefs.server', async () => {
 const chooseConversationTier = vi.fn<
   (sessionId: string, userId: string, tier: unknown) => Promise<'self_deployed' | 'anthropic'>
 >(async (_s, _u, tier) => tier as 'self_deployed' | 'anthropic')
+// #1045: the turn-state action resolves the RUNNING turn's tier to decide
+// whether the conversation it holds is waiting on the box. Stubbed rather than
+// real here — its own order is `lib/inference/tier.test.ts`'s subject, and this
+// file's cases need to name it directly.
+const resolveConversationTier = vi.fn<
+  (sessionId: string, userId: string) => Promise<'self_deployed' | 'anthropic'>
+>(async () => 'self_deployed')
 const selfDeployedConfigured = vi.fn(() => true)
+const largeWakeInFlight = vi.fn(() => false)
+const smallWakeInFlight = vi.fn(() => false)
 vi.mock('../../../lib/inference/tier.server', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/inference/tier.server')>(
     '../../../lib/inference/tier.server',
@@ -116,9 +134,14 @@ vi.mock('../../../lib/inference/tier.server', async () => {
     resolveTier: actual.resolveTier,
     privateInferenceOnly: actual.privateInferenceOnly,
     chooseConversationTier: (s: string, u: string, t: unknown) => chooseConversationTier(s, u, t),
+    resolveConversationTier: (s: string, u: string) => resolveConversationTier(s, u),
     selfDeployedConfigured: () => selfDeployedConfigured(),
   }
 })
+vi.mock('../../../lib/inference/wake.server', () => ({
+  largeWakeInFlight: () => largeWakeInFlight(),
+  smallWakeInFlight: () => smallWakeInFlight(),
+}))
 
 // ── auth ────────────────────────────────────────────────────────────────────
 const isBypassEnabled = vi.fn(() => true)
@@ -351,21 +374,135 @@ describe('loadConversation', () => {
   })
 })
 
-// What a client whose stream was lost polls. It is a browser-reachable RPC, so
-// it answers only for the caller's own row (SD-13 style gate per export).
+// What a client whose stream was lost polls — and, since #1045, what a page
+// (re)loaded mid-turn asks first. It is a browser-reachable RPC, so it answers
+// only for the caller's own row (SD-13 style gate per export).
 describe('getConversationTurnState', () => {
+  beforeEach(() => {
+    resolveConversationTier.mockImplementation(async () => 'self_deployed')
+    largeWakeInFlight.mockImplementation(() => false)
+    smallWakeInFlight.mockImplementation(() => false)
+    // The wake halves below are mocked; the WARMTH halves they gate on are the
+    // real module state, stamped by the keep-warm cases. Reset at entry so
+    // every case starts from an unknown box.
+    resetLargeActivity()
+    resetSmallActivity()
+  })
+
   // MUTATION: drop `await requireUser()` → the unauthenticated call resolves.
   it('reads the caller’s own row, and refuses an unauthenticated caller', async () => {
     isBypassEnabled.mockReturnValue(false)
     await expect(actions.getConversationTurnState('c1')).resolves.toEqual({
       status: 'done',
       turnInFlight: true,
+      warming: null,
     })
     expect(dbGetConversationTurnState).toHaveBeenLastCalledWith('c1', 'entra-user')
 
     getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
     await expect(actions.getConversationTurnState('c1')).rejects.toThrow('Authentication required')
     expect(dbGetConversationTurnState).toHaveBeenCalledTimes(1)
+  })
+
+  // #1045: a page that loads mid-run re-derives the GPU wait from the estimate
+  // the warming frame would have carried. The lease alone is not enough (a held
+  // conversation may be past the wake) and the wake alone is not enough (it may
+  // belong to another user's turn) — the conjunction is the claim.
+  //
+  // MUTATION: answer `warming: null` unconditionally → the first case reddens;
+  // drop the tier gate → the second reddens.
+  it('answers the estimate while the held conversation waits on the box', async () => {
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: { estimateMs: 157_000, basis: 'default', samples: 0 },
+    })
+  })
+
+  it('answers no estimate when the conversation runs on the other tier', async () => {
+    // An Anthropic conversation whose neighbour woke the box must not borrow
+    // its countdown.
+    resolveConversationTier.mockImplementation(async () => 'anthropic')
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers no estimate when no wake is in flight — the turn is past the box', async () => {
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers no estimate once the turn has released the row', async () => {
+    dbGetConversationTurnState.mockResolvedValueOnce({ status: 'done', turnInFlight: false })
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: false,
+      warming: null,
+    })
+    // And it resolved no tier for a row no turn holds — the tier read is for
+    // the running turn's conversation, not the row's.
+    expect(resolveConversationTier).not.toHaveBeenCalled()
+  })
+
+  // #1045 review, HIGH: a wake counts as a wait only while it is in flight AND
+  // nothing proves the box up. A keep-warm touch (on by default) runs against a
+  // box that is PROVEN warm but stale (`keptWarm`), so the in-flight check
+  // alone made this action report a GPU wait for a turn already past its wake —
+  // and with BOTH boxes warm the estimate it then called built an empty list,
+  // whose `reduce` (no initial value) threw, which `watchServerTurn` swallowed
+  // into a reloaded page that showed nothing.
+  //
+  // MUTATION: revert the gate to `(largeWakeInFlight() || smallWakeInFlight())`
+  // → the first case REJECTS (the thrown reduce) and the second answers a
+  // 157s estimate; drop `smallWakeInFlight()` from the gate → the third
+  // answers null.
+  it('answers warming null — and does not throw — while keep-warm touches run against two warm boxes', async () => {
+    largeWakeInFlight.mockImplementation(() => true)
+    smallWakeInFlight.mockImplementation(() => true)
+    noteLargeCallCompleted(Date.now())
+    noteSmallCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers warming null when the only flight is a keep-warm touch on a warm box', async () => {
+    // One box warm is the half-way case: no throw, but a GPU countdown for a
+    // turn that is already past its wake — the false wait the gate removes.
+    smallWakeInFlight.mockImplementation(() => true)
+    noteSmallCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers the estimate when the SMALL box is the one starting', async () => {
+    // The small half of the gate is load-bearing on its own: drop
+    // `smallWakeInFlight()` from it and this answers null. The 27B answered
+    // recently, so the 4B's own fallback is the figure — no 27B in it.
+    smallWakeInFlight.mockImplementation(() => true)
+    noteLargeCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: {
+        estimateMs: SMALL_COLD_START_FALLBACK_MS,
+        basis: 'default',
+        samples: 0,
+      },
+    })
   })
 })
 

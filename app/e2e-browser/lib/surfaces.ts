@@ -72,6 +72,13 @@ export const VOLATILE_SELECTORS = [
   '[data-testid="message-time"]',
   // The sidebar row's RELATIVE time ("just now", "3m ago").
   '[data-testid="thread-time"]',
+  // The admin tab (#1047): visible only to ADMIN_EMAILS addresses, and it
+  // arrives with an RPC rather than with the first paint — so on a given
+  // surface it is both environment-dependent and racy, where every other
+  // element in these shots is fixed and present. Taken out of the page like
+  // the rest of this list: a strip WITH the tab would need a second set of
+  // baselines that no non-admin environment could ever reproduce.
+  '[data-testid="nav-admin-tab"]',
 ] as const
 
 /**

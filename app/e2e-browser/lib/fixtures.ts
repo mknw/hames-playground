@@ -14,7 +14,7 @@
 import { expect } from '@playwright/test'
 import { test as base } from './egress-fixture'
 import { FakeBackend, readHandles } from './control'
-import { wipeUserRows } from './db'
+import { resetGpuSwitch, wipeUserRows } from './db'
 
 interface Fixtures {
   /** Drives the fake inference endpoint and reads back what it served. */
@@ -44,6 +44,9 @@ export const test = base.extend<Fixtures & { cleanSlate: void }>({
     async ({ backend }, use) => {
       await backend.reset()
       await wipeUserRows()
+      // The GPU keep-running switch is deployment-global; see the function
+      // for why a scenario that leaves it ON would corrupt every later one.
+      await resetGpuSwitch()
       await use()
     },
     { auto: true },

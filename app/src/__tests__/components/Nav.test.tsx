@@ -1,12 +1,17 @@
 /**
- * Nav — the two page links in the top bar, restyled as tab headers (owner,
+ * Nav — the page links in the top bar, restyled as tab headers (owner,
  * round 4): icon and label on one line, one shared height, no boxed look,
  * and what each does on the page it opened.
  *
  * Each tab keeps its OWN glyph in both states, and the pressed-in state marks
  * the page that is open — clicking that tab again returns to the chat.
- * Everything else in the bar is delegated to ThemeSwitcher and UserMenu,
- * which have their own tests.
+ *
+ * Two additions are pinned here too: the **chat tab** (#1048) — the owner's
+ * "there is no obvious way to return to the chat interface; the chat button
+ * should be next to them when one of them is selected, and disappear when the
+ * user is on chat" — and the **admin tab** (#1047), which the server's
+ * `isAdminUser` answer alone may show. Everything else in the bar is delegated
+ * to ThemeSwitcher and UserMenu, which have their own tests.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { createSignal } from 'solid-js'
@@ -48,6 +53,13 @@ vi.mock('~/lib/harness-client/preview-header.server', () => ({
   keepPrivateTierWarm: () => new Promise(() => {}),
 }))
 
+// The admin tab's question. Driven per test with `setAdminAnswer`, because the
+// tab must appear ONLY when the server says so (#1047's owner amendment).
+const isAdminUser = vi.fn()
+vi.mock('~/lib/harness-client/gpu-admin.server', () => ({
+  isAdminUser: () => isAdminUser(),
+}))
+
 // The bar renders UserMenu, whose auth context is exercised elsewhere. The
 // signed-in variant matters here for one case: `UserMenu` renders NOTHING
 // without a user, so "the share page has no user menu" would be vacuously true
@@ -62,13 +74,15 @@ vi.mock('~/components/AuthProvider', () => ({
   }),
 }))
 
-const { render } = await import('@solidjs/testing-library')
+const { render, waitFor } = await import('@solidjs/testing-library')
 const { default: Nav } = await import('../../components/Nav')
 
 beforeEach(() => {
   localStorage.clear()
   setPathname('/')
   setSignedInUser(null)
+  isAdminUser.mockReset()
+  isAdminUser.mockResolvedValue(false)
 })
 
 describe('Nav', () => {
@@ -208,6 +222,77 @@ describe('Nav', () => {
 
     expect(container.querySelectorAll('button').length).toBeGreaterThan(1)
     expect(container.querySelector('a')).not.toBeNull()
+  })
+
+  // ---- The chat tab (#1048) ----------------------------------------------
+  it('offers no chat tab on the chat itself — it would point where you already are', () => {
+    const { container } = render(() => <Nav />)
+    expect(pageLink(container, 'Chat')).toBeUndefined()
+  })
+
+  it('shows the chat tab next to metrics and use cases when one is selected', () => {
+    for (const path of ['/dashboard', '/use-cases']) {
+      setPathname(path)
+      const { container, unmount } = render(() => <Nav />)
+      const chat = pageLink(container, 'Chat')
+      expect(chat, path).toBeDefined()
+      expect(chat.getAttribute('href')).toBe('/')
+      // Not the selected tab — the open page keeps `aria-current`.
+      expect(chat.getAttribute('aria-current')).toBeNull()
+      unmount()
+    }
+  })
+
+  it('shows the chat tab on the admin page too, and nowhere it was not asked for', () => {
+    // Not on a route that is no page tab (profile), then on /admin:
+    setPathname('/profile')
+    const off = render(() => <Nav />)
+    expect(pageLink(off.container, 'Chat')).toBeUndefined()
+    off.unmount()
+
+    isAdminUser.mockResolvedValue(true)
+    setPathname('/admin')
+    const on = render(() => <Nav />)
+    expect(pageLink(on.container, 'Chat')).toBeDefined()
+  })
+
+  // ---- The admin tab (#1047) ----------------------------------------------
+  it('renders no admin tab when the server says this user is not an admin', async () => {
+    const { container } = render(() => <Nav />)
+    await waitFor(() => expect(isAdminUser).toHaveBeenCalled())
+    expect(pageLink(container, 'Admin')).toBeUndefined()
+  })
+
+  it('renders the admin tab only once the server answers true, as a tab like the others', async () => {
+    isAdminUser.mockResolvedValue(true)
+    setPathname('/dashboard')
+    const { container } = render(() => <Nav />)
+    const admin = await waitFor(() => {
+      const tab = pageLink(container, 'Admin')
+      expect(tab).toBeDefined()
+      return tab
+    })
+    expect(admin.getAttribute('href')).toBe('/admin')
+    expect(admin.getAttribute('aria-current')).toBeNull()
+    expect(admin.querySelector('span')!.className).toContain(
+      'i-material-symbols-admin-panel-settings',
+    )
+    expect(admin.textContent).toContain('admin')
+  })
+
+  it('marks the admin tab as the selected page when the panel is open', async () => {
+    isAdminUser.mockResolvedValue(true)
+    setPathname('/admin')
+    const { container } = render(() => <Nav />)
+    // On its own page the tab's label says what pressing it now does, as the
+    // metrics and use-cases tabs do on theirs.
+    const admin = await waitFor(() => {
+      const tab = pageLink(container, 'Back to chat — the admin panel is open')
+      expect(tab).toBeDefined()
+      return tab
+    })
+    expect(admin.getAttribute('aria-current')).toBe('page')
+    expect(admin.getAttribute('href')).toBe('/')
   })
 
   it('leaves the preview strip off the auth routes', () => {

@@ -1,9 +1,10 @@
-import { Show } from 'solid-js'
+import { createSignal, onMount, Show } from 'solid-js'
 import { useLocation } from '@solidjs/router'
 import { UserMenu } from '~/components/ark-ui/UserMenu'
 import { HitlInbox } from '~/components/ark-ui/HitlInbox'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
 import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
+import { isAdminUser } from '~/lib/harness-client/gpu-admin.server'
 import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
 
 /**
@@ -11,15 +12,34 @@ import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
  * root route and the SolidStart demo page it linked to no longer exists. What
  * remains is the preview status strip on the left (inference tier, self-hosted
  * warm state, global counters) and a row of icon controls on the right: the
- * metrics dashboard and use-cases pages, theme, user.
+ * metrics dashboard, use-cases and admin pages, theme, user.
  *
- * The two page links read as TAB HEADERS, not buttons (owner, round 4): icon
+ * The page links read as TAB HEADERS, not buttons (owner, round 4): icon
  * followed by the label on ONE line, one shared height for every tab, no
  * boxed border or solid fill. The page that is open is the selected tab
  * (`aria-current="page"`, a subtle accent background on the ui-* tokens,
  * both themes) and clicking it again navigates to `/`. At phone width the
  * labels collapse to icons only — each tab keeps its accessible name either
  * way.
+ *
+ * Two additions since:
+ *
+ * - **A "chat" tab (#1048), shown only on one of the page tabs.** Owner:
+ *   "when clicking on 'metrics' or 'use cases' there is no obvious way to
+ *   return to the chat interface. The 'chat' button should be next to them
+ *   when one of them is selected, and disappear when the user is on chat."
+ *   It sits to the LEFT of the page tabs and carries no `aria-current` —
+ *   the open page keeps that; the chat tab is a way back, not a selected
+ *   destination.
+ *
+ * - **An "admin" tab (#1047), for the deployment's admin only.** It is the
+ *   owner's GPU panel, and hiding the tab is presentation only — the panel's
+ *   server actions refuse non-admins with a 403 regardless. Admin-ness is
+ *   asked of the SERVER after mount (one RPC per page load): the answer is
+ *   an env allow-list (`ADMIN_EMAILS`) the browser cannot see, so a tampered
+ *   client cannot vote itself in. The tab appears one client tick after
+ *   mount, like the strip's own first poll — SSR renders no tab, and an
+ *   ADMIN_EMAILS-less deployment renders none ever.
  *
  * The bar itself is on the theme-aware `ui-*` tokens (#226 B8) — it houses the
  * theme control and it sits above the auth pages, so a dark bar over a light
@@ -45,10 +65,26 @@ export default function Nav() {
   const location = useLocation()
   const onDashboard = () => location.pathname === '/dashboard'
   const onUseCases = () => location.pathname === '/use-cases'
+  const onAdmin = () => location.pathname === '/admin'
   /** Sign-in and the share page — neither has a session for the strip to read. */
   const onPublicRoute = () => isPublicRoute(location.pathname)
   /** The anonymous share page — no session, so no session-shaped controls. */
   const onSharePage = () => location.pathname.startsWith(SHARE_ROUTE_PREFIX)
+
+  /** The admin tab, asked of the server after mount — see the module header.
+   *  `false` is the SSR answer and the signed-out answer alike, so the tab
+   *  appears only once the server has said this user is on the allow-list. */
+  const [isAdmin, setIsAdmin] = createSignal(false)
+  onMount(() => {
+    void isAdminUser()
+      .then(setIsAdmin)
+      .catch(() => setIsAdmin(false))
+  })
+  /** A page tab is open, so the chat tab shows (#1048): the owner asked for
+   *  it on metrics, use cases and the admin page — on the chat itself it
+   *  disappears, and routes that are not page tabs (profile, 404) are not
+   *  "selected" anything. */
+  const onPageTab = () => onDashboard() || onUseCases() || onAdmin()
 
   return (
     <nav data-testid="app-header-strip" bg="ui-bg-secondary" border="b ui-border-primary">
@@ -77,6 +113,34 @@ export default function Nav() {
                 override it at md); the anchor's aria-label is then its only
                 name. */}
             <div flex="~ items-center" gap="1">
+              {/* The chat tab (#1048): only while a page tab is open, and
+                  never `aria-current` — see the module header. */}
+              <Show when={onPageTab()}>
+                <a
+                  href="/"
+                  flex="~ items-center"
+                  gap="1.5"
+                  h="11"
+                  px="3"
+                  rounded="md"
+                  whitespace="nowrap"
+                  text="sm ui-text-secondary"
+                  font="medium"
+                  bg="transparent hover:ui-bg-hover"
+                  transition="colors"
+                  title="Back to the chat"
+                  aria-label="Chat"
+                >
+                  <span
+                    class="i-material-symbols-chat"
+                    w="5"
+                    h="5"
+                    text="ui-text-secondary"
+                    aria-hidden="true"
+                  />
+                  <span class="nav-tab-label">chat</span>
+                </a>
+              </Show>
               <a
                 href={onDashboard() ? '/' : '/dashboard'}
                 flex="~ items-center"
@@ -137,6 +201,38 @@ export default function Nav() {
                 />
                 <span class="nav-tab-label">use cases</span>
               </a>
+              <Show when={isAdmin()}>
+                <a
+                  href={onAdmin() ? '/' : '/admin'}
+                  data-testid="nav-admin-tab"
+                  flex="~ items-center"
+                  gap="1.5"
+                  h="11"
+                  px="3"
+                  rounded="md"
+                  whitespace="nowrap"
+                  text={onAdmin() ? 'sm ui-text-primary' : 'sm ui-text-secondary'}
+                  font="medium"
+                  bg={onAdmin() ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+                  transition="colors"
+                  aria-current={onAdmin() ? 'page' : undefined}
+                  title={
+                    onAdmin()
+                      ? 'Back to chat — the admin panel is open'
+                      : 'Admin — keep the self-deployed GPUs running'
+                  }
+                  aria-label={onAdmin() ? 'Back to chat — the admin panel is open' : 'Admin'}
+                >
+                  <span
+                    class="i-material-symbols-admin-panel-settings"
+                    w="5"
+                    h="5"
+                    text={onAdmin() ? 'ui-accent' : 'ui-text-secondary'}
+                    aria-hidden="true"
+                  />
+                  <span class="nav-tab-label">admin</span>
+                </a>
+              </Show>
             </div>
           </Show>
           <ThemeSwitcher />

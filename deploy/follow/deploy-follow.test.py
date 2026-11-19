@@ -574,8 +574,7 @@ class Decisions(unittest.TestCase):
 
     def test_infra_paths(self):
         self.assertEqual(follow.infra_paths(["app/x.ts", "configs/Caddyfile.dev", "rootfs/Dockerfile",
-                                             "configs/custom-catalog.yaml", "docs/a.md", "models/README.md",
-                                             "docker/NOTES.md"]),
+                                             "configs/custom-catalog.yaml", "docs/a.md"]),
                          ["configs/Caddyfile.dev", "configs/custom-catalog.yaml", "rootfs/Dockerfile"])
 
     def test_hash_drift_ignores_the_deployed_service(self):

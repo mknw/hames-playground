@@ -171,6 +171,21 @@ const ALLOWLIST: Exception[] = [
     match: 'href="/profile"',
     reason: "In-app navigation to the app's own profile route, from inside the user menu.",
   },
+  {
+    file: 'src/components/Nav.tsx',
+    match: 'href="/"',
+    reason:
+      'In-app navigation back to the chat, the route the app is built around ' +
+      '(#1048: the chat tab shown beside the page tabs). solid-router intercepts ' +
+      'a same-origin plain anchor, so the click never leaves the app.',
+  },
+  {
+    file: 'src/components/Nav.tsx',
+    match: "href={onAdmin() ? '/' : '/admin'}",
+    reason:
+      "In-app navigation to the app's own admin panel (#1047), following the same " +
+      'pressed-in-tab shape the metrics and use-cases tabs above use.',
+  },
 ]
 
 /**

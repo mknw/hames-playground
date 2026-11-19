@@ -10,10 +10,12 @@
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
- * process-wide background work. Five things today: the routine scheduler
+ * process-wide background work. Six things today: the routine scheduler
  * (#131) — whose tick also reconciles runs abandoned at `status='running'`, and
  * which sweeps once here at boot for exactly the rows the previous process left
- * behind (#273 D-a) — the LLM-usage recorder behind the preview header's global
+ * behind (#273 D-a) — the GPU keep-running loop (#1047), which is what keeps
+ * the self-deployed boxes up after the admin switch with no browser attached,
+ * the LLM-usage recorder behind the preview header's global
  * counters, the app-side tool transport, the ONE deliberate boot-time BAML load
  * (#480 decision b, below), and the dev-only inference redirect the browser
  * e2e layer reaches through.
@@ -35,6 +37,7 @@ import { setSecurityHeaders } from './lib/security-headers'
 import { enforceRequestRateLimit } from './lib/request-rate-limit.server'
 import { refuseCrossOriginStateChange, refuseServerFunctionGet } from './lib/auth/csrf.server'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
+import { startGpuKeepRunningLoop } from './lib/inference/gpu-keep-running.server'
 import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
 import {
   devFakeInferenceUrl,
@@ -139,6 +142,13 @@ configureWorkspaceStore({
 // timer or a second usage listener that would double-count every LLM call.
 startRoutineScheduler()
 installUsageRecorder()
+// The GPU keep-running loop (#1047): the process-side half of the admin
+// switch, and the only driver that acts with NO browser attached — which is
+// why it is armed here, beside the scheduler, rather than on any route. Its
+// tick re-reads the Postgres switch, so an armed loop costs one single-row
+// read per tick while the switch is off, and the same idempotence rules as the
+// two above hold for it (the handle lives on globalThis, `unref()`'d).
+startGpuKeepRunningLoop()
 void probeMemoryAtBoot()
 
 /**

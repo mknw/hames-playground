@@ -283,10 +283,7 @@ def set_env_value(text, key, value):
 
 
 def infra_paths(changed):
-    # A Markdown file is documentation: no shared service or image reads it, so a
-    # README under models/ or docker/ never holds a RELEASE head (2026-11-19).
-    return sorted(path for path in changed
-                  if not path.endswith(".md") and any(fnmatch.fnmatch(path, pattern) for pattern in INFRA_PATTERNS))
+    return sorted(path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in INFRA_PATTERNS))
 
 
 def parse_hashes(text):

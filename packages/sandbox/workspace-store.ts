@@ -61,6 +61,7 @@ export interface WorkspaceDocument {
 
 /** What `promoteOutputs` hands back to the host for one produced file. */
 export interface WorkspaceDocumentInput {
+  origin?: 'sandbox-output'
   sessionId: string
   filename: string
   mimeType: string

@@ -17,8 +17,33 @@ import {
   isTextMime,
   parseUploadRequest,
 } from '../../lib/stash/upload-service.server'
+import { storeDocument } from '@hames-ai/harness-patterns/stash/document-store.server'
 
 describe('upload-service (Issue #6)', () => {
+  it('persists a user upload without inventing an agent turn or call (#1040)', async () => {
+    const input = await parseUploadRequest(
+      new Request('http://x/api/stash/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 's',
+          filename: 'sample.md',
+          content: 'sample',
+          origin: 'graph-file',
+          originTurnId: 'forged',
+        }),
+      }),
+    )
+    let saved: Record<string, unknown> = {}
+    await storeDocument(input, async (name, args) => {
+      if (name === 'json_set') saved = JSON.parse(String(args.value))
+      return { success: true, data: 'OK' }
+    })
+    expect(saved).toMatchObject({ origin: 'user-upload', filename: 'sample.md' })
+    expect(saved).not.toHaveProperty('originTurnId')
+    expect(saved).not.toHaveProperty('sourceCallId')
+  })
+
   describe('guessMimeType', () => {
     it('maps known extensions', () => {
       expect(guessMimeType('a.md')).toBe('text/markdown')
@@ -74,6 +99,14 @@ describe('upload-service (Issue #6)', () => {
           sessionId: 's1',
           filename: 'doc.md',
           content: '# hi',
+          origin: 'graph-file',
+          originTurnId: 'forged-turn',
+          sourceTool: 'forged-tool',
+          sourceCallId: 'forged-call',
+          driveId: 'forged-drive',
+          itemId: 'forged-item',
+          webUrl: 'https://example.com/forged',
+          provenance: 'sandbox-output',
         }),
       })
       const input = await parseUploadRequest(req)
@@ -82,7 +115,18 @@ describe('upload-service (Issue #6)', () => {
         filename: 'doc.md',
         mimeType: 'text/markdown',
         content: '# hi',
+        origin: 'user-upload',
       })
+      for (const field of [
+        'originTurnId',
+        'sourceTool',
+        'sourceCallId',
+        'driveId',
+        'itemId',
+        'webUrl',
+        'provenance',
+      ])
+        expect(input).not.toHaveProperty(field)
     })
 
     it('infers a default filename + mime when omitted', async () => {
@@ -157,6 +201,7 @@ describe('upload-service (Issue #6)', () => {
       ])
       const input = await parseUploadRequest(req)
       expect(input.sessionId).toBe('s2')
+      expect(input.origin).toBe('user-upload')
       expect(input.filename).toBe('sheet.csv')
       expect(input.mimeType).toBe('text/csv')
       expect(input.content).toBe('col1,col2\n1,2')

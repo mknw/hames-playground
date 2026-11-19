@@ -35,6 +35,9 @@ import {
   type CallTool,
 } from '../../stash/document-store.server'
 import type { ToolCallResult } from '../../types'
+import { harness } from '../../harness.server'
+import { configurePattern } from '../../patterns/chain.server'
+import { withToolCallId } from '../../run-frame.server'
 
 // ----------------------------------------------------------------------------
 // Fake Redis backing a fake callTool
@@ -110,6 +113,75 @@ describe('document-store (Issue #6)', () => {
   })
 
   describe('storeDocument', () => {
+    it('records trusted origin, turn and call with source references, and preserves them on update (#1040)', async () => {
+      let callId = ''
+      const agent = harness(
+        configurePattern('save', async (scope) => {
+          await withToolCallId(async (id) => {
+            callId = id
+            await storeDocument(
+              {
+                sessionId: 's1',
+                id: 'linked',
+                filename: 'sample.md',
+                mimeType: 'text/markdown',
+                content: 'sample',
+                origin: 'graph-file',
+                sourceTool: 'graph_file_ingest',
+                driveId: 'synthetic-drive',
+                itemId: 'synthetic-item',
+                webUrl: 'https://example.com/sample.md',
+              },
+              fake.callTool,
+            )
+          })
+          return scope
+        }),
+      )
+      const result = await agent('save a sample', 's1')
+      const turnId = result.context.events.find((e) => e.type === 'user_message')!.id
+      expect(turnId).toBeTruthy()
+      const attribution = {
+        origin: 'graph-file',
+        originTurnId: turnId,
+        sourceTool: 'graph_file_ingest',
+        sourceCallId: callId,
+        driveId: 'synthetic-drive',
+        itemId: 'synthetic-item',
+        webUrl: 'https://example.com/sample.md',
+      }
+      expect(fake.redis.json.get('stash:doc:s1:linked')).toMatchObject(attribution)
+      await setDocumentFlags(
+        's1',
+        'linked',
+        { ingestStatus: 'indexed', hidden: true, chunkCount: 2 },
+        fake.callTool,
+      )
+      expect(await getDocument('s1', 'linked', fake.callTool)).toMatchObject(attribution)
+    })
+
+    it('reads untagged legacy records as unknown, and only the old sandbox tag as proof (#1040)', async () => {
+      const legacy = {
+        id: 'old',
+        sessionId: 's1',
+        filename: 'old.txt',
+        mimeType: 'text/plain',
+        content: 'old',
+        size: 3,
+        uploadedAt: 1,
+      }
+      fake.redis.json.set('stash:doc:s1:old', legacy)
+      fake.redis.sets.set('stash:docs:s1', new Set(['old']))
+      expect(await getDocument('s1', 'old', fake.callTool)).toMatchObject({ origin: 'unknown' })
+      expect(await getDocumentMeta('s1', 'old', fake.callTool)).toMatchObject({ origin: 'unknown' })
+      expect(await listDocuments('s1', fake.callTool)).toMatchObject([{ origin: 'unknown' }])
+      fake.redis.json.set('stash:doc:s1:old', { ...legacy, provenance: 'sandbox-output' })
+      expect(await getDocument('s1', 'old', fake.callTool)).toMatchObject({
+        origin: 'sandbox-output',
+        provenance: 'sandbox-output',
+      })
+    })
+
     it('stores content + metadata and returns a complete document', async () => {
       const before = Date.now()
       const doc = await storeDocument(

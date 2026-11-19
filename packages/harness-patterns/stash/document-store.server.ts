@@ -1,7 +1,7 @@
 /**
  * Document Store — Server Only (Issue #6)
  *
- * Redis-backed persistence for user-uploaded Data Stash documents.
+ * Redis-backed persistence for Data Stash files.
  *
  * Documents live alongside tool results in the Data Stash and are referenced
  * by the agent across turns via the same `ref:<id>` mechanism (see
@@ -29,6 +29,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { currentRunFrame, currentToolCallId } from '../run-frame.server'
+import { currentRunId } from '../hitl.server'
 import { resolveStashCallTool, isBuiltinStashTransport } from '../stash-transport.server'
 import type { ToolCallResult } from '../types'
 import type { PriorResult } from '../types'
@@ -41,6 +42,17 @@ assertServerOnImport()
 
 /** Metadata stored alongside the document content. */
 export interface StashDocumentMeta {
+  /** Display attribution only; never a permission or a content-check exemption.
+   * Optional on legacy records; reads normalise unproven origins to unknown. */
+  origin?: 'user-upload' | 'graph-file' | 'sandbox-output' | 'unknown'
+  /** The originating user_message event id, when a run was in scope. */
+  originTurnId?: string
+  sourceTool?: string
+  sourceCallId?: string
+  /** Microsoft Graph source references, when known. */
+  driveId?: string
+  itemId?: string
+  webUrl?: string
   /** Fixed non-content enum, safe as plaintext metadata like ingestStatus.
    * Absent means not promoted; legacy/uploaded records need no migration. */
   provenance?: 'sandbox-output'
@@ -131,6 +143,12 @@ export interface StashDocument extends StashDocumentMeta {
 
 /** Input for {@link storeDocument}. `id` and `uploadedAt` are minted here. */
 export interface StoreDocumentInput {
+  /** Supplied by trusted write paths, never copied from a tool/request body. */
+  origin?: StashDocumentMeta['origin']
+  sourceTool?: string
+  driveId?: string
+  itemId?: string
+  webUrl?: string
   provenance?: StashDocumentMeta['provenance']
   sessionId: string
   filename: string
@@ -330,6 +348,8 @@ export async function storeDocument(
     throw new Error(`Document too large: ${size} bytes exceeds limit of ${MAX_CONTENT_BYTES} bytes`)
   }
 
+  const originTurnId = currentRunId()
+  const sourceCallId = currentToolCallId()
   const doc: StashDocument = {
     id: input.id ?? newDocId(),
     sessionId: input.sessionId,
@@ -338,6 +358,13 @@ export async function storeDocument(
     size,
     uploadedAt: Date.now(),
     content: input.content,
+    origin: input.origin ?? (input.provenance === 'sandbox-output' ? 'sandbox-output' : 'unknown'),
+    ...(originTurnId ? { originTurnId } : {}),
+    ...(input.sourceTool ? { sourceTool: input.sourceTool } : {}),
+    ...(sourceCallId ? { sourceCallId } : {}),
+    ...(input.driveId ? { driveId: input.driveId } : {}),
+    ...(input.itemId ? { itemId: input.itemId } : {}),
+    ...(input.webUrl ? { webUrl: input.webUrl } : {}),
     ...(input.provenance === 'sandbox-output' ? { provenance: input.provenance } : {}),
     // Omit when utf8 so existing docs/tests stay byte-identical.
     ...(encoding === 'base64' ? { encoding } : {}),
@@ -407,7 +434,7 @@ export async function getDocument(
 
   const value = unwrapJsonGet(res.data)
   if (value == null || typeof value !== 'object') return null
-  return value as StashDocument
+  return withOrigin(value as StashDocument)
 }
 
 /**
@@ -442,7 +469,15 @@ export async function getDocumentStrict(
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('stash read returned an unreadable document')
   }
-  return value as StashDocument
+  return withOrigin(value as StashDocument)
+}
+
+/** Only the existing sandbox tag proves an origin on an older record. */
+function withOrigin(doc: StashDocument): StashDocument {
+  return {
+    ...doc,
+    origin: doc.origin ?? (doc.provenance === 'sandbox-output' ? 'sandbox-output' : 'unknown'),
+  }
 }
 
 /** Retrieve a document's metadata without its content. */

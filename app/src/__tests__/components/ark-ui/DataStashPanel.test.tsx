@@ -14,7 +14,7 @@
  * the panel keeps a module-level document cache keyed by session.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent, screen } from '@solidjs/testing-library'
+import { render, fireEvent, screen, within } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
@@ -341,6 +341,231 @@ describe('DataStashPanel — tool result chips', () => {
 })
 
 describe('DataStashPanel — uploads', () => {
+  it('separates uploads, copied/created files by turn, and unproven legacy files (#1040)', async () => {
+    stubFetch({
+      documents: [
+        doc({ id: 'upload', filename: 'upload.md', origin: 'user-upload' }),
+        doc({
+          id: 'copy',
+          filename: 'copy.csv',
+          mimeType: 'text/csv',
+          origin: 'graph-file',
+          originTurnId: 'turn-1',
+          ingestStatus: 'indexed',
+        }),
+        doc({
+          id: 'created',
+          filename: 'created.md',
+          origin: 'sandbox-output',
+          provenance: 'sandbox-output',
+          originTurnId: 'turn-2',
+          ingestStatus: 'not_indexed',
+        }),
+        doc({ id: 'legacy', filename: 'legacy.txt' }),
+        doc({ id: 'unlinked', filename: 'unlinked.md', origin: 'graph-file' }),
+      ],
+    })
+    await renderPanel({
+      events: [
+        { ...userMessage(), id: 'turn-1' },
+        { ...userMessage(), id: 'turn-2' },
+      ],
+    })
+    const uploads = screen.getByRole('button', { name: /Your uploads/ }).parentElement!
+    expect(within(uploads).getByText('upload.md')).toBeTruthy()
+    expect(within(uploads).queryByText('copy.csv')).toBeNull()
+    expect(within(uploads).getByText('Drop a file or click to upload')).toBeTruthy()
+    expect(
+      within(screen.getByRole('region', { name: 'Turn 1' })).getByText('copy.csv'),
+    ).toBeTruthy()
+    const heading = screen.getByRole('heading', { level: 2, name: 'Turn 1' })
+    expect(screen.getByRole('region', { name: 'Turn 1' })).toHaveAttribute(
+      'aria-labelledby',
+      heading.id,
+    )
+    const second = within(screen.getByRole('region', { name: 'Turn 2' }))
+    expect(second.getByText('created.md')).toBeTruthy()
+    expect(second.getByText('Created')).toBeTruthy()
+    expect(second.getByText('not searchable')).toBeTruthy()
+    expect(
+      within(screen.getByRole('region', { name: 'Turn not recorded' })).getByText('unlinked.md'),
+    ).toBeTruthy()
+    const unknown = screen.getByRole('button', { name: /Origin unknown/ }).parentElement!
+    expect(within(unknown).getByText('legacy.txt')).toBeTruthy()
+    expect(within(unknown).queryByText('upload.md')).toBeNull()
+    expect(screen.getByRole('radiogroup', { name: 'Group agent files' })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: 'By turn' })).toBeChecked()
+  })
+
+  it('By type groups from MIME rather than filename and keeps origin and search status (#1040)', async () => {
+    stubFetch({
+      documents: [
+        doc({
+          id: 'copy',
+          filename: 'copy.md',
+          mimeType: 'text/csv',
+          origin: 'graph-file',
+          originTurnId: 'turn-1',
+          ingestStatus: 'failed',
+          ingestError: 'synthetic failure',
+        }),
+        doc({
+          id: 'created',
+          filename: 'created.txt',
+          mimeType: 'text/csv',
+          origin: 'sandbox-output',
+          originTurnId: 'turn-2',
+          ingestStatus: 'not_indexed',
+        }),
+        doc({
+          id: 'markdown',
+          filename: 'summary.csv',
+          mimeType: 'text/markdown',
+          origin: 'graph-file',
+          originTurnId: 'turn-2',
+        }),
+        doc({ id: 'unknown', filename: 'old.csv', mimeType: 'text/csv', origin: 'unknown' }),
+      ],
+    })
+    await renderPanel({
+      events: [
+        { ...userMessage(), id: 'turn-1' },
+        { ...userMessage(), id: 'turn-2' },
+      ],
+    })
+    fireEvent.click(screen.getByText('By type'))
+    await settle()
+    expect(screen.getByRole('radio', { name: 'By type' })).toBeChecked()
+    const csv = within(screen.getByRole('region', { name: 'text/csv' }))
+    expect(csv.getByText('copy.md')).toBeTruthy()
+    expect(csv.getByText('created.txt')).toBeTruthy()
+    expect(csv.queryByText('old.csv')).toBeNull()
+    expect(csv.queryByText('summary.csv')).toBeNull()
+    const markdown = within(screen.getByRole('region', { name: 'text/markdown' }))
+    expect(markdown.getByText('summary.csv')).toBeTruthy()
+    expect(markdown.queryByText('copy.md')).toBeNull()
+    expect(markdown.queryByText('created.txt')).toBeNull()
+    expect(csv.getByText('Copied')).toBeTruthy()
+    expect(csv.getByText('Created')).toBeTruthy()
+    expect(csv.getAllByText('not searchable')).toHaveLength(2)
+    expect(screen.queryByRole('region', { name: 'Turn 1' })).toBeNull()
+    fireEvent.click(screen.getByText('By turn'))
+    await settle()
+    expect(screen.getByRole('region', { name: 'Turn 1' })).toBeTruthy()
+  })
+
+  it('opens the file viewer under the gallery that opened it (#1041)', async () => {
+    stubFetch({
+      documents: [
+        doc({ id: 'upload', filename: 'upload.md', origin: 'user-upload' }),
+        doc({ id: 'copy', filename: 'copy.md', origin: 'graph-file', originTurnId: 'turn-1' }),
+        doc({
+          id: 'created',
+          filename: 'created.md',
+          origin: 'sandbox-output',
+          originTurnId: 'turn-2',
+        }),
+      ],
+      documentBody: { document: { content: 'Synthetic file viewer content' } },
+    })
+    await renderPanel({
+      events: [
+        { ...userMessage(), id: 'turn-1' },
+        { ...userMessage(), id: 'turn-2' },
+      ],
+    })
+    const uploads = screen.getByRole('button', { name: /Your uploads/ }).parentElement!
+    fireEvent.click(within(uploads).getByTitle('View file'))
+    await settle()
+    expect(within(uploads).getByText('Synthetic file viewer content')).toBeTruthy()
+    const firstTurn = screen.getByRole('region', { name: 'Turn 1' })
+    fireEvent.click(within(firstTurn).getByTitle('View file'))
+    await settle()
+    expect(within(firstTurn).getByText('Synthetic file viewer content')).toBeTruthy()
+    expect(within(uploads).queryByText('Synthetic file viewer content')).toBeNull()
+    expect(screen.getAllByText('Synthetic file viewer content')).toHaveLength(1)
+  })
+
+  it.each([
+    { origin: 'graph-file' as const, grouping: 'turn' },
+    { origin: 'graph-file' as const, grouping: 'type' },
+    { origin: 'user-upload' as const, grouping: 'turn' },
+  ])(
+    'keeps the $origin viewer mounted through events and a list refresh ($grouping)',
+    async ({ origin, grouping }) => {
+      const documents = [doc({ origin, originTurnId: 'turn-1' })]
+      const plan: FetchPlan = {
+        documents,
+        documentBody: { document: { content: 'alpha\nbravo\ncharlie' } },
+      }
+      stubFetch(plan)
+      const [events, setEvents] = createSignal<ContextEvent[]>([
+        { ...userMessage(), id: 'turn-1' },
+        toolResult('retriever', {
+          result: {
+            references: [
+              { docId: 'doc-1', filename: 'notes.md', startOffset: 0, endOffset: 5, chunkIndex: 0 },
+              {
+                docId: 'doc-1',
+                filename: 'notes.md',
+                startOffset: 6,
+                endOffset: 11,
+                chunkIndex: 1,
+              },
+            ],
+          },
+        }),
+      ])
+      const sessionId = newSession()
+      render(() => (
+        <DataStashPanel events={events()} sessionId={sessionId} onStashAction={noopAction} />
+      ))
+      await settle()
+      if (grouping === 'type') {
+        fireEvent.click(screen.getByText('By type'))
+        await settle()
+      }
+      const owner = () =>
+        origin === 'user-upload'
+          ? screen.getByRole('button', { name: /Your uploads/ }).parentElement!
+          : screen.getByRole('region', { name: grouping === 'type' ? 'text/markdown' : 'Turn 1' })
+      fireEvent.click(within(owner()).getByTitle('View file'))
+      await settle()
+      const viewer = within(owner()).getByTitle('Close viewer').parentElement!.parentElement!
+      const scroll = viewer.children[1] as HTMLElement
+      fireEvent.click(within(viewer).getByTitle('Next reference'))
+      scroll.scrollTop = 37
+      const reads = () => calls.filter((c) => c.url.startsWith('/api/stash/document/')).length
+      expect(reads()).toBe(1)
+      const assertPreserved = () => {
+        expect(within(owner()).getByTitle('Close viewer').parentElement!.parentElement).toBe(viewer)
+        expect(reads()).toBe(1)
+        expect(within(viewer).getByText('2/2')).toBeTruthy()
+        expect(scroll.scrollTop).toBe(37)
+        expect(within(viewer).getByText('bravo')).toBeTruthy()
+      }
+      setEvents((previous) => [
+        ...previous,
+        {
+          type: 'assistant_message',
+          ts: ++evSeq,
+          patternId: 'harness',
+          data: { content: 'Synthetic update' },
+        },
+      ])
+      await settle()
+      assertPreserved()
+      const listsBefore = calls.filter((c) => c.url.startsWith('/api/stash/upload')).length
+      plan.documents = documents.map((d) => ({ ...d }))
+      setEvents((previous) => [...previous, toolResult('graph_file_ingest')])
+      await settle()
+      expect(calls.filter((c) => c.url.startsWith('/api/stash/upload'))).toHaveLength(
+        listsBefore + 1,
+      )
+      assertPreserved()
+    },
+  )
+
   const upload = async (container: HTMLElement, files: File[]) => {
     const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
     Object.defineProperty(input, 'files', { value: files, configurable: true })

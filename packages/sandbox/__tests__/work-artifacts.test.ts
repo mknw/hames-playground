@@ -31,6 +31,9 @@ import {
   type WorkspaceDocumentMeta,
 } from '../workspace-store'
 import { hydrateWorkspace, promoteOutputs, snapshotOutputs } from '../work-artifacts.server'
+import { harness } from '@hames-ai/harness-patterns/harness.server'
+import { configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
+import { storeDocument as persistDocument } from '@hames-ai/harness-patterns/stash/document-store.server'
 
 // The three store operations, as the doubles the body drives. Named exactly as
 // the app functions they stand in for so every `vi.mocked(...)` below reads the
@@ -444,6 +447,32 @@ describe('snapshotOutputs', () => {
 })
 
 describe('promoteOutputs', () => {
+  it('persists the creating turn without inventing a source call for end-of-turn promotion (#1040)', async () => {
+    const { transport, fs } = makeFsTransport()
+    fs.set('/work/out/sample.csv', 'x,y')
+    let saved: Record<string, unknown> = {}
+    storeDocument.mockImplementation((input) =>
+      persistDocument(input, async (name, args) => {
+        if (name === 'json_set') saved = JSON.parse(String(args.value))
+        return { success: true, data: 'OK' }
+      }),
+    )
+    const agent = harness(
+      configurePattern('promote', async (scope) => {
+        await promoteOutputs(transport, 's', new Map())
+        return scope
+      }),
+    )
+    const result = await agent('create a sample', 's')
+    expect(saved).toMatchObject({
+      origin: 'sandbox-output',
+      provenance: 'sandbox-output',
+      originTurnId: result.context.events.find((e) => e.type === 'user_message')!.id,
+    })
+    expect(saved).not.toHaveProperty('sourceTool')
+    expect(saved).not.toHaveProperty('sourceCallId')
+  })
+
   it('stores only files new/changed since baseline, with correct text/binary encoding', async () => {
     const { transport, fs } = makeFsTransport()
     // report.csv is new; chart.png is new binary; notes.md is unchanged vs baseline.
@@ -468,6 +497,8 @@ describe('promoteOutputs', () => {
     const csv = calls.find((c) => c.filename === 'report.csv')!
     const png = calls.find((c) => c.filename === 'chart.png')!
     expect(csv.mimeType).toBe('text/csv')
+    expect(csv).toMatchObject({ origin: 'sandbox-output', provenance: 'sandbox-output' })
+    expect(png).toMatchObject({ origin: 'sandbox-output', provenance: 'sandbox-output' })
     expect(csv.encoding).toBeUndefined()
     expect(csv.content).toBe('x,y\n1,2')
     expect(png.mimeType).toBe('image/png')

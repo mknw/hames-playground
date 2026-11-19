@@ -85,6 +85,7 @@ describe('POST /api/agents/:id — recording provenance', () => {
     // may be about to delete its own copy (sf-L9).
     expect(await res.json()).toEqual({ run_id: 'run-fixed', recording_stored: true })
     expect(storeDocument).toHaveBeenCalledWith({
+      origin: 'user-upload',
       sessionId: 'run-fixed',
       filename: 'memo.m4a',
       mimeType: 'audio/mp4',

@@ -93,6 +93,11 @@ export interface GraphContentClassifier {
  *  declared structurally so the host's own richer document type satisfies it
  *  without the package importing it. */
 export interface GraphStashDocumentInput {
+  origin: 'graph-file'
+  sourceTool: 'graph_file_ingest'
+  driveId?: string
+  itemId: string
+  webUrl?: string
   /** Conversation whose stash the document belongs to. */
   sessionId: string
   filename: string
@@ -418,7 +423,7 @@ const FILE_SCOPES = ['Files.Read.All'] as const
 
 /** driveItem fields we need: enough to name, classify and size-check the file.
  *  Explicit because a full driveItem carries a lot we'd never use. */
-const DRIVE_ITEM_SELECT = 'name,file,size,webUrl'
+const DRIVE_ITEM_SELECT = 'name,file,size,webUrl,parentReference'
 
 /** What the model gets back. Notably **not** the content: the bytes go to the
  *  Data Stash, and `documentId` is how later turns reach them. */
@@ -1849,13 +1854,15 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       // Metadata first — and separately from the download — because it carries the
       // size, which is how an oversized file is refused BEFORE its bytes are in
       // this process's heap. It also gives the real filename and MIME type.
-      const meta = shapeDriveItem(
-        await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
-          scopes: FILE_SCOPES,
-        }).catch((err) => {
-          throw translateIngestDenial(err, itemId)
-        }),
-      )
+      const rawMeta = await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
+        scopes: FILE_SCOPES,
+      }).catch((err) => {
+        throw translateIngestDenial(err, itemId)
+      })
+      const meta = shapeDriveItem(rawMeta)
+      const sourceDriveId =
+        driveId ??
+        (rawMeta as { parentReference?: { driveId?: unknown } } | null)?.parentReference?.driveId
       if (!meta.isFile) {
         throw new Error(
           `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
@@ -1907,6 +1914,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       const ingesting = isText || (conversionEnabled() && isConvertible(mimeType))
 
       const doc = await store.storeDocument({
+        origin: 'graph-file',
+        sourceTool: 'graph_file_ingest',
+        itemId,
+        ...(typeof sourceDriveId === 'string' && sourceDriveId ? { driveId: sourceDriveId } : {}),
+        ...(meta.webUrl ? { webUrl: meta.webUrl } : {}),
         sessionId,
         filename,
         mimeType,

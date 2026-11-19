@@ -11,9 +11,19 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
+import {
+  For,
+  Show,
+  createSignal,
+  createMemo,
+  createEffect,
+  createUniqueId,
+  on,
+  onCleanup,
+} from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
+import { RadioGroup } from '@ark-ui/solid/radio-group'
 import type { ContextEvent, ToolResultEventData } from '@hames-ai/harness-patterns'
 import {
   deleteStashDocument,
@@ -697,6 +707,17 @@ const DocChip = (props: {
         >
           {truncate(d().filename, 18)}
         </span>
+        <Show
+          when={
+            d().origin === 'graph-file' ||
+            d().origin === 'sandbox-output' ||
+            (d().origin == null && d().provenance === 'sandbox-output')
+          }
+        >
+          <span text="xs ui-text-secondary">
+            {d().origin === 'graph-file' ? 'Copied' : 'Created'}
+          </span>
+        </Show>
         {/* "embedding…" / "failed" line below the icon. */}
         <Show when={status() === 'pending'}>
           <span style={{ 'font-size': '8px', color: '#f59e0b', 'line-height': '1.1' }}>
@@ -1177,6 +1198,39 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   const [uploadError, setUploadError] = createSignal<string | null>(null)
   /** The cold list-load failed (#314): distinguishable from "no uploads". */
   const [loadError, setLoadError] = createSignal<string | null>(null)
+  const [grouping, setGrouping] = createSignal<'turn' | 'type'>('turn')
+  const uploads = createMemo(() => docs().filter((d) => d.origin === 'user-upload'))
+  const found = createMemo(() =>
+    docs().filter(
+      (d) =>
+        d.origin === 'graph-file' ||
+        d.origin === 'sandbox-output' ||
+        (d.origin == null && d.provenance === 'sandbox-output'),
+    ),
+  )
+  const unknown = createMemo(() =>
+    docs().filter((d) => !uploads().includes(d) && !found().includes(d)),
+  )
+  const fileGroups = createMemo(() => {
+    const turns = props.events.filter((e) => e.type === 'user_message')
+    const groups = new Map<string, { label: string; documents: StashDocumentMeta[] }>()
+    for (const doc of found()) {
+      const key = grouping() === 'type' ? doc.mimeType : (doc.originTurnId ?? '')
+      const turnIndex = turns.findIndex((e) => e.id && e.id === doc.originTurnId)
+      const label =
+        grouping() === 'type'
+          ? doc.mimeType
+          : turnIndex >= 0
+            ? `Turn ${turnIndex + 1}`
+            : doc.originTurnId
+              ? `Turn ${doc.originTurnId}`
+              : 'Turn not recorded'
+      const group = groups.get(key) ?? { label, documents: [] }
+      group.documents.push(doc)
+      groups.set(key, group)
+    }
+    return groups
+  })
 
   // Tool-result actions go through the route's optimistic handler, which
   // re-throws when the server refuses (#314). Catch here and report through
@@ -1455,8 +1509,39 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   })
   const totalCount = createMemo(() => toolCount() + docs().length)
 
+  const DocumentGallery = (galleryProps: { documents: StashDocumentMeta[] }) => (
+    <>
+      <div flex="~ wrap" gap="2" p="x-3 y-2">
+        <For each={galleryProps.documents}>
+          {(doc) => (
+            <DocChip
+              doc={doc}
+              sessionId={props.sessionId}
+              onAction={handleDocAction}
+              onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
+              active={viewer()?.doc.id === doc.id}
+            />
+          )}
+        </For>
+      </div>
+      <Show
+        when={galleryProps.documents.some((doc) => doc.id === viewer()?.doc.id) ? viewer() : null}
+      >
+        {(v) => (
+          <FileViewer
+            sessionId={props.sessionId}
+            doc={v().doc}
+            highlights={v().highlights}
+            initialIndex={v().index}
+            onClose={() => setViewer(null)}
+          />
+        )}
+      </Show>
+    </>
+  )
+
   return (
-    <div flex="~ col" h="full" overflow="auto" bg="ui-bg-primary">
+    <div ref={gallery} flex="~ col" h="full" overflow="auto" bg="ui-bg-primary">
       {/* Header */}
       <div
         p="x-3 y-2"
@@ -1480,35 +1565,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
 
       {/* ── Your Uploads ── user-provided documents (Redis-backed, Issue #6).
           Always available (the drop zone needs to be reachable with 0 docs). */}
-      <CollapsibleSection title="Your Uploads" count={docs().length} defaultOpen={true}>
+      <CollapsibleSection title="Your uploads" count={uploads().length} defaultOpen={true}>
         <UploadZone uploading={uploading()} error={uploadError()} onFiles={uploadFiles} />
-        <Show when={docs().length > 0}>
-          <div ref={gallery} flex="~ wrap" gap="2" p="x-3 y-2">
-            <For each={docs()}>
-              {(doc) => (
-                <DocChip
-                  doc={doc}
-                  sessionId={props.sessionId}
-                  onAction={handleDocAction}
-                  onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
-                  active={viewer()?.doc.id === doc.id}
-                />
-              )}
-            </For>
-          </div>
-        </Show>
-        {/* Inline viewer for the open file — full width, below the gallery. */}
-        <Show when={viewer()}>
-          {(v) => (
-            <FileViewer
-              sessionId={props.sessionId}
-              doc={v().doc}
-              highlights={v().highlights}
-              initialIndex={v().index}
-              onClose={() => setViewer(null)}
-            />
-          )}
-        </Show>
+        <DocumentGallery documents={uploads()} />
         {/* Cold-load only — never blocks the drop zone (background refresh). */}
         <Show when={loading() && docs().length === 0}>
           <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs ui-text-tertiary">
@@ -1541,6 +1600,82 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
           </div>
         </Show>
       </CollapsibleSection>
+
+      <CollapsibleSection title="Found by agent" count={found().length} defaultOpen={true}>
+        <RadioGroup.Root
+          value={grouping()}
+          onValueChange={({ value }) => setGrouping(value === 'type' ? 'type' : 'turn')}
+          orientation="horizontal"
+          aria-label="Group agent files"
+          flex="~ wrap"
+          gap="2"
+          p="x-3 y-2"
+        >
+          <For
+            each={[
+              { value: 'turn', label: 'By turn' },
+              { value: 'type', label: 'By type' },
+            ]}
+          >
+            {(item) => (
+              <RadioGroup.Item
+                value={item.value}
+                flex="~"
+                items="center"
+                gap="2"
+                cursor="pointer"
+                p="2"
+                rounded="md"
+                bg="ui-bg-secondary"
+                text="xs ui-text-primary"
+                ring="2 transparent focus-within:ui-accent"
+              >
+                <RadioGroup.ItemControl
+                  w="4"
+                  h="4"
+                  rounded="full"
+                  border="1 ui-border-secondary"
+                  bg={grouping() === item.value ? 'ui-accent' : 'ui-bg-primary'}
+                />
+                <RadioGroup.ItemText>{item.label}</RadioGroup.ItemText>
+                <RadioGroup.ItemHiddenInput />
+              </RadioGroup.Item>
+            )}
+          </For>
+        </RadioGroup.Root>
+        <Show when={found().length === 0}>
+          <p p="x-3 y-2" text="xs ui-text-tertiary">
+            Files copied or created by the agent appear here.
+          </p>
+        </Show>
+        <For each={[...fileGroups().keys()]}>
+          {(key) => {
+            const group = () => fileGroups().get(key)!
+            const headingId = createUniqueId()
+            return (
+              <section aria-labelledby={headingId}>
+                <h2
+                  id={headingId}
+                  p="x-3 y-2"
+                  text="xs ui-text-secondary"
+                  font="medium"
+                  border="b ui-border-primary"
+                  break-all
+                >
+                  {group().label}
+                </h2>
+                <DocumentGallery documents={group().documents} />
+              </section>
+            )
+          }}
+        </For>
+      </CollapsibleSection>
+
+      <Show when={unknown().length > 0}>
+        <CollapsibleSection title="Origin unknown" count={unknown().length} defaultOpen={true}>
+          <DocumentGallery documents={unknown()} />
+        </CollapsibleSection>
+      </Show>
 
       {/* ── Agent Findings ── tool results the agent produced (neo4j, web, …). */}
       <CollapsibleSection title="Agent Findings" count={toolCount()} defaultOpen={true}>

@@ -42,6 +42,7 @@ import {
   asHeaderState,
   ACTIVE_POLL_INTERVAL_MS,
   POLL_INTERVAL_MS,
+  TICK_INTERVAL_MS,
   WARMTH_PRESENTATION,
 } from '~/components/ark-ui/PreviewHeaderStrip'
 import { fmtEur } from '@hames-ai/harness-patterns/observability/token-totals'
@@ -131,12 +132,122 @@ export default function Admin() {
   }
 
   const state = () => admin()
-  const perHour = () => (state() ? state()!.largeEurPerHour + state()!.smallEurPerHour : 0)
-  const runningSince = () => (state()?.keepRunning ? (state()?.switchedOnAt ?? null) : null)
-  const accruedEur = () => {
-    const since = runningSince()
-    return since === null ? null : ((Date.now() - since) / 3_600_000) * perHour()
+
+  /** The per-hour price of the boxes the keep-running loop actually keeps up:
+   *  the small box's rate always — the loop keeps it in every configuration —
+   *  plus the 27B's rate only when there IS a 27B box to keep. On the
+   *  OpenRouter route the 27B is a public per-token API, not a scale-to-zero
+   *  box of ours, and the loop skips it exactly as the wake does
+   *  (`wake.server.ts`) — pricing it here would bill a box nobody is keeping.
+   */
+  const perHour = () => {
+    const s = state()
+    if (!s) return 0
+    return (s.largeOnOpenRouter ? 0 : s.largeEurPerHour) + s.smallEurPerHour
   }
+
+  /** The same figure's breakdown, naming which boxes the rate is for — so on
+   *  the OpenRouter route the missing 27B is explained rather than silently
+   *  dropped. */
+  const rateBreakdown = () => {
+    const s = state()
+    if (!s) return ''
+    return s.largeOnOpenRouter
+      ? `4B ≥ ${fmtEur(s.smallEurPerHour)}/h — the 27B runs through OpenRouter, so the loop keeps no 27B box`
+      : `27B ≥ ${fmtEur(s.largeEurPerHour)}/h + 4B ≥ ${fmtEur(s.smallEurPerHour)}/h`
+  }
+
+  const runningSince = () => (state()?.keepRunning ? (state()?.switchedOnAt ?? null) : null)
+
+  /** Whether the live payload shows a box actually up. `ready` and
+   *  `answering` are completion evidence — the deployment answered a real
+   *  request. `starting` is a wake in flight with no evidence yet, so it does
+   *  NOT count: the cold start it may end in is one of the spans the meter's
+   *  own footnote already excludes. */
+  const boxUp = () => {
+    const s = warmth()?.warmth.state
+    return s === 'ready' || s === 'answering'
+  }
+
+  // ---- The "so far" meter ---------------------------------------------
+  //
+  // Two properties a recomputed `(now - stamp) × rate` cannot have (#1047
+  // review round 2): it must MOVE while the page is open (a meter frozen at
+  // page load reads as a hung page), and it must NOT move while no box is up
+  // — with the switch on but every wake failing, no GPU time is being bought
+  // and the figure must not grow. So the meter ACCRUES: it adds time only
+  // while the live payload shows a box up, and freezes while it does not.
+  //
+  // What this page cannot see, it does not guess: the stamp says when the
+  // switch went on, not when the boxes came up, so the first up observation
+  // charges the whole span from the stamp — unless the page has already
+  // watched the boxes be down for this switch-on, because a span observed
+  // down is known unbilled time and is never charged. A reload starts the
+  // observation over; the figure is a floor and its footnote says so.
+  const [accruedEur, setAccruedEur] = createSignal<number | null>(null)
+  let accrualStamp: number | null = null
+  let accrualSeeded = false
+  let accrualSawDown = false
+  let accruedMs = 0
+  let lastTickAt = Date.now()
+
+  const accrue = (now: number) => {
+    // Every input is read first, under one guard: reading a REJECTED resource
+    // throws (the render's own `<Show>` guards on `admin.error` before it
+    // reads the value), and a failed read is the forbidden or failed panel's
+    // path, not the meter's — skip the tick, and the next poll that answers
+    // recomputes it. The reads still TRACK: an effect running this sees the
+    // resource refresh either way.
+    let since: number | null
+    let up: boolean
+    let payloadArrived: boolean
+    let rate: number
+    try {
+      since = runningSince()
+      up = boxUp()
+      payloadArrived = warmth() !== undefined
+      rate = perHour()
+    } catch {
+      return
+    }
+    if (since !== accrualStamp) {
+      // A new switch-on, or this page's first observation of one: the meter
+      // restarts from its own stamp.
+      accrualStamp = since
+      accrualSeeded = false
+      accrualSawDown = false
+      accruedMs = 0
+      lastTickAt = now
+    }
+    if (since !== null) {
+      if (up) {
+        if (!accrualSeeded) {
+          accruedMs = accrualSawDown ? now - lastTickAt : now - since
+          accrualSeeded = true
+        } else {
+          accruedMs += now - lastTickAt
+        }
+      } else if (payloadArrived) {
+        // A payload arrived and says no box is up — unbilled time from here.
+        accrualSawDown = true
+      }
+    }
+    lastTickAt = now
+    setAccruedEur(since === null ? null : (accruedMs / 3_600_000) * rate)
+  }
+
+  // The strip's own 1-second countdown tick (TICK_INTERVAL_MS), reused rather
+  // than a second cadence invented: the meter and the header countdown then
+  // read the same second. The effect beside it recomputes on every payload
+  // and switch read too, so a flip or a poll answer shows up at once rather
+  // than a second late.
+  onMount(() => {
+    const tick = setInterval(() => accrue(Date.now()), TICK_INTERVAL_MS)
+    onCleanup(() => clearInterval(tick))
+  })
+  createEffect(() => {
+    accrue(Date.now())
+  })
 
   const fmtWhen = (ms: number) => new Date(ms).toLocaleString()
 
@@ -314,13 +425,12 @@ export default function Admin() {
                   <span font="mono" text="ui-text-primary">
                     ≥ {fmtEur(perHour())}/hour
                   </span>{' '}
-                  while up (27B ≥ {fmtEur(s().largeEurPerHour)}/h + 4B ≥{' '}
-                  {fmtEur(s().smallEurPerHour)}/h)
+                  while up ({rateBreakdown()})
                 </p>
                 <Show when={accruedEur() !== null}>
                   <p
                     text="xs ui-text-secondary"
-                    title="A floor: it counts the time since the switch was turned on, and adds neither the cold start before the first call nor the scale-down window after the last."
+                    title="A floor: it counts the time a box was actually up since the switch was turned on, and adds neither the cold start before the first call, the spans no box was up in, nor the scale-down window after the last."
                   >
                     ≥ <span font="mono">{fmtEur(accruedEur()!)}</span> so far — a floor, not the
                     bill.

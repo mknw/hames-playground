@@ -50,6 +50,7 @@ import { isAdminEmail } from '../auth/admin'
 import { getGpuState, setGpuState } from '../db/gpu-state.server'
 import { selfDeployedConfigured } from '../inference/config.server'
 import { ensurePrivateTierAwake } from '../inference/wake.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
 
 async function requireUser(): Promise<{ id: string; email: string }> {
@@ -61,13 +62,13 @@ async function requireUser(): Promise<{ id: string; email: string }> {
 /** The 403 a non-admin gets from every state-changing or state-reading export
  *  below. A `Response` rather than an `Error` so the refusal is the framework's
  *  own status channel — the wire carries 403, and the in-process caller
- *  (a test, server rendering) is handed a real Response to assert on. */
+ *  (a test, server rendering) is handed a real Response to assert on.
+ *
+ *  The wording names nothing: no capability, no configuration, no hint of how
+ *  access is granted. A refusal that explains itself teaches whoever it just
+ *  refused what to go looking for. */
 function forbidden(): Response {
-  return new Response(
-    'Administrator access is required for the GPU control panel. Set ADMIN_EMAILS ' +
-      '(see app/.env.example) to grant it.',
-    { status: 403 },
-  )
+  return new Response('You do not have access to this page.', { status: 403 })
 }
 
 /** The admin gate. Resolves the caller from the session the same way
@@ -107,6 +108,12 @@ export interface GpuAdminState {
   largeEurPerHour: number
   /** The small summarizer box's hourly rate (`SMALL_LLM_EUR_PER_HOUR`). */
   smallEurPerHour: number
+  /** True when the 27B rides the OpenRouter route (`LARGE_LLM_ROUTE=openrouter`):
+   *  a public per-token API is not a scale-to-zero box of ours, so the
+   *  keep-running loop keeps no 27B box up (the wake skips it for the same
+   *  reason, `wake.server.ts`) — and the panel's per-hour figure must skip
+   *  its rate for exactly as long, or it prices a box nobody is keeping. */
+  largeOnOpenRouter: boolean
 }
 
 /** Is THIS caller an admin? Never throws: a signed-out visitor is simply not
@@ -133,6 +140,7 @@ export async function getGpuAdminState(): Promise<GpuAdminState> {
     configured: selfDeployedConfigured(),
     largeEurPerHour: largeEurPerHour(),
     smallEurPerHour: smallLlmEurPerHour(),
+    largeOnOpenRouter: largeOnOpenRouter(),
   }
 }
 
@@ -145,8 +153,16 @@ export async function getGpuAdminState(): Promise<GpuAdminState> {
  * configured, for the same reason `igniteSelfDeployedBox` does: there is
  * nothing to keep running, and a switch that stored ON for an unreachable
  * deployment would spin the loop against a wall.
+ *
+ * The one argument is validated at the RPC boundary: the wire can carry
+ * anything as `on`, and the switch is written from it, so only a real
+ * boolean is accepted — anything else is refused with a 400 before a session
+ * is resolved and before anything is written.
  */
 export async function setGpuKeepRunning(on: boolean): Promise<GpuAdminState> {
+  if (typeof on !== 'boolean') {
+    throw new Response('The switch state must be a boolean (on or off).', { status: 400 })
+  }
   await requireAdmin()
   if (on && !selfDeployedConfigured()) {
     throw new Error(

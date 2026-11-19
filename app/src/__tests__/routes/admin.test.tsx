@@ -36,6 +36,7 @@ const ADMIN_STATE = {
   configured: true,
   largeEurPerHour: 4.6,
   smallEurPerHour: 1.07418,
+  largeOnOpenRouter: false,
 } as const
 
 const WARM_READY = {
@@ -113,8 +114,67 @@ describe('the admin page', () => {
     expect(line.textContent).toContain('€4.60/h')
     expect(line.textContent).toContain('€1.07/h')
     // Two hours at €5.67/h — a floor, labelled one.
-    expect(screen.getByText(/so far/).textContent).toContain('≥')
-    expect(screen.getByText(/so far/).textContent).toMatch(/€11\.\d\d/)
+    const soFar = await screen.findByText(/so far/)
+    expect(soFar.textContent).toContain('≥')
+    expect(soFar.textContent).toMatch(/€11\.\d\d/)
+  })
+
+  it('prices only the boxes the loop keeps: the 27B drops out on the OpenRouter route', async () => {
+    const since = Date.now() - 2 * 3_600_000 // two hours of the 4B alone
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      keepRunning: true,
+      switchedOnAt: since,
+      largeOnOpenRouter: true,
+    })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    const line = await screen.findByTestId('gpu-keep-since')
+    // The 4B's rate alone — the loop keeps no 27B box on that route, so the
+    // figure must not price one (the wake skips it for the same reason).
+    expect(line.textContent).toContain('€1.07/hour')
+    expect(line.textContent).not.toContain('€4.60')
+    expect(line.textContent).toContain('OpenRouter')
+    // Two hours at €1.07/h, not at €5.67/h.
+    const soFar = await screen.findByText(/so far/)
+    expect(soFar.textContent).toMatch(/€2\.15/)
+  })
+
+  it('ticks the "so far" figure while the page is open and a box is up', async () => {
+    mocks.admin.mockResolvedValue({ ...ADMIN_STATE, keepRunning: true, switchedOnAt: Date.now() })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    await screen.findByTestId('gpu-keep-since')
+    const read = () => screen.getByText(/so far/).textContent!.match(/€[\d.]+/)![0]
+    const first = read()
+    // The 1-second clock the strip's countdown uses: the meter moves on it,
+    // rather than freezing at page load until the next state change.
+    await waitFor(() => expect(read()).not.toBe(first), { timeout: 5_000 })
+  })
+
+  it('does not accrue while no box is up: the figure stays at zero until one is', async () => {
+    mocks.admin.mockResolvedValue({ ...ADMIN_STATE, keepRunning: true, switchedOnAt: Date.now() })
+    mocks.header.mockResolvedValue({
+      ...WARM_READY,
+      warmth: { ...WARM_READY.warmth, state: 'cold', secondsUntilScaledown: null },
+    })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    const soFar = await screen.findByText(/so far/)
+    // Long enough for several meter ticks: a wake that keeps failing buys no
+    // GPU time, so the meter must not grow while it fails.
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    expect(screen.getByText(/so far/).textContent).toBe(soFar.textContent)
+    expect(screen.getByText(/so far/).textContent).toMatch(/€0\.0000/)
   })
 
   it('flips the switch through the RPC and re-reads both halves', async () => {

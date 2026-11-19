@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 /**
  * Keep the GPUs running until switched off (#1047) — the server half.
  *
@@ -178,5 +181,37 @@ describe('gpuKeepTickMs', () => {
   it('refuses a non-positive override with the default', () => {
     vi.stubEnv('GPU_KEEP_TICK_MS', '0')
     expect(gpuKeepTickMs()).toBe(DEFAULT_GPU_KEEP_TICK_MS)
+  })
+})
+
+describe('the boot hook and the timer it arms', () => {
+  // Two pins the CI layer did not hold before review round 2: the loop's
+  // ARMING and its unref'd timer were covered only by browser scenario 21,
+  // which does not run in CI — removing either kept the unit suite green.
+
+  it('is armed from the server-boot hook, so it runs with no route opened', () => {
+    // A source scan, for the reason every middleware pin in this suite gives:
+    // importing `src/middleware.ts` for real would arm the routine scheduler,
+    // the usage recorder AND this loop in a unit run. Mutation: delete the
+    // call from `middleware.ts` and this reddens — the property only the
+    // browser layer covered before. The call must be a bare top-level
+    // statement: the loop is the one driver that acts with no browser
+    // attached, so an arming hidden behind a request would be no arming.
+    const middleware = readFileSync(join(__dirname, '../../../middleware.ts'), 'utf8')
+    const code = middleware.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    expect(code).toMatch(
+      /^import \{ startGpuKeepRunningLoop \} from '\.\/lib\/inference\/gpu-keep-running\.server'$/m,
+    )
+    expect(code).toMatch(/^startGpuKeepRunningLoop\(\)$/m)
+  })
+
+  it('unrefs the timer so it never holds the process open', () => {
+    const unref = vi.fn()
+    const spy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockReturnValue({ unref } as unknown as ReturnType<typeof setInterval>)
+    startGpuKeepRunningLoop(TICK)
+    expect(unref).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

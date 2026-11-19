@@ -7,7 +7,7 @@
  * `*@domain` wildcard behaves exactly as `allowList.ts`'s does — the two
  * lists share one syntax so an operator who learned one learned both.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { getAdminEmails, isAdminEmail } from '../../../lib/auth/admin'
 
 describe('getAdminEmails', () => {
@@ -20,6 +20,32 @@ describe('getAdminEmails', () => {
       'ada@example.com',
       'bob@example.com',
     ])
+  })
+
+  it('refuses a bare "*@" entry — a wildcard that names no domain — ignoring it and logging once', () => {
+    // "*@" can never match anything (no address ends in a bare "@"), so an
+    // operator who wrote it meant a domain. The parser drops it rather than
+    // keeping a dead entry, and says so ONCE per process — this parse runs on
+    // every admin check, so a per-call log would bury everything else.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(getAdminEmails('*@, ada@example.com')).toEqual(['ada@example.com'])
+    expect(getAdminEmails('*@')).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(1) // once, not once per parse
+    expect(warn.mock.calls[0][0]).toContain('*@')
+    warn.mockRestore()
+  })
+
+  it('NFKC-normalizes entries, so compatibility characters fold before the comparison', () => {
+    // Fullwidth Latin — the NFKC class that stands in for plain ASCII. On the
+    // LIST side and on the CHECKED side the same fold applies, so one
+    // spelling written with compatibility characters is one address, not a
+    // second one to keep in step by hand.
+    const fullwidth = 'ａｄａ＠ｅｘａｍｐｌｅ．ｃｏｍ'
+    expect(getAdminEmails(fullwidth)).toEqual(['ada@example.com'])
+    expect(isAdminEmail('ada@example.com', [fullwidth])).toBe(true)
+    expect(isAdminEmail(fullwidth, ['ada@example.com'])).toBe(true)
+    // The fold is form, not identity: a different address still does not match.
+    expect(isAdminEmail('mallory@example.com', [fullwidth])).toBe(false)
   })
 })
 

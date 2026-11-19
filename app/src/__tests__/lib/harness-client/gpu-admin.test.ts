@@ -152,6 +152,10 @@ describe('the admin gate', () => {
     configureDeployment()
     getAuthenticatedUser.mockResolvedValue({ id: 'user-2', email: PEON })
     await expectForbidden(getGpuAdminState())
+    // And the refusal's WORDING names nothing the visitor could act on: no
+    // capability, no configuration, no hint of how access is granted.
+    const body = await (await expectForbidden(getGpuAdminState())).text()
+    expect(body).toBe('You do not have access to this page.')
   })
 
   it('refuses a non-admin the SWITCH with the same 403, writing nothing', async () => {
@@ -211,7 +215,20 @@ describe('the panel state', () => {
       configured: true,
       largeEurPerHour: 4.6,
       smallEurPerHour: 1.07418,
+      largeOnOpenRouter: false,
     })
+  })
+
+  it('carries whether the 27B is one of the boxes the loop keeps — it is not on the OpenRouter route', async () => {
+    // The payload's per-hour figure prices the boxes the keep-running loop
+    // keeps up, and on `LARGE_LLM_ROUTE=openrouter` the loop (like the wake,
+    // `wake.server.ts`) keeps no 27B box — so the panel must be TOLD that,
+    // or it would price a box nobody is keeping.
+    configureDeployment()
+    process.env.LARGE_LLM_ROUTE = 'openrouter'
+    expect((await getGpuAdminState()).largeOnOpenRouter).toBe(true)
+    delete process.env.LARGE_LLM_ROUTE
+    expect((await getGpuAdminState()).largeOnOpenRouter).toBe(false)
   })
 })
 
@@ -268,5 +285,23 @@ describe('the switch', () => {
     expect((thrown as Error).message).toContain('did not wake')
     // The write happened BEFORE the wake and is not rolled back.
     expect(setGpuState).toHaveBeenCalledWith(true)
+  })
+
+  it('refuses a non-boolean switch state with a 400 and writes nothing', async () => {
+    configureDeployment()
+    for (const garbage of ['true', 1, null, undefined, { on: true }]) {
+      let thrown: unknown
+      try {
+        await setGpuKeepRunning(garbage as never)
+      } catch (err) {
+        thrown = err
+      }
+      expect(thrown, `the wire value ${String(garbage)} must be refused`).toBeInstanceOf(Response)
+      expect((thrown as Response).status).toBe(400)
+    }
+    // Refused before anything ran: no write, no wake, and no session lookup.
+    expect(setGpuState).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(getAuthenticatedUser).not.toHaveBeenCalled()
   })
 })

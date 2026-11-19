@@ -286,6 +286,19 @@ export default function Home() {
     splitterApi().expandPanel('support', SUPPORT_EXPANDED_SIZE)
   }
 
+  // A citation click (#1046 review): the reference must land in the Data
+  // Stash viewer, which lives on the support panel — a panel that now
+  // starts collapsed. Setting the reference alone (what this did before)
+  // only switched the tab of an inert, 0-width panel, so the click did
+  // nothing visible on a first visit. It goes through the rail's own
+  // path — `openSupportTab('data')` — so it expands the panel and selects
+  // the Data tab in one move, and SupportPanel still switches to the
+  // viewer from the same pendingReference.
+  const handleOpenReference = (target: OpenReferenceTarget) => {
+    setPendingReference(target)
+    openSupportTab('data')
+  }
+
   const splitterApi = useSplitter({
     orientation: 'horizontal',
     // Collapsed from the FIRST paint (#1046), so SSR HTML and hydrated
@@ -457,7 +470,7 @@ export default function Home() {
                   onSelectedAgentChange={handleSelectedAgentChange}
                   graphEntityNames={graphEntityNames()}
                   onHighlightEntities={setHighlightedIds}
-                  onOpenReference={setPendingReference}
+                  onOpenReference={handleOpenReference}
                   embeddingSources={embeddingSources()}
                   onRunStarted={handleRunStarted}
                   onRunSettled={handleRunSettled}

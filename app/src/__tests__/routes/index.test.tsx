@@ -863,6 +863,32 @@ describe('chat route — the support panel collapses (#933, collapsed by default
     expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
     expect(railOnScreen()).toBe(false)
     expect(supportInert()).toBe(false)
+    // #1054 review: the toggle names the expanded width, not minSize 30 —
+    // without the floor this first expansion falls back to the panel minimum.
+    expect(supportShare()).toBe(40)
+  })
+
+  it('a citation click on the collapsed panel expands it onto the Data tab (#1054 review)', async () => {
+    // The default boot is collapsed, which is what the regression needs: before
+    // #1046 the panel started expanded, so a citation opened the Data Stash
+    // viewer. Passing the target to `setPendingReference` alone only switches
+    // the tab inside an inert, 0-width panel — the click does nothing visible.
+    // It has to go through the same expansion the rail uses.
+    await mount()
+    expect(railOnScreen()).toBe(true) // the precondition: collapsed
+
+    chat.onOpenReference({ docId: 'doc-1', startOffset: 10, endOffset: 40 })
+    await tick(10)
+
+    // The panel is expanded and live, not inert — the reference is visible.
+    expect(railOnScreen()).toBe(false)
+    expect(supportInert()).toBe(false)
+    expect(supportShare()).toBe(40)
+    // And it landed on the Data tab, with the reference itself passed on.
+    expect(support.openTab).toBe('data')
+    expect(support.pendingReference).toEqual({ docId: 'doc-1', startOffset: 10, endOffset: 40 })
+    // The expansion records the choice like every other way of expanding.
+    expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
   })
 
   it('restores an explicit expanded choice on mount, at the expanded width', async () => {
@@ -884,6 +910,9 @@ describe('chat route — the support panel collapses (#933, collapsed by default
     rail.onExpand('data')
     await tick(10)
     expect(support.openTab).toBe('data')
+    // #1054 review: the rail expansion names the expanded width too, not
+    // minSize 30 — same floor as the toggle, on the other expansion path.
+    expect(supportShare()).toBe(40)
     // And the expansion records itself too — the choice is whatever the
     // panel is showing, however it got there.
     expect(localStorage.getItem('support-panel.collapsed')).toBe('false')

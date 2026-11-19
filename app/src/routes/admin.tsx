@@ -74,6 +74,16 @@ export const GPU_KEEP_STARTING = 'starting the boxes…'
  *  secrets, and hands the visitor back to the chat. */
 export const GPU_ADMIN_FORBIDDEN = 'Admin only'
 
+/** How long each state read the page makes gets to answer before it counts as
+ *  failed. A read that never settles would otherwise wedge everything that
+ *  waits on the serialized read cycle: the poll skips every later tick while a
+ *  cycle is "in flight", and a flip — whose re-read rides the same cycle —
+ *  would sit on "starting the boxes…" until a reload. A timed-out read keeps
+ *  the last good payload like any other failure, and the next tick replaces it.
+ *  Deliberately NOT applied to the flip RPC itself: a cold wake is minutes by
+ *  design, and `setGpuKeepRunning` is the one call allowed to take them. */
+export const GPU_READ_TIMEOUT_MS = 10_000
+
 export default function Admin() {
   // Client-side only: the fetches below are the permission check, and SSR has
   // no session worth consulting for a page whose every action re-checks it.
@@ -93,6 +103,13 @@ export default function Admin() {
    *  (or the failure) the forbidden panel renders. A later read that fails
    *  keeps the payload it has and never touches this. */
   const [refused, setRefused] = createSignal(false)
+  /** Set by the first read's 403 and never cleared: the refusal says who the
+   *  caller is, not a condition the next 15 seconds can change, so once the
+   *  admin endpoint has refused this caller the poll stops calling it — and
+   *  everything else too, since the forbidden panel replaced all of what the
+   *  poll refreshed. A plain variable rather than a signal: it is read inside
+   *  `poll()`, outside any tracked scope, and nothing renders from it. */
+  let refusedForGood = false
 
   // The toggle's own pending/error channel: a wake can take minutes, and a
   // failure here is the difference between "the boxes are coming" and "the
@@ -106,16 +123,51 @@ export default function Admin() {
    *  is a payload to keep. */
   let haveAdminPayload = false
 
+  /** The HTTP status a failure carries, when it carries one. A `'use server'`
+   *  refusal travels as a thrown `Response` — the framework's own status
+   *  channel, which the wire carries untouched — so the 403 reaches this page
+   *  as an object with a status. Read structurally rather than with
+   *  `instanceof Response` so nothing depends on which Response implementation
+   *  crossed the wire. */
+  const statusOf = (err: unknown): number | null => {
+    if (typeof err !== 'object' || err === null || !('status' in err)) return null
+    const status = (err as { status: unknown }).status
+    return typeof status === 'number' ? status : null
+  }
+
+  /** Race a read against its timeout, so one that never settles reads as a
+   *  FAILURE after `GPU_READ_TIMEOUT_MS` instead of hanging its cycle forever.
+   *  The losing request is left to settle on its own — there is nothing here
+   *  that can cancel a fetch the framework owns — and whatever it might still
+   *  land is discarded by the cycle that already moved on. */
+  const withReadTimeout = <T,>(read: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`The GPU state read did not answer in ${GPU_READ_TIMEOUT_MS / 1000}s`)),
+        GPU_READ_TIMEOUT_MS,
+      )
+    })
+    return Promise.race([read, expired]).finally(() => clearTimeout(timer))
+  }
+
   /** Read the admin payload. A failed read KEEPS the last good payload: the
    *  poll's next cycle replaces it, and only a failure with nothing to keep
    *  is the refusal the page must show. */
   const loadAdmin = async () => {
     try {
-      setAdmin(await getGpuAdminState())
+      setAdmin(await withReadTimeout(getGpuAdminState()))
       haveAdminPayload = true
       setRefused(false)
-    } catch {
+    } catch (err) {
       if (!haveAdminPayload) setRefused(true)
+      // A 403 is the one failure a poll cannot outlive: it says who the
+      // caller is, and no later tick changes that, so after it the poll
+      // stops calling this endpoint. Every other failure — a timeout, a
+      // network error — keeps the last good payload and lets the next tick
+      // retry, because those CAN clear.
+      if (!haveAdminPayload && statusOf(err) === 403) refusedForGood = true
     }
   }
 
@@ -124,7 +176,7 @@ export default function Admin() {
    *  until a cycle can replace it. */
   const loadWarmth = async () => {
     try {
-      setWarmth(asHeaderState(await getPreviewHeaderState()))
+      setWarmth(asHeaderState(await withReadTimeout(getPreviewHeaderState())))
     } catch {
       // keeps the last good payload
     }
@@ -150,6 +202,7 @@ export default function Admin() {
    *  next tick catches up, and a slow read never piles fetches behind it. */
   let pollActive = false
   const poll = () => {
+    if (refusedForGood) return // a non-admin's page stops asking after the refusal
     if (pollActive) return
     pollActive = true
     void readBoth().finally(() => {
@@ -269,7 +322,11 @@ export default function Admin() {
   // keeping up and paying for.
   //
   // So the meter ACCRUES per box: it adds time only while the live payload
-  // shows that box up, and freezes for a box while it does not. `ready` and
+  // shows that box up, and freezes for a box while it does not — but what a
+  // box has ALREADY accrued stays in the figure while it is down (round 6:
+  // dropping it made "so far" fall to €0 the moment a box went down and back
+  // when it returned), because the figure is what this switch-on has spent so
+  // far, not what is up right now. `ready` and
   // `answering` are completion evidence — the deployment answered a real
   // request — while `starting` is a wake in flight with no evidence yet, so
   // it does NOT count: the cold start it may end in is one of the spans the
@@ -331,19 +388,26 @@ export default function Admin() {
         // A box the loop does not keep — the 27B on the OpenRouter route —
         // has no rate and no meter state: nothing is being bought for it.
         if (rates[box] <= 0) continue
-        if (!up[box]) continue
-        if (!seeded[box]) {
-          seeded[box] = true
-          const boxUpSince = upSince[box]
-          // From the server's recorded up-since when there is one — never
-          // the cold start before the box first came up — clamped at the
-          // stamp (a box already up at the flip is billed from the flip);
-          // from this page's own observation when there is not.
-          const from = boxUpSince !== null ? Math.max(boxUpSince, since) : lastTickAt
-          accruedUpMs[box] = now - from
-        } else {
-          accruedUpMs[box] += now - lastTickAt
+        if (up[box]) {
+          if (!seeded[box]) {
+            seeded[box] = true
+            const boxUpSince = upSince[box]
+            // From the server's recorded up-since when there is one — never
+            // the cold start before the box first came up — clamped at the
+            // stamp (a box already up at the flip is billed from the flip);
+            // from this page's own observation when there is not.
+            const from = boxUpSince !== null ? Math.max(boxUpSince, since) : lastTickAt
+            accruedUpMs[box] = now - from
+          } else {
+            accruedUpMs[box] += now - lastTickAt
+          }
         }
+        // What a box has ALREADY cost this switch-on stays in the figure
+        // while that box is down: a down box only stops ADDING time.
+        // Skipping the whole box here made the figure fall to €0 the moment
+        // a box went down and spring back when it returned — the round-6
+        // blocking defect. A box never observed up is unseeded and adds
+        // zero, so a cold box still bills nothing.
         eur += (accruedUpMs[box] / 3_600_000) * rates[box]
       }
     }
@@ -545,7 +609,7 @@ export default function Admin() {
                 <Show when={accruedEur() !== null}>
                   <p
                     text="xs ui-text-secondary"
-                    title="A floor: it counts, for each box, the time that box was actually up since the switch was turned on — charging from the box's recorded up-since, so neither the cold start before it first came up nor a reload re-adds that span — and adds neither the spans a box was down in nor the scale-down window after the last answer. A server restart loses the up-since, and the count then starts from what this page observed itself."
+                    title="A floor: it counts, for each box, the time that box was actually up since the switch was turned on — charging from the box's recorded up-since, so neither the cold start before it first came up nor a reload re-adds that span — and adds neither the spans a box was down in nor the scale-down window after the last answer. What a box already cost stays in the figure while it is down: a down box only stops adding time. A server restart loses the up-since, and the count then starts from what this page observed itself."
                   >
                     ≥ <span font="mono">{fmtEur(accruedEur()!)}</span> so far — a floor, not the
                     bill.

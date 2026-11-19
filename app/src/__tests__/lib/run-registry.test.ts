@@ -14,8 +14,18 @@ import {
   type SessionRunState,
 } from '../../lib/run-registry'
 
-const running = (): SessionRunState => ({ isProcessing: true, runningTool: null, warming: null })
-const idle = (): SessionRunState => ({ isProcessing: false, runningTool: null, warming: null })
+const running = (): SessionRunState => ({
+  isProcessing: true,
+  runningTool: null,
+  warming: null,
+  watching: false,
+})
+const idle = (): SessionRunState => ({
+  isProcessing: false,
+  runningTool: null,
+  warming: null,
+  watching: false,
+})
 
 describe('countRunning', () => {
   it('counts only sessions with a stream open', () => {
@@ -24,6 +34,25 @@ describe('countRunning', () => {
 
   it('is 0 for an empty registry', () => {
     expect(countRunning({})).toBe(0)
+  })
+
+  // #1045: an adopted turn is a running turn server-side, so it counts against
+  // the cap exactly as a streamed one does — `watching` only changes what the
+  // bar renders, never the concurrency arithmetic.
+  it('counts a session that is watching a server-side turn', () => {
+    const watching = (): SessionRunState => ({
+      ...running(),
+      watching: true,
+    })
+    expect(countRunning({ a: watching(), b: idle() })).toBe(1)
+  })
+
+  it('defaults `watching` off, so a plain run never renders the adopted bar', () => {
+    // The flag exists for one purpose: the bar of a turn with no stream to
+    // seed its denominator. If it defaulted on, every ordinary turn would show
+    // the indeterminate bar alongside the seeded one.
+    expect(idle().watching).toBe(false)
+    expect(running().watching).toBe(false)
   })
 })
 

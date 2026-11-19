@@ -128,13 +128,26 @@ export interface PersistedTurn {
 }
 
 /**
+ * The estimate fields of a `WarmingEventData`, as the turn-state action carries
+ * them — the session id is added by the caller that knows the conversation.
+ * Structurally `ColdStartEstimate`, so the server can hand its own type across.
+ */
+export type TurnWarmingEstimate = Omit<WarmingEventData, 'sessionId'>
+
+/**
  * How a turn whose live stream is lost still reaches its answer. The turn keeps
  * running on the server when its stream stops, and its save is what a reload
  * shows, so the client waits for the save and shows that instead.
  */
 export interface TurnRecovery {
-  /** Whether a turn still holds the conversation; `null` when it has no row. */
-  turnState(): Promise<{ turnInFlight: boolean } | null>
+  /**
+   * Whether a turn still holds the conversation; `null` when it has no row.
+   * `warming`, when the reader supplies it, is the estimate for a turn that is
+   * waiting on a cold self-hosted box right now — the adoption path
+   * (`adoptRunningTurn`) watches it to retract its notice when the wait ends,
+   * since no frame will ever arrive to do it.
+   */
+  turnState(): Promise<{ turnInFlight: boolean; warming?: TurnWarmingEstimate | null } | null>
   /** The persisted conversation, once no turn holds it. */
   load(): Promise<PersistedTurn>
   /** Replace this conversation's transcript and panels with `turn`. */
@@ -423,10 +436,14 @@ function pendingRequestIds(
  * transient read failure polls again; Stop (the turn's signal) ends the wait
  * as a teardown. A conversation that never gets a row throws, which the caller
  * paints as an error: there is no saved turn to show.
+ *
+ * `observe` sees every poll that found a row, for the one consumer whose notice
+ * has no frames to clear it (`adoptRunningTurn`).
  */
 async function awaitPersistedTurn(
   recovery: TurnRecovery,
   signal: AbortSignal,
+  observe?: (state: { turnInFlight: boolean; warming?: TurnWarmingEstimate | null }) => void,
 ): Promise<PersistedTurn> {
   let missing = 0
   for (;;) {
@@ -435,6 +452,7 @@ async function awaitPersistedTurn(
       console.warn('[turn] could not read whether the turn finished; retrying:', err)
       return undefined
     })
+    if (state) observe?.(state)
     if (state && !state.turnInFlight) return recovery.load()
     if (state === null && ++missing >= RECOVERY_MISSING_POLLS) {
       throw new Error('The response stream was lost and the conversation was not saved.')
@@ -476,4 +494,86 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /** Stop during the wait is a teardown, the same `AbortError` a Stop mid-stream raises. */
 function stopped(): DOMException {
   return new DOMException('Stopped while waiting for the saved turn', 'AbortError')
+}
+
+// ============================================================================
+// Adoption — a turn found already running (#1045)
+// ============================================================================
+
+/**
+ * Adopt a turn that is ALREADY running on the server: what a page that was
+ * reloaded (or opened elsewhere) mid-run shows.
+ *
+ * The tab has no stream to read — the frames it missed are gone, and what the
+ * turn saves is the only record — so this is the lost-stream recovery's shape
+ * exactly (poll the lease, then load and rehydrate what the turn saved), plus
+ * the two things a reload adds:
+ *
+ *  - the RUNNING state is announced at once, before any poll: the composer
+ *    blocks and the sidebar strip runs, which is the whole #1045 fix — a
+ *    running turn used to read as idle because `isProcessing` was per-tab
+ *    memory the teardown erased and nothing re-derived it from the server;
+ *  - a GPU wait the turn is still inside is put on screen from the server's
+ *    own estimate, because no warming frame will ever arrive to do it. The
+ *    wire rule — "the next frame of any kind clears the notice" — cannot
+ *    apply to a tab with no frames, so the poll carries the retraction
+ *    instead: the notice comes down the moment the server no longer reports
+ *    the turn as waiting, and again when the turn settles.
+ *
+ * Stop means what it means for a lost stream: this tab stops WATCHING. The
+ * turn keeps running server-side and persists its result either way.
+ */
+export async function adoptRunningTurn(
+  sessionId: string,
+  recovery: TurnRecovery,
+  sink: TurnSink,
+  signal: AbortSignal,
+  warming: TurnWarmingEstimate | null,
+): Promise<TurnResult> {
+  const transition = (state: TurnState): TurnState => {
+    sink.onState(state)
+    return state
+  }
+  let noticeUp = false
+  if (warming) {
+    noticeUp = true
+    sink.onWarming({ sessionId, ...warming })
+  }
+  transition({ status: 'streaming', runningTool: null })
+  try {
+    const persisted = await awaitPersistedTurn(recovery, signal, (state) => {
+      if (noticeUp && !state.warming) {
+        noticeUp = false
+        sink.onWarming(null)
+      }
+    })
+    if (noticeUp) {
+      noticeUp = false
+      sink.onWarming(null)
+    }
+    sink.finishProgress()
+    recovery.rehydrate(persisted)
+    const settled = settlePersisted(persisted)
+    return { state: transition(settled.state), outcome: settled.outcome, aborted: false }
+  } catch (error) {
+    if (noticeUp) {
+      noticeUp = false
+      sink.onWarming(null)
+    }
+    sink.finishProgress()
+    // An AbortError is this tab's Stop: the turn runs on regardless, so the
+    // caller renders its "stopped watching" note rather than a failure.
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return { state: transition({ status: 'stopped' }), outcome: 'done', aborted: true }
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error('Error waiting for the running turn:', error)
+    sink.appendMessage({
+      id: Date.now().toString(),
+      role: 'error',
+      content: message,
+      timestamp: new Date(),
+    })
+    return { state: transition({ status: 'error', message }), outcome: 'error', aborted: false }
+  }
 }

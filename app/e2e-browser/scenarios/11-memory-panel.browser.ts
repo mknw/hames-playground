@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '../lib/fixtures'
 import { open } from '../lib/chat'
+import { openSupportTab } from '../lib/support'
 import { BYPASS_USER_ID, TEST_DATABASE_URL } from '../lib/env'
 
 for (const theme of ['dark', 'light'] as const) {
@@ -14,7 +15,7 @@ for (const theme of ['dark', 'light'] as const) {
     appUrl,
   }) => {
     await open(page, appUrl, { theme })
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     const panel = page.getByRole('region', { name: 'What I remember about you' })
     await expect(panel.getByText('No saved memories.')).toBeVisible()
     const toggle = panel.getByRole('checkbox', { name: 'Memory enabled' })
@@ -43,7 +44,7 @@ for (const theme of ['dark', 'light'] as const) {
       await client.end()
     }
     await page.reload()
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     await expect(panel.getByText('I prefer synthetic examples', { exact: true })).toBeVisible()
     await expect(panel.getByText('Merged from 3')).toBeVisible()
     await expect(panel.getByText('Merged from 1', { exact: true })).toHaveCount(0)
@@ -103,7 +104,7 @@ for (const theme of ['dark', 'light'] as const) {
       await reseed.end()
     }
     await page.reload()
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     await expect(panel.getByText('Synthetic again', { exact: true })).toBeVisible()
     await panel.getByRole('button', { name: 'Forget everything', exact: true }).click()
     await dialog.getByRole('button', { name: 'Confirm forget everything' }).click()
@@ -111,7 +112,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(panel.getByText('No saved memories.')).toBeVisible()
     await expect(toggle).not.toBeChecked()
     await page.reload()
-    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await openSupportTab(page, 'memory')
     await expect(panel.getByText('No saved memories.')).toBeVisible()
     await expect(toggle).not.toBeChecked()
     const report = await new AxeBuilder({ page })

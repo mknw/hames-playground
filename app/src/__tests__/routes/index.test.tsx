@@ -823,16 +823,82 @@ describe('chat route — the embedding guard', () => {
   })
 })
 
-describe('chat route — the support panel collapses (#933)', () => {
-  it('starts expanded and the toggle collapses it, persisting the choice', async () => {
-    await mount()
-    expect(rail).toBeUndefined() // no rail while expanded
+describe('chat route — the support panel collapses (#933, collapsed by default since #1046)', () => {
+  // #935 review SHOULD: the collapsed panel stays mounted at 0 width (for
+  // `lazyMount`), so its invisible tab strip must not stay keyboard-reachable.
+  // Solid compiles boolean attributes to property assignment, and jsdom does
+  // not reflect the `inert` property back onto the attribute — so the DOM
+  // claim is read through the reflected property, which is the same fact a
+  // real browser exposes as the attribute.
+  const supportPanelEl = () => document.querySelector('[data-id="support"]') as HTMLElement
+  const supportInert = () => supportPanelEl().inert === true
+  /** Whether the rail is on screen NOW. The stubbed component's captured
+   *  `rail` props object outlives its unmount, so it can only prove a rail
+   *  mounted at some point — never that one went away. */
+  const railOnScreen = () => document.querySelector('[data-testid="support-rail"]') !== null
+  /** The panel's flex share — 0 is the collapsed rail's layout, 40 the
+   *  expanded one. Read through `parseFloat` because the splitter hands the
+   *  browser `toPrecision(3)` strings ('0.00', '40.0'). */
+  const supportShare = () => parseFloat(supportPanelEl().style.flexGrow)
 
+  // The #1046 change itself: with no stored choice the FIRST render is the
+  // rail's — the layout the server also renders, so nothing expands and then
+  // jumps to collapsed on mount. Without the change this fails on rail and
+  // inert and share alike.
+  it('starts collapsed when no choice was ever stored (#1046)', async () => {
+    await mount()
+    expect(railOnScreen()).toBe(true) // the icons-only rail, from the first render
+    expect(supportInert()).toBe(true)
+    expect(supportShare()).toBe(0)
+    expect(localStorage.getItem('support-panel.collapsed')).toBeNull() // nothing was written for the default
+  })
+
+  it('the toggle expands a collapsed panel, persisting the choice', async () => {
+    await mount()
+    // The stub's `onCollapse` is the route's toggle; the panel starts
+    // collapsed, so the first press expands.
     support.onCollapse()
     await tick(10)
 
-    expect(localStorage.getItem('support-panel.collapsed')).toBe('true')
-    expect(rail).toBeDefined() // the icons-only rail takes the panel's place
+    expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
+    expect(railOnScreen()).toBe(false)
+    expect(supportInert()).toBe(false)
+    // #1054 review: the toggle names the expanded width, not minSize 30 —
+    // without the floor this first expansion falls back to the panel minimum.
+    expect(supportShare()).toBe(40)
+  })
+
+  it('a citation click on the collapsed panel expands it onto the Data tab (#1054 review)', async () => {
+    // The default boot is collapsed, which is what the regression needs: before
+    // #1046 the panel started expanded, so a citation opened the Data Stash
+    // viewer. Passing the target to `setPendingReference` alone only switches
+    // the tab inside an inert, 0-width panel — the click does nothing visible.
+    // It has to go through the same expansion the rail uses.
+    await mount()
+    expect(railOnScreen()).toBe(true) // the precondition: collapsed
+
+    chat.onOpenReference({ docId: 'doc-1', startOffset: 10, endOffset: 40 })
+    await tick(10)
+
+    // The panel is expanded and live, not inert — the reference is visible.
+    expect(railOnScreen()).toBe(false)
+    expect(supportInert()).toBe(false)
+    expect(supportShare()).toBe(40)
+    // And it landed on the Data tab, with the reference itself passed on.
+    expect(support.openTab).toBe('data')
+    expect(support.pendingReference).toEqual({ docId: 'doc-1', startOffset: 10, endOffset: 40 })
+    // The expansion records the choice like every other way of expanding.
+    expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
+  })
+
+  it('restores an explicit expanded choice on mount, at the expanded width', async () => {
+    localStorage.setItem('support-panel.collapsed', 'false')
+    await mount()
+    expect(railOnScreen()).toBe(false)
+    expect(supportInert()).toBe(false)
+    // 40, not the panel's minSize 30: the expansion names the width, because
+    // a panel that starts collapsed has no pre-collapse size to restore.
+    expect(supportShare()).toBe(40)
   })
 
   it('restores a persisted collapsed choice on mount and expands from the rail', async () => {
@@ -844,30 +910,25 @@ describe('chat route — the support panel collapses (#933)', () => {
     rail.onExpand('data')
     await tick(10)
     expect(support.openTab).toBe('data')
+    // #1054 review: the rail expansion names the expanded width too, not
+    // minSize 30 — same floor as the toggle, on the other expansion path.
+    expect(supportShare()).toBe(40)
     // And the expansion records itself too — the choice is whatever the
     // panel is showing, however it got there.
     expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
   })
 
-  // #935 review SHOULD: the collapsed panel stays mounted at 0 width (for
-  // `lazyMount`), so its invisible tab strip must not stay keyboard-reachable.
-  // Solid compiles boolean attributes to property assignment, and jsdom does
-  // not reflect the `inert` property back onto the attribute — so the DOM
-  // claim is read through the reflected property, which is the same fact a
-  // real browser exposes as the attribute.
-  const supportPanelEl = () => document.querySelector('[data-id="support"]') as HTMLElement
-  const supportInert = () => supportPanelEl().inert === true
   it('marks the support panel inert while collapsed, focusable again when expanded', async () => {
     await mount()
-    expect(supportInert()).toBe(false)
-
-    support.onCollapse()
-    await tick(10)
     expect(supportInert()).toBe(true)
 
-    rail.onExpand()
+    support.onCollapse() // the toggle — expands, since it starts collapsed
     await tick(10)
     expect(supportInert()).toBe(false)
+
+    support.onCollapse() // and back
+    await tick(10)
+    expect(supportInert()).toBe(true)
   })
 })
 describe('chat route — the use-cases draft', () => {

@@ -2,6 +2,7 @@
 import pg from 'pg'
 import { test, expect } from '../lib/fixtures'
 import { open } from '../lib/chat'
+import { openSupportTab } from '../lib/support'
 import { BYPASS_USER_ID, TEST_DATABASE_URL } from '../lib/env'
 import { expectReadable } from '../lib/visible'
 
@@ -67,7 +68,7 @@ for (const theme of ['light', 'dark'] as const) {
     await open(page, appUrl, { theme })
     await seedConversation(id)
     await page.goto(`${appUrl}/?c=${id}`)
-    await page.getByRole('tab', { name: 'Context manager' }).click()
+    await openSupportTab(page, 'stats')
     // Since #1010 a controller's events sit in a section that starts
     // collapsed; open it so its rows can be clicked.
     await page.locator('[data-scope="collapsible"][data-part="trigger"]').first().click()

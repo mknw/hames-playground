@@ -1884,6 +1884,26 @@ function nonThinkingControllerClient(): string {
   return client
 }
 
+/** Both actor and critic require Attempt.result, including failed or skipped
+ * attempts and successful calls whose data serialized to undefined (#1035).
+ * Label the absence explicitly; it is not a tool result or evidence of success. */
+function toAttempts(events: readonly ScriptExecutionEvent[]): Attempt[] {
+  return events.map((event, i) => ({
+    n: i + 1,
+    action: {
+      reasoning: '',
+      tool_name: event.toolName ?? 'unknown',
+      tool_args: event.script,
+      ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
+      status: event.error ? 'error' : 'success',
+      is_final: false,
+    },
+    result: event.output || '[No output was produced for this attempt.]',
+    error: event.error ?? undefined,
+    feedback: event.feedback,
+  }))
+}
+
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,
 ): ActorFn & LegacyActorFn {
@@ -1935,23 +1955,7 @@ export function createActorControllerAdapter(
     // constructs the events itself. `additionalCalls` (multi-call attempts)
     // replays into the action so the attempt log shows the batch shape the
     // actor actually emitted (exact-replay invariant).
-    const attempts: Attempt[] = input.previousAttempts.map((event, i) => ({
-      n: i + 1,
-      action: {
-        reasoning: '',
-        tool_name: event.toolName ?? 'unknown',
-        tool_args: event.script,
-        ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
-        status: event.error ? 'error' : 'success',
-        is_final: false,
-      },
-      result: event.output,
-      error: event.error ?? undefined,
-      // The critic's reason for rejecting this attempt (SA-C1). Hardcoded
-      // `undefined` here made `ActorAttemptLog`'s CRITIC FEEDBACK block dead
-      // code, so every retry ran blind.
-      feedback: event.feedback,
-    }))
+    const attempts = toAttempts(input.previousAttempts)
 
     // Adapter-level context (static prefix or per-call provider), with an
     // upstream plan (#27) leading when one was threaded through by actorCritic,
@@ -2120,23 +2124,7 @@ export function createCriticAdapter(): CriticAdapterFn {
 
     // Convert ScriptExecutionEvent to Attempt format. See the actor adapter
     // above for why `toolName` carries the actor's real tool name.
-    const attempts: Attempt[] = previous_attempts.map((event, i) => ({
-      n: i + 1,
-      action: {
-        reasoning: '',
-        tool_name: event.toolName ?? 'unknown',
-        tool_args: event.script,
-        ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
-        status: event.error ? 'error' : 'success',
-        is_final: false,
-      },
-      result: event.output,
-      error: event.error ?? undefined,
-      // The critic's reason for rejecting this attempt (SA-C1). Hardcoded
-      // `undefined` here made `ActorAttemptLog`'s CRITIC FEEDBACK block dead
-      // code, so every retry ran blind.
-      feedback: event.feedback,
-    }))
+    const attempts = toAttempts(previous_attempts)
 
     const variables = { intent, attempts }
 

@@ -30,6 +30,15 @@ export interface SessionRunState {
    * (`preview-header-format.ts`, `remainingSeconds`, same reasoning).
    */
   warming: WarmingNotice | null
+  /**
+   * This tab is WATCHING a turn that runs on the server — a page (re)loaded
+   * mid-run adopted it (#1045). Set alongside `isProcessing` for exactly as
+   * long as the adoption waits. The distinction is the chat bar's: an adopted
+   * turn has no stream, so no event will ever seed the bar's denominator, and
+   * without this flag the running state would block the composer while showing
+   * nothing where the answer will land.
+   */
+  watching: boolean
 }
 
 /**
@@ -50,6 +59,7 @@ export const DEFAULT_RUN_STATE: SessionRunState = {
   isProcessing: false,
   runningTool: null,
   warming: null,
+  watching: false,
 }
 
 // ============================================================================

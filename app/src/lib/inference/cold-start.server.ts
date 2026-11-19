@@ -300,8 +300,16 @@ function estimateFor(box: WakeBox): ColdStartEstimate {
     : { estimateMs: measured, basis: 'measured', samples: values.length }
 }
 
-/** The larger outstanding wait owns the countdown, including its actual basis. */
-function pendingEstimate(now: number): ColdStartEstimate {
+/**
+ * The estimate for whatever is outstanding RIGHT NOW: the larger of the two
+ * boxes' figures, over the boxes that are not proven warm. This is what the
+ * warming frame sends a turn that is about to wait, and — since #1045 — what
+ * the turn-state action sends a page that LOADED while a turn was already
+ * waiting, so a reload can put the same notice back on screen.
+ *
+ * The larger wait owns the countdown, including its actual basis.
+ */
+export function pendingColdStartEstimate(now: number): ColdStartEstimate {
   const estimates = [
     ...(!largeProvenWarm(now) ? [estimateFor('large')] : []),
     ...(!smallProvenWarm(now) ? [estimateFor('small')] : []),
@@ -428,7 +436,7 @@ export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
   if (watch.fired) return
   watch.fired = true
   try {
-    watch.notify(pendingEstimate(now))
+    watch.notify(pendingColdStartEstimate(now))
   } catch (err) {
     console.error('[cold-start] the warming listener threw; the turn is unaffected:', err)
   }

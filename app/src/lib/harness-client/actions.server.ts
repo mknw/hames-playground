@@ -40,12 +40,15 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import {
   chooseConversationTier,
   privateInferenceOnly,
+  resolveConversationTier,
   resolveTier,
   selfDeployedConfigured,
 } from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
 import { DEFAULT_AGENT_ID } from './agent-ids'
+import { largeWakeInFlight, smallWakeInFlight } from '../inference/wake.server'
+import { pendingColdStartEstimate, type ColdStartEstimate } from '../inference/cold-start.server'
 
 // ============================================================================
 // Auth helper
@@ -407,21 +410,50 @@ export interface ConversationTurnState {
   status: ConversationStatus
   /** A turn holds the row; its persisted context is not this turn's result yet. */
   turnInFlight: boolean
+  /**
+   * The in-flight turn is waiting on a self-hosted box that is still starting:
+   * the same estimate the chat's warming frame carries, for a page that was
+   * (re)loaded while the turn was already in that wait (#1045). `null` when no
+   * turn holds the conversation, when the turn is past the wait, or when the
+   * conversation does not run on the private tier.
+   */
+  warming: ColdStartEstimate | null
 }
 
 /**
  * Whether this conversation's turn has finished, for a client whose live stream
- * stopped before the answer arrived (`turn-stream.ts`). The turn runs on
- * server-side after its stream is lost, so the client polls this and loads the
- * persisted conversation once no turn holds it. Plaintext columns only — no
- * context is read, so polling it is cheap. `null` for an id with no row of the
- * caller's: the first turn may not have seeded it yet.
+ * stopped before the answer arrived (`turn-stream.ts`) — and, since #1045, for a
+ * page that was (re)loaded mid-turn and has no stream at all: the turn runs on
+ * server-side after its stream is lost or its reader went away, so the client
+ * polls this and loads the persisted conversation once no turn holds it.
+ * Plaintext columns only — no context is read, so polling it is cheap. `null`
+ * for an id with no row of the caller's: the first turn may not have seeded it
+ * yet.
+ *
+ * `warming` answers a different question than `turnInFlight`, and needs both of
+ * its halves: the lease is ROW state and says a turn holds this conversation,
+ * but a held conversation is not necessarily waiting on the GPU — the turn may
+ * be past the wake and running normally. The wake is PROCESS state and says a
+ * box start is in flight, but in flight for ANYONE — another user's turn, the
+ * header button. Only the CONJUNCTION says "this conversation is waiting on
+ * the box", which is why neither half is answered alone here. The tier gates it
+ * for the same reason: an Anthropic conversation whose neighbour woke the box
+ * must not borrow its countdown. The conjunction is slightly wider than the
+ * truth in one rare corner — this turn could be past its wake while a LATER
+ * turn started a new one — and it is accepted: the estimate is the honest
+ * process-wide figure, the notice clears on the next poll, and the alternative
+ * would be per-conversation wake bookkeeping nobody asked for.
  */
 export async function getConversationTurnState(
   sessionId: string,
 ): Promise<ConversationTurnState | null> {
   const user = await requireUser()
-  return dbGetConversationTurnState(sessionId, user.id)
+  const state = await dbGetConversationTurnState(sessionId, user.id)
+  if (!state) return null
+  if (!state.turnInFlight) return { ...state, warming: null }
+  const tier = await resolveConversationTier(sessionId, user.id)
+  const waking = tier === 'self_deployed' && (largeWakeInFlight() || smallWakeInFlight())
+  return { ...state, warming: waking ? pendingColdStartEstimate(Date.now()) : null }
 }
 
 /**

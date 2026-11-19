@@ -104,7 +104,16 @@ vi.mock('../../../lib/db/user-prefs.server', async () => {
 const chooseConversationTier = vi.fn<
   (sessionId: string, userId: string, tier: unknown) => Promise<'self_deployed' | 'anthropic'>
 >(async (_s, _u, tier) => tier as 'self_deployed' | 'anthropic')
+// #1045: the turn-state action resolves the RUNNING turn's tier to decide
+// whether the conversation it holds is waiting on the box. Stubbed rather than
+// real here — its own order is `lib/inference/tier.test.ts`'s subject, and this
+// file's cases need to name it directly.
+const resolveConversationTier = vi.fn<
+  (sessionId: string, userId: string) => Promise<'self_deployed' | 'anthropic'>
+>(async () => 'self_deployed')
 const selfDeployedConfigured = vi.fn(() => true)
+const largeWakeInFlight = vi.fn(() => false)
+const smallWakeInFlight = vi.fn(() => false)
 vi.mock('../../../lib/inference/tier.server', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/inference/tier.server')>(
     '../../../lib/inference/tier.server',
@@ -116,9 +125,14 @@ vi.mock('../../../lib/inference/tier.server', async () => {
     resolveTier: actual.resolveTier,
     privateInferenceOnly: actual.privateInferenceOnly,
     chooseConversationTier: (s: string, u: string, t: unknown) => chooseConversationTier(s, u, t),
+    resolveConversationTier: (s: string, u: string) => resolveConversationTier(s, u),
     selfDeployedConfigured: () => selfDeployedConfigured(),
   }
 })
+vi.mock('../../../lib/inference/wake.server', () => ({
+  largeWakeInFlight: () => largeWakeInFlight(),
+  smallWakeInFlight: () => smallWakeInFlight(),
+}))
 
 // ── auth ────────────────────────────────────────────────────────────────────
 const isBypassEnabled = vi.fn(() => true)
@@ -351,21 +365,77 @@ describe('loadConversation', () => {
   })
 })
 
-// What a client whose stream was lost polls. It is a browser-reachable RPC, so
-// it answers only for the caller's own row (SD-13 style gate per export).
+// What a client whose stream was lost polls — and, since #1045, what a page
+// (re)loaded mid-turn asks first. It is a browser-reachable RPC, so it answers
+// only for the caller's own row (SD-13 style gate per export).
 describe('getConversationTurnState', () => {
+  beforeEach(() => {
+    resolveConversationTier.mockImplementation(async () => 'self_deployed')
+    largeWakeInFlight.mockImplementation(() => false)
+    smallWakeInFlight.mockImplementation(() => false)
+  })
+
   // MUTATION: drop `await requireUser()` → the unauthenticated call resolves.
   it('reads the caller’s own row, and refuses an unauthenticated caller', async () => {
     isBypassEnabled.mockReturnValue(false)
     await expect(actions.getConversationTurnState('c1')).resolves.toEqual({
       status: 'done',
       turnInFlight: true,
+      warming: null,
     })
     expect(dbGetConversationTurnState).toHaveBeenLastCalledWith('c1', 'entra-user')
 
     getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
     await expect(actions.getConversationTurnState('c1')).rejects.toThrow('Authentication required')
     expect(dbGetConversationTurnState).toHaveBeenCalledTimes(1)
+  })
+
+  // #1045: a page that loads mid-run re-derives the GPU wait from the estimate
+  // the warming frame would have carried. The lease alone is not enough (a held
+  // conversation may be past the wake) and the wake alone is not enough (it may
+  // belong to another user's turn) — the conjunction is the claim.
+  //
+  // MUTATION: answer `warming: null` unconditionally → the first case reddens;
+  // drop the tier gate → the second reddens.
+  it('answers the estimate while the held conversation waits on the box', async () => {
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: { estimateMs: 157_000, basis: 'default', samples: 0 },
+    })
+  })
+
+  it('answers no estimate when the conversation runs on the other tier', async () => {
+    // An Anthropic conversation whose neighbour woke the box must not borrow
+    // its countdown.
+    resolveConversationTier.mockImplementation(async () => 'anthropic')
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers no estimate when no wake is in flight — the turn is past the box', async () => {
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers no estimate once the turn has released the row', async () => {
+    dbGetConversationTurnState.mockResolvedValueOnce({ status: 'done', turnInFlight: false })
+    largeWakeInFlight.mockImplementation(() => true)
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: false,
+      warming: null,
+    })
+    // And it resolved no tier for a row no turn holds — the tier read is for
+    // the running turn's conversation, not the row's.
+    expect(resolveConversationTier).not.toHaveBeenCalled()
   })
 })
 

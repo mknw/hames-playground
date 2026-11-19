@@ -27,6 +27,7 @@ import { installDomObservers } from '../../mocks/dom-observers'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import singleNodeFixture from '../../lib/harness-client/fixtures/cypher-single-node.json'
 import { TRAILING_REFRESH_FIRST_DELAY_MS } from '~/lib/trailing-refresh'
+import { RECOVERY_POLL_MS } from '~/lib/turn-stream'
 
 beforeAll(() => {
   installDomObservers()
@@ -1015,6 +1016,143 @@ describe('ChatInterface — composer gates', () => {
 
     expect(composer(container).getAttribute('aria-disabled')).toBe('true')
     expect(transcript(container)).toContain('Embedding sources…')
+  })
+})
+
+describe('ChatInterface — adopting a turn found running on the server (#1045)', () => {
+  // The scenario the owner hit: a Ctrl+R in the middle of a turn's GPU wait
+  // left the conversation looking idle — `isProcessing` was per-tab memory and
+  // nothing re-derived it from the server, where the turn's lease says a turn
+  // holds the conversation. The hydration now asks once, and these cases drive
+  // the answer.
+  const ESTIMATE = { estimateMs: 157_000, basis: 'default' as const, samples: 0 }
+
+  /** A turn-state action answer the test flips when it decides the turn is
+   *  done — the poller reads it once per interval. */
+  const heldThenReleased = () => {
+    let held = true
+    getConversationTurnState.mockImplementation(async () =>
+      held
+        ? { status: 'running', turnInFlight: true, warming: ESTIMATE }
+        : { status: 'done', turnInFlight: false, warming: null },
+    )
+    return { release: () => (held = false) }
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    // `heldThenReleased` installs an implementation, and the file-level
+    // `clearAllMocks` clears CALLS but not implementations — a held turn
+    // leaking past this describe would adopt in every later test and block
+    // its composer.
+    getConversationTurnState.mockReset()
+  })
+
+  // MUTATION: revert `watchServerTurn` to a no-op → every assertion about the
+  // held phase reddens (the composer reads idle, no notice renders).
+  it('shows a held conversation as running with its GPU wait, then the outcome', async () => {
+    vi.useFakeTimers()
+    const server = heldThenReleased()
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [
+        { id: 'u', role: 'user', content: 'what nodes exist?', timestamp: '2026-05-10T09:00:00Z' },
+      ],
+    })
+    const onRunSettled = vi.fn()
+    const host = makeHost()
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
+    ))
+    await vi.advanceTimersByTimeAsync(60) // hydration + the server's answer
+
+    // Held: the turn reads as running (the composer is blocked, the run state
+    // is the streamed one), and the GPU wait is on screen from the server's
+    // estimate — no warming frame ever arrived to put it there.
+    const run = host.registry.runState('s1')
+    expect(run.isProcessing).toBe(true)
+    expect(run.watching).toBe(true)
+    expect(run.warming).toMatchObject(ESTIMATE)
+    // The notice mounts behind LiveProgressBar's mount delay.
+    await vi.advanceTimersByTimeAsync(500)
+    expect(transcript(container)).toContain('starting GPU')
+
+    // The turn releases: the saved transcript replaces the view, once, and
+    // the route hears the outcome the way a streamed run reports it.
+    server.release()
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [
+        { id: 'u', role: 'user', content: 'what nodes exist?', timestamp: '2026-05-10T09:00:00Z' },
+        {
+          id: 'a',
+          role: 'assistant',
+          content: 'The saved answer.',
+          timestamp: '2026-05-10T09:00:05Z',
+        },
+      ],
+    })
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS + 500)
+
+    expect(transcript(container)).toContain('The saved answer.')
+    // The notice came down with the outcome — nothing keeps saying "starting
+    // GPU" about a turn that has answered.
+    expect(transcript(container)).not.toContain('starting GPU')
+    const settledRun = host.registry.runState('s1')
+    expect(settledRun.isProcessing).toBe(false)
+    expect(settledRun.watching).toBe(false)
+    expect(settledRun.warming).toBeNull()
+    expect(onRunSettled).toHaveBeenCalledWith('s1', 'done')
+  })
+
+  it('does not adopt a conversation no turn holds', async () => {
+    vi.useFakeTimers()
+    getConversationTurnState.mockResolvedValue({
+      status: 'done',
+      turnInFlight: false,
+      warming: null,
+    })
+    const host = makeHost()
+    host.mount(() => <ChatInterface sessionId="s1" />)
+    await vi.advanceTimersByTimeAsync(60)
+
+    expect(host.registry.runState('s1').isProcessing).toBe(false)
+    expect(host.registry.runState('s1').watching).toBe(false)
+    // And no lease poll was armed: the turn-state read happened exactly once.
+    const calls = getConversationTurnState.mock.calls.length
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * 2)
+    expect(getConversationTurnState.mock.calls.length).toBe(calls)
+  })
+
+  it('Stop stops watching without painting an error', async () => {
+    vi.useFakeTimers()
+    heldThenReleased()
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [],
+    })
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await vi.advanceTimersByTimeAsync(60)
+    expect(host.registry.runState('s1').isProcessing).toBe(true)
+
+    const stop = container.querySelector<HTMLButtonElement>('button[aria-label="Stop generating"]')
+    expect(stop).not.toBeNull()
+    stop!.click()
+    await vi.advanceTimersByTimeAsync(60)
+
+    // The watch ended as a teardown, not a failure: the run state is idle and
+    // the note says what actually happens next, the same words a torn-down
+    // stream leaves.
+    expect(host.registry.runState('s1').isProcessing).toBe(false)
+    expect(transcript(container)).toContain('Stopped watching this response.')
+    expect(transcript(container)).not.toContain('error')
   })
 })
 

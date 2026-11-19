@@ -44,7 +44,10 @@ import {
   largeColdStartStats,
   noteColdStartMeasured,
   noteLargeCallStarting,
+  noteSmallCallCompleted,
+  pendingColdStartEstimate,
   resetColdStartHistory,
+  resetSmallActivity,
   resetSmallColdStartHistory,
   runWithColdStartWatch,
   settleColdStart,
@@ -99,6 +102,7 @@ beforeEach(() => {
 afterEach(() => {
   resetColdStartHistory()
   resetLargeActivity()
+  resetSmallActivity()
   delete process.env.LARGE_LLM_BASE_URL
   delete process.env.LARGE_LLM_API_KEY
   delete process.env.SMALL_LLM_DECISIONS_URL
@@ -174,6 +178,27 @@ describe('the estimate', () => {
     expect(samples).toBe(COLD_START_WINDOW)
     // The four oldest are gone: the smallest surviving reading is 100_004.
     expect(estimateMs).toBeGreaterThanOrEqual(100_004)
+  })
+
+  it('answers null, not a throw, when every box is proven warm (#1045 review)', () => {
+    // `pendingColdStartEstimate` is the estimate the turn-state action sends a
+    // page that loaded mid-run, and keep-warm touches run against boxes that
+    // are PROVEN warm but stale — so with both boxes warm the list it builds
+    // is empty, and a `reduce` with no initial value turned that into the
+    // `TypeError` the action answered a reload with. Nothing is starting, so
+    // `null` is the honest figure, and it is what the action now reports.
+    const now = Date.now()
+    noteLargeCallCompleted(now)
+    noteSmallCallCompleted(now)
+    expect(pendingColdStartEstimate(now)).toBeNull()
+    // The guard did not eat the honest case: a box that is dark again is
+    // estimated by its own fallback, neither thrown nor stale.
+    resetSmallActivity()
+    expect(pendingColdStartEstimate(now)).toEqual({
+      estimateMs: SMALL_COLD_START_FALLBACK_MS,
+      basis: 'default',
+      samples: 0,
+    })
   })
 })
 

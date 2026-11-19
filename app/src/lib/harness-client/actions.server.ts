@@ -48,7 +48,12 @@ import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
 import { DEFAULT_AGENT_ID } from './agent-ids'
 import { largeWakeInFlight, smallWakeInFlight } from '../inference/wake.server'
-import { pendingColdStartEstimate, type ColdStartEstimate } from '../inference/cold-start.server'
+import {
+  largeProvenWarm,
+  pendingColdStartEstimate,
+  smallProvenWarm,
+  type ColdStartEstimate,
+} from '../inference/cold-start.server'
 
 // ============================================================================
 // Auth helper
@@ -414,7 +419,8 @@ export interface ConversationTurnState {
    * The in-flight turn is waiting on a self-hosted box that is still starting:
    * the same estimate the chat's warming frame carries, for a page that was
    * (re)loaded while the turn was already in that wait (#1045). `null` when no
-   * turn holds the conversation, when the turn is past the wait, or when the
+   * turn holds the conversation, when the turn is past the wait (including
+   * while only a keep-warm touch is in flight against a warm box), or when the
    * conversation does not run on the private tier.
    */
   warming: ColdStartEstimate | null
@@ -435,8 +441,17 @@ export interface ConversationTurnState {
  * but a held conversation is not necessarily waiting on the GPU — the turn may
  * be past the wake and running normally. The wake is PROCESS state and says a
  * box start is in flight, but in flight for ANYONE — another user's turn, the
- * header button. Only the CONJUNCTION says "this conversation is waiting on
- * the box", which is why neither half is answered alone here. The tier gates it
+ * header button, a keep-warm touch — and a flight alone is not a START either:
+ * keep-warm deliberately runs against boxes that are PROVEN warm but stale
+ * (`keptWarm`, `wake.server.ts`), so a wake in flight must be ANDed with "not
+ * proven warm" before it reads as a wait. Only the CONJUNCTION of the lease,
+ * the tier, a flight and no proof of warmth says "this conversation is waiting
+ * on the box", which is why none of the halves is answered alone here. The
+ * warmth half is the same conjunction the header's `displayWarmth` makes, where
+ * completion evidence outranks the flight — a keep-warm touch on a warm box
+ * must not put a GPU countdown on a turn already past its wake, and with BOTH
+ * boxes warm the in-flight check alone would ask `pendingColdStartEstimate`
+ * with nothing left to estimate, which threw. The tier gates it
  * for the same reason: an Anthropic conversation whose neighbour woke the box
  * must not borrow its countdown. The conjunction is slightly wider than the
  * truth in one rare corner — this turn could be past its wake while a LATER
@@ -452,8 +467,15 @@ export async function getConversationTurnState(
   if (!state) return null
   if (!state.turnInFlight) return { ...state, warming: null }
   const tier = await resolveConversationTier(sessionId, user.id)
-  const waking = tier === 'self_deployed' && (largeWakeInFlight() || smallWakeInFlight())
-  return { ...state, warming: waking ? pendingColdStartEstimate(Date.now()) : null }
+  if (tier !== 'self_deployed') return { ...state, warming: null }
+  const now = Date.now()
+  // Both halves of the wake read (#1045 review): in flight AND not proven
+  // warm. See the doc above — the `waking` variable this replaced answered
+  // "is any flight running" with a single `||`, which a keep-warm touch
+  // against warm boxes turned into a thrown estimate and a false GPU wait.
+  const starting =
+    (largeWakeInFlight() && !largeProvenWarm(now)) || (smallWakeInFlight() && !smallProvenWarm(now))
+  return { ...state, warming: starting ? pendingColdStartEstimate(now) : null }
 }
 
 /**

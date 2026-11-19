@@ -1044,8 +1044,13 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
     // `heldThenReleased` installs an implementation, and the file-level
     // `clearAllMocks` clears CALLS but not implementations — a held turn
     // leaking past this describe would adopt in every later test and block
-    // its composer.
+    // its composer. The tier-write case below parks `setConversationTier`
+    // the same way, so it gets its default back here for the same reason.
     getConversationTurnState.mockReset()
+    setConversationTier.mockImplementation(async (_id: string, tier: string) => ({
+      tier,
+      selfDeployedAvailable: true,
+    }))
   })
 
   // MUTATION: revert `watchServerTurn` to a no-op → every assertion about the
@@ -1153,6 +1158,226 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
     expect(host.registry.runState('s1').isProcessing).toBe(false)
     expect(transcript(container)).toContain('Stopped watching this response.')
     expect(transcript(container)).not.toContain('error')
+  })
+
+  // #1045 review, MEDIUM: the race guards in `watchServerTurn` had no tests.
+  // This one pins the local-run guard — `untrack(() =>
+  // registry.runState(sid).isProcessing)` standing the adoption down when this
+  // tab itself runs the turn.
+  //
+  // MUTATION: remove that guard → the read adopts over the local run →
+  // `watching` reads true and the poll arms.
+  it('does not adopt over a run this tab started while the read was out', async () => {
+    vi.useFakeTimers()
+    let answerRead: ((state: unknown) => void) | undefined
+    getConversationTurnState.mockImplementation(
+      () => new Promise((resolve) => (answerRead = resolve)),
+    )
+    const stream = drivenSseResponse()
+    fetchMock.mockResolvedValue(stream.response)
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [],
+    })
+    const onRunSettled = vi.fn()
+    const host = makeHost()
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
+    ))
+    await vi.advanceTimersByTimeAsync(60) // hydration; the read is now out
+
+    // The user sends while the read is out: the local run goes live and its
+    // stream is the view of this conversation.
+    send(container, 'sent while the read was out')
+    await vi.advanceTimersByTimeAsync(60)
+    expect(host.registry.runState('s1').isProcessing).toBe(true)
+
+    // The read lands MID-STREAM — the server does say a turn holds this row,
+    // because this tab's own run does. The guard reads the local run and the
+    // adoption stands down: no watch, no poll armed over the live stream.
+    answerRead!({ status: 'running', turnInFlight: true, warming: null })
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS)
+    expect(host.registry.runState('s1').watching).toBe(false)
+    const reads = getConversationTurnState.mock.calls.length
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * 2)
+    expect(getConversationTurnState.mock.calls.length).toBe(reads)
+
+    // And the local run settles as the only writer of this conversation.
+    stream.push(doneFrame())
+    stream.close()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(onRunSettled).toHaveBeenCalledTimes(1)
+    expect(onRunSettled).toHaveBeenCalledWith('s1', 'done')
+    expect(transcript(container)).toContain('Here is your answer.')
+  })
+
+  // #1045 review, MEDIUM: the `watched` set — two hydrations of one thread
+  // must not start two watches. Reachable by a session swap away and back
+  // while both reads are out; the second read resolves into a `watched` the
+  // first adoption holds.
+  //
+  // MUTATION: remove the `watched.has(sid)` guard → the second read adopts too
+  // → the released turn settles TWO watches → `onRunSettled` fires twice.
+  it('starts one watch for a thread hydrated twice while both reads were out', async () => {
+    vi.useFakeTimers()
+    const parked: Array<(state: unknown) => void> = []
+    let answering = false
+    let released = false
+    getConversationTurnState.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          answering
+            ? resolve(
+                released
+                  ? { status: 'done', turnInFlight: false, warming: null }
+                  : { status: 'running', turnInFlight: true, warming: null },
+              )
+            : parked.push(resolve),
+        ),
+    )
+    // Empty transcript: `hasLocalTurn` stays false, so the second hydration of
+    // the same id reaches `watchServerTurn` rather than deferring to a buffer.
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [],
+    })
+    const onRunSettled = vi.fn()
+    const [sid, setSid] = createSignal('s1')
+    const host = makeHost()
+    host.mount(() => <ChatInterface sessionId={sid()} onRunSettled={onRunSettled} />)
+
+    // Hydration (s1), a swap away and back (s2 → s1), hydration (s1) again:
+    // three reads out, two of them for THIS thread.
+    await vi.advanceTimersByTimeAsync(60)
+    setSid('s2')
+    await vi.advanceTimersByTimeAsync(60)
+    setSid('s1')
+    await vi.advanceTimersByTimeAsync(60)
+    expect(parked.length).toBe(3)
+
+    answering = true
+    parked[0]!({ status: 'running', turnInFlight: true, warming: null }) // s1, first hydration
+    await vi.advanceTimersByTimeAsync(20)
+    expect(host.registry.runState('s1').watching).toBe(true) // the first read adopted
+    parked[2]!({ status: 'running', turnInFlight: true, warming: null }) // s1, second hydration
+    parked[1]!({ status: 'done', turnInFlight: false, warming: null }) // s2, held by nothing
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS)
+
+    // The turn releases: ONE watch settles it, because the second read found
+    // `watched` already holding this thread.
+    released = true
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * 2 + 200)
+    expect(onRunSettled).toHaveBeenCalledTimes(1)
+    expect(onRunSettled).toHaveBeenCalledWith('s1', 'done')
+  })
+
+  // #1045 review, LOW: the bar's `visible` condition carries `watching`
+  // because an adopted turn has no stream to seed its denominator. With the
+  // turn past its GPU wait there is no `warming` either, so the flag is the
+  // only thing keeping a bar on screen where the answer will land.
+  //
+  // MUTATION: drop `currentRunState().watching` from the condition → the bar
+  // never mounts for this turn.
+  it('keeps the chat bar up for an adopted turn no stream will ever seed', async () => {
+    vi.useFakeTimers()
+    getConversationTurnState.mockResolvedValue({
+      status: 'running',
+      turnInFlight: true,
+      warming: null,
+    })
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [],
+    })
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await vi.advanceTimersByTimeAsync(60)
+    expect(host.registry.runState('s1').watching).toBe(true)
+
+    // Past the bar's 350ms mount delay: mounted, though nothing will ever seed
+    // its denominator — the flag is what the condition needs.
+    await vi.advanceTimersByTimeAsync(500)
+    expect(
+      container.querySelector('[data-progress]'),
+      'the bar never mounted for the adopted turn',
+    ).toBeTruthy()
+  })
+
+  // #1045 review, LOW: the tier-write window. `runSend` awaits a pending tier
+  // write before its first state lands, so a turn-state read resolving inside
+  // that window used to find `isProcessing` false and adopt over the send —
+  // the server then refused the send (a turn still holds the row), and the
+  // send's own `finally` unregistered the abort handle, leaving the adoption
+  // polling with a Stop that no longer reached it. The send now CLAIMS the
+  // run (state + abort handle) before the await, so the adoption's local-run
+  // guard reads it and no watch starts.
+  //
+  // MUTATION: move the claim back below the tier-write await → the read
+  // adopts inside the window → `watching` reads true.
+  it('a send parked on a tier write claims the run, so a read landing in the window adopts nothing', async () => {
+    vi.useFakeTimers()
+    let answerRead: ((state: unknown) => void) | undefined
+    getConversationTurnState.mockImplementation(
+      () => new Promise((resolve) => (answerRead = resolve)),
+    )
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [],
+    })
+    // Flip the tier switch: the write parks, so `pendingTierWrite` is armed.
+    let settleWrite: ((value: { tier: string; selfDeployedAvailable: boolean }) => void) | undefined
+    setConversationTier.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settleWrite = resolve
+        }),
+    )
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await vi.advanceTimersByTimeAsync(60) // hydration; the read is out
+
+    const radios = [...container.querySelectorAll('input[type="radio"]')]
+    fireEvent.click(radios.find((r) => (r as HTMLInputElement).value === 'self_deployed')!)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(setConversationTier).toHaveBeenCalledWith('s1', 'self_deployed')
+
+    // Send into the window: the send parks on the tier write it must settle
+    // first — and claims the run while it waits.
+    send(container, 'sent into the window')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(host.registry.runState('s1').isProcessing).toBe(true)
+
+    // The hydration read lands INSIDE the window: the turn holds this row on
+    // the server (an earlier one is still running there). The claimed run is
+    // what the adoption's guard reads, and no watch starts.
+    answerRead!({ status: 'running', turnInFlight: true, warming: null })
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS)
+    expect(host.registry.runState('s1').watching).toBe(false)
+
+    // The write settles and the server REFUSES the send — a turn still holds
+    // the row. The refusal surfaces as the send's own error; nothing is left
+    // polling behind it.
+    settleWrite!({ tier: 'self_deployed', selfDeployedAvailable: true })
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        { event: 'error', data: { error: 'a turn is still running for this conversation' } },
+      ]),
+    )
+    await vi.advanceTimersByTimeAsync(200)
+    expect(host.registry.runState('s1').isProcessing).toBe(false)
+    expect(host.registry.runState('s1').watching).toBe(false)
+    expect(transcript(container)).toContain('a turn is still running for this conversation')
+    const reads = getConversationTurnState.mock.calls.length
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * 2)
+    expect(getConversationTurnState.mock.calls.length).toBe(reads)
   })
 })
 

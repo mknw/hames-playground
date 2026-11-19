@@ -13,7 +13,8 @@ import type { WarmingEventData } from './sse-client'
  * guard survive sidebar switches — see #47.
  */
 export interface SessionRunState {
-  /** A submit for this session is in flight (SSE stream open). */
+  /** A submit for this session is in flight — claimed at submit entry
+   *  (before the tier-write settle), released when the run or watch settles. */
   isProcessing: boolean
   /** Tool name from the latest `controller_action` event of the active loop.
    *  Drives the composer guard banner ("Waiting for `<tool>`…"). */

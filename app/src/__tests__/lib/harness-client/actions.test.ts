@@ -11,6 +11,15 @@
  */
 
 import { DEFAULT_AGENT_ID } from '../../../lib/harness-client/agent-ids'
+import {
+  noteSmallCallCompleted,
+  resetSmallActivity,
+  SMALL_COLD_START_FALLBACK_MS,
+} from '../../../lib/inference/cold-start.server'
+import {
+  noteLargeCallCompleted,
+  resetLargeActivity,
+} from '../../../lib/inference/large-activity.server'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -373,6 +382,11 @@ describe('getConversationTurnState', () => {
     resolveConversationTier.mockImplementation(async () => 'self_deployed')
     largeWakeInFlight.mockImplementation(() => false)
     smallWakeInFlight.mockImplementation(() => false)
+    // The wake halves below are mocked; the WARMTH halves they gate on are the
+    // real module state, stamped by the keep-warm cases. Reset at entry so
+    // every case starts from an unknown box.
+    resetLargeActivity()
+    resetSmallActivity()
   })
 
   // MUTATION: drop `await requireUser()` → the unauthenticated call resolves.
@@ -436,6 +450,59 @@ describe('getConversationTurnState', () => {
     // And it resolved no tier for a row no turn holds — the tier read is for
     // the running turn's conversation, not the row's.
     expect(resolveConversationTier).not.toHaveBeenCalled()
+  })
+
+  // #1045 review, HIGH: a wake counts as a wait only while it is in flight AND
+  // nothing proves the box up. A keep-warm touch (on by default) runs against a
+  // box that is PROVEN warm but stale (`keptWarm`), so the in-flight check
+  // alone made this action report a GPU wait for a turn already past its wake —
+  // and with BOTH boxes warm the estimate it then called built an empty list,
+  // whose `reduce` (no initial value) threw, which `watchServerTurn` swallowed
+  // into a reloaded page that showed nothing.
+  //
+  // MUTATION: revert the gate to `(largeWakeInFlight() || smallWakeInFlight())`
+  // → the first case REJECTS (the thrown reduce) and the second answers a
+  // 157s estimate; drop `smallWakeInFlight()` from the gate → the third
+  // answers null.
+  it('answers warming null — and does not throw — while keep-warm touches run against two warm boxes', async () => {
+    largeWakeInFlight.mockImplementation(() => true)
+    smallWakeInFlight.mockImplementation(() => true)
+    noteLargeCallCompleted(Date.now())
+    noteSmallCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers warming null when the only flight is a keep-warm touch on a warm box', async () => {
+    // One box warm is the half-way case: no throw, but a GPU countdown for a
+    // turn that is already past its wake — the false wait the gate removes.
+    smallWakeInFlight.mockImplementation(() => true)
+    noteSmallCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
+  it('answers the estimate when the SMALL box is the one starting', async () => {
+    // The small half of the gate is load-bearing on its own: drop
+    // `smallWakeInFlight()` from it and this answers null. The 27B answered
+    // recently, so the 4B's own fallback is the figure — no 27B in it.
+    smallWakeInFlight.mockImplementation(() => true)
+    noteLargeCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: {
+        estimateMs: SMALL_COLD_START_FALLBACK_MS,
+        basis: 'default',
+        samples: 0,
+      },
+    })
   })
 })
 

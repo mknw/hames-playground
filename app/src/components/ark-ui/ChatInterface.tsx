@@ -544,11 +544,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       })
     }
 
-    // Settle any tier flip first — see `pendingTierWrite`.
-    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
-
+    // Claim the run BEFORE the tier-write await (#1045 review): the await is
+    // a round trip, and until the stream's first state lands nothing marks
+    // this session as running — so an adoption whose turn-state read resolved
+    // inside the window adopted over this send, the server refused the send
+    // (a turn still holds the row), and the `finally` below then unregistered
+    // the abort handle, leaving the adoption polling with a Stop that no
+    // longer reached it. Marked here, `watchServerTurn`'s local-run guard
+    // reads the send and stands down. The abort handle moves up with the mark
+    // so a Stop pressed inside the window reaches this run too; `finally`
+    // clears both exactly as before.
     const abortController = new AbortController()
     registry.registerAbort(runSessionId, abortController)
+    registry.updateRunState(runSessionId, { isProcessing: true })
+
+    // Settle any tier flip first — see `pendingTierWrite`.
+    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
 
     try {
       const { outcome, aborted } = await runTurn(

@@ -115,6 +115,7 @@ export async function parseUploadRequest(
       ? await blob.text()
       : Buffer.from(await blob.arrayBuffer()).toString('base64')
     return {
+      origin: 'user-upload',
       sessionId,
       filename,
       mimeType,
@@ -138,6 +139,7 @@ export async function parseUploadRequest(
   const filename = body.filename?.trim() || 'upload.txt'
   const agentId = typeof body.agentId === 'string' ? body.agentId.trim() || undefined : undefined
   return {
+    origin: 'user-upload',
     sessionId: String(body.sessionId ?? '').trim(),
     filename,
     mimeType: body.mimeType?.trim() || guessMimeType(filename),

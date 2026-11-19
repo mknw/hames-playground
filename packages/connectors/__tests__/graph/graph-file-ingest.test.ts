@@ -15,6 +15,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { buildGraphHarness, MAX_CONTENT_BYTES } from './harness'
 import { GraphAuthRequiredError } from '../../graph/graph-auth'
+import { harness } from '@hames-ai/harness-patterns/harness.server'
+import { configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
+import { withToolCallId } from '@hames-ai/harness-patterns/run-frame.server'
+import { storeDocument as persistDocument } from '@hames-ai/harness-patterns/stash/document-store.server'
 import {
   driveItemPath,
   INGEST_OUTCOME_WAIT_MS,
@@ -100,6 +104,64 @@ describe('shapeDriveItem', () => {
 })
 
 describe('happy path', () => {
+  it('persists the copying turn and host invocation alongside Graph metadata (#1040)', async () => {
+    graphAnswers(FILE_META)
+    let saved: Record<string, unknown> = {}
+    let callId = ''
+    storeDocument.mockImplementation((input) =>
+      persistDocument(input, async (name, args) => {
+        if (name === 'json_set') saved = JSON.parse(String(args.value))
+        return { success: true, data: 'OK' }
+      }),
+    )
+    const agent = harness(
+      configurePattern('copy', async (scope) => {
+        await withToolCallId(async (id) => {
+          callId = id
+          const result = await runAppTool('graph_file_ingest', {
+            item_id: 'synthetic-item',
+            drive_id: 'synthetic-drive',
+          })
+          expect(result.success).toBe(true)
+        })
+        return scope
+      }),
+    )
+    const result = await agent('copy a sample', 'sess-1')
+    expect(saved).toMatchObject({
+      origin: 'graph-file',
+      originTurnId: result.context.events.find((e) => e.type === 'user_message')!.id,
+      sourceTool: 'graph_file_ingest',
+      sourceCallId: callId,
+      itemId: 'synthetic-item',
+      driveId: 'synthetic-drive',
+      webUrl: FILE_META.webUrl,
+    })
+  })
+
+  it('retains the source drive returned for a default-drive copy (#1040)', async () => {
+    graphAnswers({ ...FILE_META, parentReference: { driveId: 'synthetic-drive' } })
+    await runAppTool('graph_file_ingest', {
+      item_id: 'synthetic-item',
+      origin: 'user-upload',
+      originTurnId: 'forged-turn',
+      sourceTool: 'forged-tool',
+      sourceCallId: 'forged-call',
+      webUrl: 'https://example.com/forged',
+    })
+    expect(storeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        origin: 'graph-file',
+        sourceTool: 'graph_file_ingest',
+        driveId: 'synthetic-drive',
+        itemId: 'synthetic-item',
+        webUrl: FILE_META.webUrl,
+      }),
+    )
+    expect(storeDocument.mock.calls[0][0]).not.toHaveProperty('originTurnId')
+    expect(storeDocument.mock.calls[0][0]).not.toHaveProperty('sourceCallId')
+  })
+
   it('reads metadata with an explicit $select, then downloads as base64', async () => {
     graphAnswers(FILE_META)
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
@@ -109,7 +171,7 @@ describe('happy path', () => {
       [string, string, { scopes?: string[]; responseType?: string }]
     >
     expect(metaCall[0]).toBe('oid-1') // scoped user, never an argument
-    expect(metaCall[1]).toBe('/me/drive/items/01ABC?$select=name,file,size,webUrl')
+    expect(metaCall[1]).toBe('/me/drive/items/01ABC?$select=name,file,size,webUrl,parentReference')
     expect(metaCall[2].scopes).toEqual(['Files.Read.All'])
     expect(metaCall[2].responseType).toBeUndefined()
 
@@ -123,6 +185,10 @@ describe('happy path', () => {
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
 
     expect(storeDocument).toHaveBeenCalledWith({
+      origin: 'graph-file',
+      sourceTool: 'graph_file_ingest',
+      itemId: '01ABC',
+      webUrl: FILE_META.webUrl,
       sessionId: 'sess-1', // from request scope
       filename: 'notes.md',
       mimeType: 'text/markdown',
@@ -154,6 +220,9 @@ describe('happy path', () => {
     const res = await runAppTool('graph_file_ingest', { item_id: '01PNG' })
     expect(storeDocument).toHaveBeenCalledWith({
       sessionId: 'sess-1',
+      origin: 'graph-file',
+      sourceTool: 'graph_file_ingest',
+      itemId: '01PNG',
       filename: 'chart.png',
       mimeType: 'image/png',
       content: png,
@@ -198,6 +267,9 @@ describe('happy path', () => {
       drive_id: 'drive-9',
       filename: 'renamed.csv',
     })
+    expect(storeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: 'graph-file', driveId: 'drive-9', itemId: '01ABC' }),
+    )
     expect(graphFetch.mock.calls[0][1]).toContain('/drives/drive-9/items/01ABC')
     expect((res.data as IngestResultShape).filename).toBe('renamed.csv')
     // No file.mimeType → guessed from the (overridden) filename.

@@ -174,6 +174,7 @@ describe('POST /api/agents/:id', () => {
     // Recording stored in the Data Stash under the run id, as base64 binary.
     expect(storeDocument).toHaveBeenCalledTimes(1)
     expect(storeDocument.mock.calls[0][0]).toMatchObject({
+      origin: 'user-upload',
       sessionId: 'run-fixed',
       filename: 'memo.m4a',
       mimeType: 'audio/mp4',

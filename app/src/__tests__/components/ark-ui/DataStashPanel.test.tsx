@@ -14,7 +14,7 @@
  * the panel keeps a module-level document cache keyed by session.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent, screen } from '@solidjs/testing-library'
+import { render, fireEvent, screen, within } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
@@ -341,6 +341,102 @@ describe('DataStashPanel — tool result chips', () => {
 })
 
 describe('DataStashPanel — uploads', () => {
+  it('separates uploads, copied/created files by turn, and unproven legacy files (#1040)', async () => {
+    stubFetch({
+      documents: [
+        doc({ id: 'upload', filename: 'upload.md', origin: 'user-upload' }),
+        doc({
+          id: 'copy',
+          filename: 'copy.csv',
+          mimeType: 'text/csv',
+          origin: 'graph-file',
+          originTurnId: 'turn-1',
+          ingestStatus: 'indexed',
+        }),
+        doc({
+          id: 'created',
+          filename: 'created.md',
+          origin: 'sandbox-output',
+          provenance: 'sandbox-output',
+          originTurnId: 'turn-2',
+          ingestStatus: 'not_indexed',
+        }),
+        doc({ id: 'legacy', filename: 'legacy.txt' }),
+        doc({ id: 'unlinked', filename: 'unlinked.md', origin: 'graph-file' }),
+      ],
+    })
+    await renderPanel({
+      events: [
+        { ...userMessage(), id: 'turn-1' },
+        { ...userMessage(), id: 'turn-2' },
+      ],
+    })
+    const uploads = screen.getByRole('button', { name: /Your uploads/ }).parentElement!
+    expect(within(uploads).getByText('upload.md')).toBeTruthy()
+    expect(within(uploads).queryByText('copy.csv')).toBeNull()
+    expect(within(uploads).getByText('Drop a file or click to upload')).toBeTruthy()
+    expect(
+      within(screen.getByRole('region', { name: 'Turn 1' })).getByText('copy.csv'),
+    ).toBeTruthy()
+    const second = within(screen.getByRole('region', { name: 'Turn 2' }))
+    expect(second.getByText('created.md')).toBeTruthy()
+    expect(second.getByText('Created')).toBeTruthy()
+    expect(second.getByText('not searchable')).toBeTruthy()
+    expect(
+      within(screen.getByRole('region', { name: 'Turn not recorded' })).getByText('unlinked.md'),
+    ).toBeTruthy()
+    const unknown = screen.getByRole('button', { name: /Origin unknown/ }).parentElement!
+    expect(within(unknown).getByText('legacy.txt')).toBeTruthy()
+    expect(within(unknown).queryByText('upload.md')).toBeNull()
+    expect(screen.getByRole('radiogroup', { name: 'Group agent files' })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: 'By turn' })).toBeChecked()
+  })
+
+  it('By type groups from MIME rather than filename and keeps origin and search status (#1040)', async () => {
+    stubFetch({
+      documents: [
+        doc({
+          id: 'copy',
+          filename: 'copy.md',
+          mimeType: 'text/csv',
+          origin: 'graph-file',
+          originTurnId: 'turn-1',
+          ingestStatus: 'failed',
+          ingestError: 'synthetic failure',
+        }),
+        doc({
+          id: 'created',
+          filename: 'created.txt',
+          mimeType: 'text/csv',
+          origin: 'sandbox-output',
+          originTurnId: 'turn-2',
+          ingestStatus: 'not_indexed',
+        }),
+        doc({ id: 'unknown', filename: 'old.csv', mimeType: 'text/csv', origin: 'unknown' }),
+      ],
+    })
+    await renderPanel({
+      events: [
+        { ...userMessage(), id: 'turn-1' },
+        { ...userMessage(), id: 'turn-2' },
+      ],
+    })
+    fireEvent.click(screen.getByText('By type'))
+    await settle()
+    expect(screen.getByRole('radio', { name: 'By type' })).toBeChecked()
+    const csv = within(screen.getByRole('region', { name: 'text/csv' }))
+    expect(csv.getByText('copy.md')).toBeTruthy()
+    expect(csv.getByText('created.txt')).toBeTruthy()
+    expect(csv.getByText('Copied')).toBeTruthy()
+    expect(csv.getByText('Created')).toBeTruthy()
+    expect(csv.getAllByText('not searchable')).toHaveLength(2)
+    expect(csv.queryByText('old.csv')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Turn 1' })).toBeNull()
+    fireEvent.click(screen.getByText('By turn'))
+    await settle()
+    expect(screen.getByRole('region', { name: 'Turn 1' })).toBeTruthy()
+  })
+
   const upload = async (container: HTMLElement, files: File[]) => {
     const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
     Object.defineProperty(input, 'files', { value: files, configurable: true })

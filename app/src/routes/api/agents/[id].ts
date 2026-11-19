@@ -89,6 +89,7 @@ export async function POST(event: APIEvent) {
     try {
       const bytes = Buffer.from(await blob.arrayBuffer()).toString('base64')
       const doc = await storeDocument({
+        origin: 'user-upload',
         sessionId: runId,
         filename,
         mimeType,

@@ -252,7 +252,7 @@ describe('searchDocuments — hidden and archived documents', () => {
     await expect(reading(42)).rejects.toThrow(/unreadable document/)
     await expect(reading('"text"')).rejects.toThrow(/unreadable document/)
     await expect(reading([[1]])).rejects.toThrow(/unreadable document/)
-    await expect(reading([{ id: 'a' }])).resolves.toEqual({ id: 'a' })
+    await expect(reading([{ id: 'a' }])).resolves.toEqual({ id: 'a', origin: 'unknown' })
   })
 
   // Mutation: replace `getDocumentStrict` with `getDocument` in

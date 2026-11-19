@@ -8,7 +8,7 @@
  * unconfigured deployment, and a failure report that never silently
  * reverts the switch.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 
 const mocks = vi.hoisted(() => ({
@@ -353,7 +353,9 @@ describe('the admin page', () => {
 
     await fireEvent.click(screen.getByRole('checkbox', { name: GPU_KEEP_LABEL }))
     await waitFor(() => expect(mocks.set).toHaveBeenCalledExactlyOnceWith(true))
-    expect(mocks.admin).toHaveBeenCalledTimes(2) // the read and the re-read
+    // The read and the re-read — awaited rather than assumed, because the
+    // re-read rides the serialized read cycle and lands a tick after the RPC.
+    await waitFor(() => expect(mocks.admin).toHaveBeenCalledTimes(2))
   })
 
   it('reports a failed flip without pretending the switch is off', async () => {
@@ -397,5 +399,92 @@ describe('the admin page', () => {
     expect(screen.queryByRole('checkbox', { name: GPU_KEEP_LABEL })).toBeNull()
     expect(screen.queryByTestId('gpu-keep-since')).toBeNull()
     expect(screen.getByText('Admin only')).toBeTruthy()
+  })
+})
+
+// The round-5 blocking defect, as page tests: the 4B's state and both boxes'
+// up-sinces ride the ADMIN payload, so they only stay live if the poll that
+// refreshes the header warmth RE-READS that payload too — a poll that
+// refreshed only the header froze the 4B at whatever page load saw, and the
+// meter billed a box that was down forever and never billed one that came up.
+// MUTATION: drop the admin re-read from the poll (the `readBoth` cycle) and
+// BOTH tests below redden.
+//
+// Fake timers throughout: the poll's 15s cadence (the header stays `ready`,
+// the strip's settled rate) and the meter's 1s tick both run on the clock,
+// and `Date.now()` moves with `advanceTimersByTimeAsync`.
+//
+// Both cases use the OpenRouter route (`largeOnOpenRouter: true`), so the 27B
+// is a public per-token API the loop keeps no box for: every cent the figure
+// shows is the 4B's, which is the box whose state rides the admin payload.
+describe('the poll re-reads the admin payload — the 4B is live, not frozen at load', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The meter's current figure, as a number off the rendered `so far` line. */
+  const readEur = (): number =>
+    Number(screen.getByText(/so far/).textContent!.match(/€([\d.]+)/)![1])
+
+  /** A switched-on deployment where only the 4B is metered (OpenRouter route). */
+  const onlySmall = (smallState: 'ready' | 'starting' | 'cold') => ({
+    ...ADMIN_STATE,
+    keepRunning: true,
+    switchedOnAt: Date.now(),
+    largeOnOpenRouter: true,
+    largeUpSince: null,
+    smallState,
+    // Null on purpose: the page seeds from its own observation, so the figure
+    // the tests watch move is purely the page's own accrual, not a server stamp.
+    smallUpSince: null,
+  })
+
+  it('stops billing the 4B when it goes down between polls — the meter stops growing', async () => {
+    mocks.admin.mockResolvedValue(onlySmall('ready'))
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    await vi.advanceTimersByTimeAsync(0) // the mount read lands
+    expect(readEur()).toBe(0)
+    // Five seconds of ticks with the 4B up: the meter runs.
+    await vi.advanceTimersByTimeAsync(5_000)
+    const running = readEur()
+    expect(running).toBeGreaterThan(0)
+    // The 4B goes down. The next poll (the 15s cadence, the same one the
+    // header warmth rides) must notice and stop the meter.
+    mocks.admin.mockResolvedValue(onlySmall('cold'))
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(readEur()).toBe(0) // a down box bills nothing
+    // Several more seconds of ticks: it must stay stopped, not resume.
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(readEur()).toBe(0)
+  })
+
+  it('starts billing the 4B when it comes up between polls — the meter starts accruing', async () => {
+    mocks.admin.mockResolvedValue(onlySmall('starting'))
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    await vi.advanceTimersByTimeAsync(0) // the mount read lands
+    expect(readEur()).toBe(0)
+    // Five seconds of ticks while the 4B is still STARTING: a wake in flight
+    // buys no GPU time yet, and the meter must not move.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(readEur()).toBe(0)
+    // The 4B comes up. The next poll must notice and start the meter.
+    mocks.admin.mockResolvedValue(onlySmall('ready'))
+    await vi.advanceTimersByTimeAsync(20_000)
+    const started = readEur()
+    expect(started).toBeGreaterThan(0)
+    // And it keeps accruing, rather than ticking once and freezing.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(readEur()).toBeGreaterThan(started)
   })
 })

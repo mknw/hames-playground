@@ -18,7 +18,10 @@
  *    `getPreviewHeaderState()` — the SAME payload the header strip renders,
  *    so the two surfaces cannot disagree about that box — plus the 4B's
  *    state and both boxes' up-since, which no strip renders and which ride
- *    this page's own admin payload (`getGpuAdminState`) instead;
+ *    this page's own admin payload (`getGpuAdminState`) instead; the poll
+ *    that refreshes the one re-reads the other, so both stay live while the
+ *    page is open (round 5: a poll that refreshed only the header froze the
+ *    4B at page load — a down box kept billing, a starting one never began);
  *  - "running since", from the switch's own persisted stamp; and
  *  - the per-hour price the app already computes (`cost-rates.server.ts`),
  *    because a switch that keeps an H100 up is a switch that spends about
@@ -36,10 +39,17 @@
  * only, cards on the page ground, and a single column that holds at 390px.
  */
 import { A } from '@solidjs/router'
-import { createEffect, createResource, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { Switch } from '@ark-ui/solid/switch'
-import { getGpuAdminState, setGpuKeepRunning } from '~/lib/harness-client/gpu-admin.server'
-import { getPreviewHeaderState } from '~/lib/harness-client/preview-header.server'
+import {
+  getGpuAdminState,
+  setGpuKeepRunning,
+  type GpuAdminState,
+} from '~/lib/harness-client/gpu-admin.server'
+import {
+  getPreviewHeaderState,
+  type PreviewHeaderState,
+} from '~/lib/harness-client/preview-header.server'
 import {
   asHeaderState,
   ACTIVE_POLL_INTERVAL_MS,
@@ -70,10 +80,19 @@ export default function Admin() {
   const [mounted, setMounted] = createSignal(false)
   onMount(() => setMounted(true))
 
-  const [admin, { refetch: refetchAdmin }] = createResource(mounted, async () => getGpuAdminState())
-  const [warmth, { refetch: refetchWarmth }] = createResource(mounted, async () =>
-    asHeaderState(await getPreviewHeaderState()),
-  )
+  // Both payloads are plain signals fed by ONE read cycle rather than
+  // resources, for two reasons a resource cannot offer. A failed refetch
+  // RECORDS its error on the resource, and a poll that cannot reach the server
+  // would flip this page to the refusal panel instead of keeping the last good
+  // payload on screen — the refusal is the FIRST read's business alone
+  // (`refused` below). And a resource's refetch overlaps freely with the one
+  // before it, while a slower OLD answer must never overwrite a newer payload.
+  const [admin, setAdmin] = createSignal<GpuAdminState | null>(null)
+  const [warmth, setWarmth] = createSignal<PreviewHeaderState | null>(null)
+  /** Set by a read that failed while there was no payload to keep — the 403
+   *  (or the failure) the forbidden panel renders. A later read that fails
+   *  keeps the payload it has and never touches this. */
+  const [refused, setRefused] = createSignal(false)
 
   // The toggle's own pending/error channel: a wake can take minutes, and a
   // failure here is the difference between "the boxes are coming" and "the
@@ -81,11 +100,78 @@ export default function Admin() {
   const [busy, setBusy] = createSignal(false)
   const [failed, setFailed] = createSignal<string | null>(null)
 
+  /** Has a good admin payload ever landed? A plain flag rather than a signal
+   *  read, because the decision below is made OUTSIDE any tracked scope: a
+   *  failed poll must not re-render anything, it only decides whether there
+   *  is a payload to keep. */
+  let haveAdminPayload = false
+
+  /** Read the admin payload. A failed read KEEPS the last good payload: the
+   *  poll's next cycle replaces it, and only a failure with nothing to keep
+   *  is the refusal the page must show. */
+  const loadAdmin = async () => {
+    try {
+      setAdmin(await getGpuAdminState())
+      haveAdminPayload = true
+      setRefused(false)
+    } catch {
+      if (!haveAdminPayload) setRefused(true)
+    }
+  }
+
+  /** Read the header payload — the same read the strip polls. The same rule as
+   *  the strip's own poll: a failed read leaves the last known state on screen
+   *  until a cycle can replace it. */
+  const loadWarmth = async () => {
+    try {
+      setWarmth(asHeaderState(await getPreviewHeaderState()))
+    } catch {
+      // keeps the last good payload
+    }
+  }
+
+  // ONE read cycle at a time, serialized rather than overlapping. A cycle
+  // started before a flip can resolve after the flip's own read and would
+  // overwrite its fresher payload with a stale one; a poll tick landing while
+  // a slow cycle is still on the wire must not stack a second fetch on it.
+  // Each cycle awaits its predecessor, so at most one is ever in flight, and
+  // neither load ever rejects (each keeps the last good payload on failure),
+  // so a failed cycle cannot poison the chain.
+  let cycle: Promise<void> | null = null
+  const readBoth = (): Promise<void> => {
+    const next = (cycle ?? Promise.resolve()).then(() =>
+      Promise.all([loadAdmin(), loadWarmth()]).then(() => undefined),
+    )
+    cycle = next
+    return next
+  }
+
+  /** The poll's tick: SKIPS while a cycle is still in flight or queued — the
+   *  next tick catches up, and a slow read never piles fetches behind it. */
+  let pollActive = false
+  const poll = () => {
+    if (pollActive) return
+    pollActive = true
+    void readBoth().finally(() => {
+      pollActive = false
+    })
+  }
+
+  onMount(() => {
+    void readBoth()
+  })
+
   // Poll the boxes' state the way the strip does, at the strip's own rates:
   // settled boxes every 15s, a starting one every 3s so the flip a switch
   // causes is visible where the switch is. The interval is owned by an effect
   // that TRACKS the rate (the strip's own reason: a timer armed once at mount
   // is armed before the first payload, and always at the settled rate).
+  //
+  // Each poll re-reads BOTH payloads, not just the header warmth: the 4B's
+  // state and both boxes' up-sinces ride the admin payload, so a poll that
+  // refreshed only the header would freeze them at page load — a 4B that went
+  // down kept billing, and one that came up during this page's lifetime never
+  // started (the round-5 blocking defect).
   const pollInterval = () => {
     const s = warmth()?.warmth.state
     return s === 'starting' || s === 'answering' || busy()
@@ -93,7 +179,7 @@ export default function Admin() {
       : POLL_INTERVAL_MS
   }
   createEffect(() => {
-    const timer = setInterval(() => void refetchWarmth(), pollInterval())
+    const timer = setInterval(() => poll(), pollInterval())
     onCleanup(() => clearInterval(timer))
   })
 
@@ -103,12 +189,12 @@ export default function Admin() {
     setFailed(null)
     try {
       await setGpuKeepRunning(on)
-      await Promise.all([refetchAdmin(), refetchWarmth()])
+      await readBoth()
     } catch (err) {
       // The switch's persisted state is NOT assumed: re-read it, because the
       // write happened before the wake and a failed wake leaves it ON (no
       // silent auto-off) — the page must say which of the two is true.
-      await refetchAdmin()
+      await loadAdmin()
       setFailed(
         err instanceof Error ? err.message : 'The self-deployed GPUs could not be switched.',
       )
@@ -210,35 +296,25 @@ export default function Admin() {
   const seeded: Record<'large' | 'small', boolean> = { large: false, small: false }
 
   const accrue = (now: number) => {
-    // Every input is read first, under one guard: reading a REJECTED resource
-    // throws (the render's own `<Show>` guards on `admin.error` before it
-    // reads the value), and a failed read is the forbidden or failed panel's
-    // path, not the meter's — skip the tick, and the next poll that answers
-    // recomputes it. The reads still TRACK: an effect running this sees the
-    // resource refresh either way.
-    let since: number | null
-    let up: Record<'large' | 'small', boolean>
-    let upSince: Record<'large' | 'small', number | null>
-    let rates: Record<'large' | 'small', number>
-    try {
-      since = runningSince()
-      const w = warmth()
-      const s = state()
-      // The 27B's up-state from the header payload (the strip renders it);
-      // the 4B's from the admin payload — the per-box fields no strip
-      // renders, moved off the payload every signed-in user receives.
-      up = {
-        large: w?.warmth.state === 'ready' || w?.warmth.state === 'answering',
-        small: s?.smallState === 'ready',
-      }
-      upSince = {
-        large: s?.largeUpSince ?? null,
-        small: s?.smallUpSince ?? null,
-      }
-      rates = perBoxRates()
-    } catch {
-      return
+    // Both payloads are plain signals, so no read here can throw: the old
+    // try/catch guarded REJECTED resources, and a failed poll now keeps the
+    // last good payload instead (see `loadAdmin` / `loadWarmth`). The reads
+    // still TRACK: an effect running this sees each poll's refresh.
+    const since = runningSince()
+    const w = warmth()
+    const s = state()
+    // The 27B's up-state from the header payload (the strip renders it);
+    // the 4B's from the admin payload — the per-box fields no strip
+    // renders, moved off the payload every signed-in user receives.
+    const up: Record<'large' | 'small', boolean> = {
+      large: w?.warmth.state === 'ready' || w?.warmth.state === 'answering',
+      small: s?.smallState === 'ready',
     }
+    const upSince: Record<'large' | 'small', number | null> = {
+      large: s?.largeUpSince ?? null,
+      small: s?.smallUpSince ?? null,
+    }
+    const rates = perBoxRates()
     if (since !== accrualStamp) {
       // A new switch-on, or this page's first observation of one: the meter
       // restarts from its own stamp.
@@ -305,10 +381,10 @@ export default function Admin() {
       </header>
 
       <Show
-        when={mounted() && !admin.error && admin()}
+        when={mounted() && admin()}
         fallback={
           <Show
-            when={admin.error}
+            when={refused()}
             fallback={
               <p p="6" text="sm ui-text-tertiary" role="status">
                 Reading the GPU state…

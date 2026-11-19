@@ -284,6 +284,25 @@ describe('the per-box fields the cost meter meters with', () => {
     expect(state.smallUpSince).toBe(at)
   })
 
+  it('carries each box’s up-since from its OWN clock — never the other box’s', async () => {
+    // The surviving mutant of round 4: `largeUpSince` fed from the 4B's clock
+    // (or the reverse) in `getGpuAdminState` went undetected, because every
+    // other test here stamps both boxes at the SAME instant, where a crossed
+    // feed is invisible. This one stamps them three minutes apart — both
+    // inside their idle windows, so neither read clears — so either
+    // direction of the swap reddens. MUTATION: feed `largeUpSince` from
+    // `smallUpSince()` (or the reverse) and this reddens.
+    const largeAt = Date.now() - 240_000
+    const smallAt = Date.now() - 60_000
+    noteLargeCallCompleted(largeAt)
+    noteSmallCallCompleted(smallAt)
+
+    const state = await getGpuAdminState()
+    expect(state.largeUpSince).toBe(largeAt)
+    expect(state.smallState).toBe('ready')
+    expect(state.smallUpSince).toBe(smallAt)
+  })
+
   it('keeps the up-since at the period’s start across the keep-warm pings that refresh the completion clock', async () => {
     // The box came up 4 minutes ago and has been pinged since (keep-warm
     // touches it roughly every 100s): the pings refresh `lastCompletedAt`,

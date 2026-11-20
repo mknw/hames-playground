@@ -475,6 +475,11 @@ describe('#1057 review: the release is confirmed, retried, and never raced', () 
     getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
     const flip = driveModalSwitch(false, ['large', 'small'])
     await vi.advanceTimersByTimeAsync(10)
+    // The flip is QUEUED behind the tick's in-flight call: not one `0` has
+    // reached the sidecar while the tick's `1` is still open. (The cross-
+    // instance re-read below would also take a late `1` back, so the lock is
+    // pinned on this ordering, not only on the final state.)
+    expect(posted).toEqual([{ box: 'large', min_containers: 1 }])
     release()
     await flip
     await vi.advanceTimersByTimeAsync(5 * TICK)

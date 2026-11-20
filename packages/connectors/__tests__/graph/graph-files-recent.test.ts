@@ -45,11 +45,18 @@ beforeEach(() => {
 describe('advertisement', () => {
   it('names whose modification and access times are returned, without promising an edit history', () => {
     const tool = appToolDescriptions().find((t) => t.name === 'graph_files_recent')!
-    expect(tool.description).toMatch(/modified.*signed-in person/i)
-    expect(tool.description).toMatch(/accessed.*signed-in person/i)
-    expect(tool.description).toMatch(/compare.*modified/i)
+    // Bind ownership to each field, not a later mention of the signed-in person.
+    expect(tool.description).toMatch(/`modified` is the last change by the signed-in person;/)
+    expect(tool.description).toMatch(/`accessed` is the last open by the signed-in person\./)
     expect(tool.description).toContain('not a complete edit history')
     expect(tool.description).toMatch(/newest.*by anyone/i)
+  })
+
+  it('compares non-null edit dates within returned items, excluding order and access dates', () => {
+    const tool = appToolDescriptions().find((t) => t.name === 'graph_files_recent')!
+    expect(tool.description).toMatch(
+      /To find their latest edit, compare non-null `modified` dates among the returned items, not their order or `accessed` dates\./,
+    )
   })
 
   it('takes only a limit — no query, no credential/user/session field', () => {

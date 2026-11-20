@@ -266,10 +266,16 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
       }
 
       // MCP node format: plain object with properties (has name/id, no identity/elementId).
+      // Driver relationships must reach the driver parser even without properties.
       // Require a string name/id/title to be confident this is a real node — this avoids
       // synthesizing fake nodes from schema-info bags (`get_neo4j_schema` shape) and other
       // metadata-shaped objects. (Bug #14 root cause was the absence of this guard.)
-      if (typeof value === 'object' && !Array.isArray(value) && !isNeo4jNode(value)) {
+      if (
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        !isNeo4jNode(value) &&
+        !isNeo4jRelationship(value)
+      ) {
         const obj = value as Record<string, unknown>
         if (looksLikeSchemaInfo(obj)) continue
         const idSource = obj.name ?? obj.id ?? obj.title
@@ -394,8 +400,12 @@ interface Neo4jPath {
 function isNeo4jNode(value: unknown): value is Neo4jNode {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
+  // Relationships also carry identity + properties; never emit a phantom node
+  // whose id would make deduplication discard the real edge (#14).
   return (
-    ('identity' in v || 'elementId' in v) && (Array.isArray(v.labels) || v.properties !== undefined)
+    !isNeo4jRelationship(value) &&
+    ('identity' in v || 'elementId' in v) &&
+    (Array.isArray(v.labels) || v.properties !== undefined)
   )
 }
 

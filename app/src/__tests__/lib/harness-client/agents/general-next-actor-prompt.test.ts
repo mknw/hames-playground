@@ -255,6 +255,19 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     }
   })
 
+  // #1058: the office actor knows where the organisation's project material lives
+  // and how it is reached. MUTATION: remove the project-material sentence from
+  // the office contextPrefix (or the plain-words clause from it): red here.
+  it('tells the office actor where the organisation’s project material is reached', () => {
+    const body = rendered[wire].replace(/\\n/g, ' ')
+    expect(body).toContain(
+      'The organisation’s own project material — project folders, sites and files in SharePoint and OneDrive, project mail and meetings — is reached with these tools',
+    )
+    expect(body).toContain(
+      'search files with plain words (a project’s name, or “project” for the project folders), narrow by site or author, and report the folders and sites you found',
+    )
+  })
+
   // MUTATION: remove the deliverable sentence from the office contextPrefix.
   it('tells the office actor to save a requested file with a command or sandbox_write', () => {
     const body = rendered[wire].replace(/\\n/g, ' ')
@@ -331,7 +344,9 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
   })
 })
 
-// MUTATION: remove the info controller's source-URL contextPrefix instruction.
+// MUTATION: remove the info controller's source-URL contextPrefix instruction, or
+// (#1058) its organisation-sources paragraph: red below.
+
 it.each(['anthropic', 'self_deployed'])(
   'E1: info Return contract is rendered on %s',
   async (tier) => {
@@ -357,6 +372,19 @@ it.each(['anthropic', 'self_deployed'])(
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toContain(
         'When you Return, include the URLs of the sources you used as Markdown links',
+      )
+      // #1058: a question about the user's OWN organisation is answered from that
+      // organisation's own sources, graph first — another organisation's projects are
+      // a web question (r2), and the loop never defers the user to internal
+      // documentation its own tools read.
+      expect(prompts[0]).toContain(
+        'A question about the user’s own organisation’s work — its projects, people, plans — is answered from that organisation’s own sources: query the graph first.',
+      )
+      expect(prompts[0]).toContain(
+        'Another organisation’s projects are a web question, not an office-data one.',
+      )
+      expect(prompts[0]).toContain(
+        'Never send the user to consult internal documentation: your tools read the organisation’s own sources, and the reply reports what they found.',
       )
       expect(prompts[0]).toContain('Copy each source URL verbatim')
       expect(prompts[0]).toContain('never invent or construct a URL')

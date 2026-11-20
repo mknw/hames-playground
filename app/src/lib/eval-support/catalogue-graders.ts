@@ -17,6 +17,9 @@ export interface GraderItem {
   says?: string
   pattern?: string
   turn?: number
+  /** `toolsNotBefore`: the listed tools, and the anchor tool none may precede. */
+  tools?: string[]
+  before?: string
   facts?: string[]
   needles?: string[]
   dedupe?: MemoryDedupe[]
@@ -38,7 +41,12 @@ export interface GraderCatalogue {
 
 export type CatalogueGraders = Pick<
   ConversationScenario,
-  'answerPatterns' | 'answerExcludes' | 'noSandboxCommand' | 'memoryExpect' | 'orgExpect'
+  | 'answerPatterns'
+  | 'answerExcludes'
+  | 'noSandboxCommand'
+  | 'toolsNotBefore'
+  | 'memoryExpect'
+  | 'orgExpect'
 >
 
 /** `{{name}}` → the shared pattern, nested up to four levels (the validator's rule). An
@@ -81,6 +89,9 @@ export function catalogueGraders(c: GraderCatalogue, id: string): CatalogueGrade
         break
       case 'answerExcludes':
         out.answerExcludes = [...(out.answerExcludes ?? []), ...item.facts!]
+        break
+      case 'toolsNotBefore':
+        out.toolsNotBefore = { says, tools: item.tools!, before: item.before! }
         break
       case 'noSandboxCommand':
         out.noSandboxCommand = { says, pattern: resolveShared(item.pattern!, shared) }

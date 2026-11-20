@@ -50,6 +50,14 @@ import { scenario as scenario46 } from './scenarios/46-retry-different-target'
 import { scenario as scenario47 } from './scenarios/47-follow-up-documents-query'
 // #1032: route results that feed each other, and the writer's evidence of them.
 import { scenario as scenario48 } from './scenarios/48-person-files-document'
+// #1058: the organisation's own projects — its own sources first (graph, then
+// office-data's files and sites), the public web last, and never a deferral to
+// "internal documentation" the tools themselves read.
+import { scenario as scenario49 } from './scenarios/49-org-projects-office-source'
+import { scenario as scenario50 } from './scenarios/50-org-projects-in-graph'
+// #1058 r2: a public organisation's projects are a web question — the live proof,
+// gated (p4) until the next coordinated live run.
+import { scenario as scenario51 } from './scenarios/51-org-projects-public-org'
 import { scenario as scenarioTn35 } from './scenarios/tn35-remember-preference'
 import { scenario as scenarioTn36 } from './scenarios/tn36-what-do-you-remember'
 import { scenario as scenarioTn41 } from './scenarios/tn41-other-users-conversations'
@@ -103,6 +111,9 @@ export const scenarios = [
   scenario46,
   scenario47,
   scenario48,
+  scenario49,
+  scenario50,
+  scenario51,
   scenarioTn35,
   scenarioTn36,
   scenarioTn41,

@@ -34,6 +34,12 @@ export interface ConversationScenario {
    * credited. Absent = `sandbox_bash` is the only acceptable producer (a computation). */
   writtenArtifacts?: Record<string, (content: string) => boolean>
   forbiddenTools: string[]
+  /** No listed tool is called before `before` first succeeds: an ordering rule
+   *  `forbiddenTools` cannot grade, because a non-empty forbiddenTools list also
+   *  demands the read-only explanation wording (its semantics are graph-write
+   *  refusals, not route order). Read from the catalogue row through
+   *  `catalogue-graders.ts`, like the pattern graders. */
+  toolsNotBefore?: { says: string; tools: readonly string[]; before: string }
   maxIterations: number
   failFirstTurn?: boolean
   noTools?: boolean

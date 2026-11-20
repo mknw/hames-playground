@@ -601,7 +601,7 @@ describe('#1057: the Modal lines on the payload', () => {
       containerStartedAtMs: startedAtMs,
       restored: null,
     })
-    expect(state.modal?.large.restoreEstimateMs).toBeGreaterThan(0)
+    expect(state.modal?.large?.restoreEstimateMs).toBeGreaterThan(0)
     expect(state.modal?.small.state).toBe('cold')
     expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([`${MODAL_BASE}/state`])
   })
@@ -623,7 +623,7 @@ describe('#1057: the Modal lines on the payload', () => {
     configureModal(() => modalState({ large: 1 }, { ready: null }))
     const state = await getGpuAdminState()
     expect(state.modal?.large).toMatchObject({ state: 'booting' })
-    expect(state.modal?.large.reason).toContain('serving')
+    expect(state.modal?.large?.reason).toContain('serving')
     expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([`${MODAL_BASE}/state`])
   })
 
@@ -843,7 +843,7 @@ describe('#1057: the switch through the control route', () => {
       const state = await getGpuAdminState()
       expect(state.modal?.large).toMatchObject({ state: 'not-starting', containers: 0 })
       expect(state.modal?.small).toMatchObject({ state: 'not-starting' })
-      expect(state.modal?.large.reason).toContain('310s')
+      expect(state.modal?.large?.reason).toContain('310s')
     } finally {
       vi.useRealTimers()
     }
@@ -886,7 +886,7 @@ describe('#1057: the switch through the control route', () => {
         Promise.resolve(
           url === `${MODAL_BASE}/state` ? modalStateZero() : new Response('{}'),
         )) as never)
-      expect((await getGpuAdminState()).modal?.large.state).toBe('cold')
+      expect((await getGpuAdminState()).modal?.large?.state).toBe('cold')
     } finally {
       vi.useRealTimers()
     }

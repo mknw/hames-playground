@@ -93,6 +93,9 @@
  * so the two layers cover the same race from both ends. Cost: one idempotent
  * control call per box per five minutes while OFF — and an `ops.py prewarm` run
  * by hand under an OFF switch is released within that window.
+ * If the database becomes unreadable, the last observed OFF still owes that
+ * re-assertion and its pending retries. Unknown or last-ON waits for a fresh
+ * read; it never guesses OFF or sends a new ON during the outage.
  *
  * ## What a failed tick does
  *
@@ -390,8 +393,11 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
     loop.lastKnownOn = on
   } catch (err) {
     logFailure(loop, 'reading the switch', err)
-    if (loop.lastKnownOn !== false) return
-    on = false
+    if (loop.lastKnownOn === false) {
+      await retryPendingReleases(loop)
+      await reassertOff(loop)
+    }
+    return
   }
   if (!on) {
     // OFF: the switch may have just flipped, so the "one log per cause" latch

@@ -131,9 +131,7 @@ describe('the configured gate', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(stateBody())))
     vi.stubGlobal('fetch', fetchMock)
     void probeModalBoxes()
-    expect(String(fetchMock.mock.calls[0] as unknown as [string])).toBe(
-      'http://127.0.0.1:8124/state',
-    )
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('http://127.0.0.1:8124/state')
   })
 })
 

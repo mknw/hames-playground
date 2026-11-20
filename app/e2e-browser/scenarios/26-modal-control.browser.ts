@@ -66,11 +66,15 @@ test('the switch boots both boxes with no request sent, and the lines read from 
   // no wake ping, no health poll, not one model call.
   expect(await backend.calls()).toEqual(before)
 
-  // ---- A container comes up: the line names it, restored, GPU, up-for ----
+  // ---- A container comes up: the line names it, restored, GPU ----
   await backend.modalArm({ large: 1 })
   await expect(page.getByTestId('gpu-modal-large')).toContainText('restored from a snapshot')
   await expect(page.getByTestId('gpu-modal-large')).toContainText('NVIDIA L4')
-  await expect(page.getByTestId('gpu-modal-large')).toContainText('up for')
+  // No `up for` assertion here by design: the fake's container list carries
+  // no start times (the real SDK's `_experimental_list_containers` does not
+  // either — `ServerContainerInfo` at the pinned 1.6.1), so the "up since"
+  // half of the line renders from the app's own observation clock. The
+  // container-start seed itself is pinned at the unit layer (M16).
 
   // ---- Stop now, behind a confirmation: only the confirmed stop stops -----
   const confirm = page.waitForEvent('dialog')

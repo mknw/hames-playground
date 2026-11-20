@@ -490,8 +490,10 @@ describe('deploy/modal: Python behaviour (hermetic unit layer)', () => {
 // naming it (and the CLI fallback takes over at run time).
 describe('deploy/modal: the control sidecar (hermetic unit layer)', () => {
   it('answers /state from the experimental call, degrades per box, and guards its token', () => {
+    // The sidecar suite serves real sockets on ephemeral ports (~10s measured);
+    // the vitest default of 5s would flake it, so this one names its budget.
     expect(() =>
       execFileSync('python3', [sidecarScript], { encoding: 'utf8', timeout: 30000 }),
     ).not.toThrow()
-  })
+  }, 30_000)
 })

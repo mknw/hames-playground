@@ -46,6 +46,7 @@ import {
   COLD_START_HEADLINE,
   coldStartAnnouncement,
   coldStartBasisHint,
+  coldStartBoxSuffix,
   coldStartDetail,
 } from '~/lib/cold-start-format'
 import type { WarmingNotice } from '~/lib/run-registry'
@@ -290,7 +291,10 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                     aria-hidden="true"
                   />
                   <span text="xs ui-text-secondary" truncate="" aria-hidden="true">
+                    {/* #1057: the headline names WHICH boxes the wait is on,
+                        from the same payload as the estimate beside it. */}
                     {COLD_START_HEADLINE}
+                    {coldStartBoxSuffix(notice().boxes)}
                   </span>
                 </div>
                 {/* `ui-text-secondary`, not tertiary: this is the only line in
@@ -314,7 +318,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                     for the life of the notice. Same shape as the header
                     strip's warm indicator. */}
                 <span sr-only aria-live="polite">
-                  {coldStartAnnouncement(notice().estimateMs)}
+                  {coldStartAnnouncement(notice().estimateMs, notice().boxes)}
                 </span>
               </div>
             )}

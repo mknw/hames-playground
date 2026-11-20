@@ -39,12 +39,14 @@
  * only, cards on the page ground, and a single column that holds at 390px.
  */
 import { A } from '@solidjs/router'
-import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js'
 import { Switch } from '@ark-ui/solid/switch'
 import {
   getGpuAdminState,
   setGpuKeepRunning,
+  stopGpuBoxNow,
   type GpuAdminState,
+  type GpuBoxLine,
 } from '~/lib/harness-client/gpu-admin.server'
 import {
   getPreviewHeaderState,
@@ -59,6 +61,7 @@ import {
 } from '~/components/ark-ui/PreviewHeaderStrip'
 import { fmtEur } from '@hames-ai/harness-patterns/observability/token-totals'
 import { formatCountdown } from '~/lib/preview-header-format'
+import { COLD_START_FULL_BOOT_MS, formatColdStartEstimate } from '~/lib/cold-start-format'
 
 /** The switch's label, on its own line: the words the owner asked for,
  *  following the header's "start self-deployed GPUs" vocabulary. */
@@ -73,6 +76,48 @@ export const GPU_KEEP_STARTING = 'starting the boxes…'
  *  deliberately "not found"-adjacent: it names no capabilities, confirms no
  *  secrets, and hands the visitor back to the chat. */
 export const GPU_ADMIN_FORBIDDEN = 'Admin only'
+
+/** The admin panel's name for each box, as the Modal lines say them (#1057). */
+const BOX_NAME: Record<'large' | 'small', string> = { large: '27B', small: '4B' }
+
+/** One box's Modal line as the panel renders it (#1057): the state, then the
+ *  facts behind it. Coarse figures only (`formatColdStartEstimate`), because
+ *  the estimate is a handful of samples on one process, and a `6:12` ticking
+ *  by the second would present a median as a schedule. */
+function modalLineText(line: GpuBoxLine, now: number): string {
+  const boot = line.containerStartedAtMs ?? null
+  switch (line.state) {
+    case 'up': {
+      const how =
+        line.restored === true
+          ? 'restored from a snapshot'
+          : line.restored === false
+            ? 'booted in full'
+            : 'up'
+      const upFor =
+        boot !== null
+          ? `, up for ${formatColdStartEstimate(Math.max(0, now - boot)) ?? 'under a minute'}`
+          : ''
+      return `up — ${how}${line.gpu ? `, ${line.gpu}` : ''}${upFor}`
+    }
+    case 'booting': {
+      const elapsed = boot !== null ? now - boot : null
+      const elapsedText =
+        elapsed !== null
+          ? `${formatColdStartEstimate(elapsed) ?? 'under a minute'} so far`
+          : 'requested'
+      return `booting — ${elapsedText} (a snapshot restore is ~${formatColdStartEstimate(
+        157_000,
+      )}; a full boot can take ~${formatColdStartEstimate(COLD_START_FULL_BOOT_MS)})`
+    }
+    case 'cold':
+      return 'cold — no container; it scales to zero'
+    case 'not-starting':
+      return `NOT STARTING — ${line.reason ?? 'Modal reports no container'}; stop it below or switch off`
+    case 'unknown':
+      return `unknown — the control-plane read failed${line.reason ? ` (${line.reason})` : ''}`
+  }
+}
 
 /** How long each state read the page makes gets to answer before it counts as
  *  failed. A read that never settles would otherwise wedge everything that
@@ -116,6 +161,9 @@ export default function Admin() {
   // boxes did not come" — it is never swallowed into a silently-off switch.
   const [busy, setBusy] = createSignal(false)
   const [failed, setFailed] = createSignal<string | null>(null)
+  /** The per-box stop button's own channel: independent of the switch's so a
+   *  failed stop neither reads as a failed switch nor flips one. */
+  const [stoppingBox, setStoppingBox] = createSignal<'large' | 'small' | null>(null)
 
   /** Has a good admin payload ever landed? A plain flag rather than a signal
    *  read, because the decision below is made OUTSIDE any tracked scope: a
@@ -256,6 +304,27 @@ export default function Admin() {
     }
   }
 
+  /** #1057: stop ONE box's containers now, behind a confirmation — the
+   *  action for a box that is stuck or billing for a boot that is going
+   *  nowhere. Server-side the action is `requireAdmin`-gated like the
+   *  switch; the confirmation is the one thing only this surface can add. */
+  const stopBox = async (box: 'large' | 'small') => {
+    const what = `Stop the ${BOX_NAME[box]} box's containers now, instead of waiting out the scaledown window?`
+    if (!window.confirm(what)) return
+    if (stoppingBox()) return
+    setStoppingBox(box)
+    setFailed(null)
+    try {
+      await stopGpuBoxNow(box)
+      await readBoth()
+    } catch (err) {
+      await loadAdmin()
+      setFailed(err instanceof Error ? err.message : 'The box could not be stopped.')
+    } finally {
+      setStoppingBox(null)
+    }
+  }
+
   /** The warmth word + figure, exactly as the strip computes them — one
    *  source, one derivation, so the admin panel and the header cannot show
    *  two different boxes. */
@@ -364,12 +433,21 @@ export default function Admin() {
     // the 4B's from the admin payload — the per-box fields no strip
     // renders, moved off the payload every signed-in user receives.
     const up: Record<'large' | 'small', boolean> = {
-      large: w?.warmth.state === 'ready' || w?.warmth.state === 'answering',
-      small: s?.smallState === 'ready',
+      large:
+        w?.warmth.state === 'ready' ||
+        w?.warmth.state === 'answering' ||
+        s?.modal?.large?.state === 'up',
+      small: s?.smallState === 'ready' || s?.modal?.small.state === 'up',
     }
+    // #1057: when the control plane reports the container's start, THAT is the
+    // seed — Modal bills from container creation, so the floor bills from it
+    // too — and the process-local up-since is the fallback it always was. The
+    // clamp at the switch-on stamp below still applies.
+    const containerStart = (box: 'large' | 'small'): number | null =>
+      s?.modal?.[box]?.containerStartedAtMs ?? null
     const upSince: Record<'large' | 'small', number | null> = {
-      large: s?.largeUpSince ?? null,
-      small: s?.smallUpSince ?? null,
+      large: containerStart('large') ?? s?.largeUpSince ?? null,
+      small: containerStart('small') ?? s?.smallUpSince ?? null,
     }
     const rates = perBoxRates()
     if (since !== accrualStamp) {
@@ -537,10 +615,9 @@ export default function Admin() {
                     </span>
                   }
                 >
-                  On wakes both GPUs now and keeps them up until this is switched off — with no
-                  browser open, and past every idle cap and scale-down window. Off returns to
-                  today's behaviour: warm while someone has the app open, then scaled to zero. The
-                  switch is kept on the server, so it survives a reload or a closed tab.
+                  {s().modal
+                    ? 'On boots both GPUs through Modal’s autoscaler (min_containers=1) — no request is sent to either box — and keeps them up until this is switched off, with no browser open. Off releases the autoscaler (min_containers=0) and each box scales down after its own window. The switch is kept on the server, so it survives a reload or a closed tab.'
+                    : 'On wakes both GPUs now and keeps them up until this is switched off — with no browser open, and past every idle cap and scale-down window. Off returns to today’s behaviour: warm while someone has the app open, then scaled to zero. The switch is kept on the server, so it survives a reload or a closed tab.'}
                 </Show>
               </p>
 
@@ -615,6 +692,98 @@ export default function Admin() {
                     bill.
                   </p>
                 </Show>
+              </Show>
+            </section>
+
+            {/* ---- The Modal control plane (#1057) -------------------------- */}
+            {/* One line per box, from Modal's own control plane plus the box's
+                /status once a container is up — the two facts this panel used
+                to infer from its own clocks. The lines poll with the page: the
+                same cycle that refreshes the state above. */}
+            <section
+              flex="~ col"
+              gap="3"
+              p="4"
+              rounded="lg"
+              bg="ui-bg-secondary"
+              border="1 ui-border-primary"
+              data-testid="gpu-modal-card"
+            >
+              <div flex="~ items-center" gap="2">
+                <span
+                  class="i-material-symbols-dns-outline"
+                  w="4"
+                  h="4"
+                  text="ui-accent"
+                  aria-hidden="true"
+                />
+                <span text="sm ui-text-primary">Modal control</span>
+              </div>
+
+              <Show
+                when={s().modal}
+                fallback={
+                  <p text="xs ui-text-secondary" data-testid="gpu-modal-unavailable">
+                    Modal control unavailable (no token) — the switch above keeps the boxes warm
+                    with keep-warm pings, the fallback. Set{' '}
+                    <span font="mono">MODAL_CONTROL_BASE</span> and{' '}
+                    <span font="mono">MODAL_CONTROL_TOKEN</span> (see{' '}
+                    <span font="mono">app/.env.example</span>) and run the sidecar (
+                    <span font="mono">deploy/modal/control_sidecar.py</span>).
+                  </p>
+                }
+              >
+                {(modal) => (
+                  <div flex="~ col" gap="2">
+                    <For each={['large', 'small'] as const}>
+                      {(box) => (
+                        <Show when={modal()[box]}>
+                          {(line) => (
+                            <div
+                              flex="~ items-center justify-between"
+                              gap="3"
+                              data-testid={`gpu-modal-${box}`}
+                            >
+                              <span
+                                text={`xs ${
+                                  line().state === 'not-starting'
+                                    ? 'ui-danger'
+                                    : 'ui-text-secondary'
+                                }`}
+                              >
+                                {BOX_NAME[box]}: {modalLineText(line(), Date.now())}
+                              </span>
+                              {/* Stop now: for a box that is stuck or billing
+                                  for nothing. Only offered while there is
+                                  something to stop (a container), and behind
+                                  a confirmation — the action is immediate
+                                  and it drops in-flight turns on that box. */}
+                              <Show when={line().state === 'up' || line().state === 'booting'}>
+                                <button
+                                  text="xs ui-danger"
+                                  bg="transparent hover:ui-bg-hover"
+                                  border="1 ui-border-secondary"
+                                  rounded="md"
+                                  p="x-2 y-0.5"
+                                  disabled={stoppingBox() !== null}
+                                  onClick={() => void stopBox(box)}
+                                  title={`Stop the ${BOX_NAME[box]}'s containers now, instead of waiting out the scaledown window. A turn in flight on it will fail.`}
+                                >
+                                  {stoppingBox() === box ? 'stopping…' : 'stop now'}
+                                </button>
+                              </Show>
+                            </div>
+                          )}
+                        </Show>
+                      )}
+                    </For>
+                    <p text="xs ui-text-tertiary">
+                      From Modal’s control plane (container count) plus each box’s{' '}
+                      <span font="mono">/status</span> once a container is up — never a request to a
+                      scaled-to-zero box.
+                    </p>
+                  </div>
+                )}
               </Show>
             </section>
           </>

@@ -38,14 +38,18 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import { resolveTier } from '../inference/tier.server'
 import { selfDeployedConfigured, type InferenceTier } from '../inference/config.server'
+import { verdaControlPlaneConfigured } from '../inference/verda-control-plane.server'
 import { largeWarmth, type LargeWarmth } from '../inference/large-activity.server'
+import { probeVerdaReplicas } from '../inference/verda-control-plane.server'
 import {
-  probeVerdaReplicas,
-  type VerdaControlPlaneProbe,
-} from '../inference/verda-control-plane.server'
+  modalBoxProbe,
+  modalControlConfigured,
+  probeModalBoxes,
+} from '../inference/modal-control.server'
 import { coldStartEstimate } from '../inference/cold-start.server'
 import {
   ensurePrivateTierAwake,
@@ -170,9 +174,19 @@ export interface PreviewHeaderState {
  * already had); and only the no-turn, no-evidence cases ask the control plane,
  * where an unavailable probe — the one error path — is `unknown`.
  */
+/** The probe, normalized: whichever control plane owns this deployment reports
+ *  the same three facts about the 27B's box — is it up at all (count), and
+ *  when its oldest container/replica started (the one honest elapsed-time
+ *  base for a `starting` countdown). `null` when no control plane answers. */
+export interface BoxControlProbe {
+  ok: boolean
+  count: number | null
+  oldestStartedAtMs: number | null
+}
+
 function displayWarmth(
   w: LargeWarmth,
-  probe: VerdaControlPlaneProbe | null,
+  probe: BoxControlProbe | null,
   waking: boolean,
 ): HeaderWarmth {
   let state: WarmthDisplayState
@@ -188,7 +202,7 @@ function displayWarmth(
   // against a proven-warm box leaves `ready` standing.
   else if (waking) state = 'starting'
   else if (!probe || !probe.ok) state = 'unknown'
-  else state = (probe.replicaCount ?? 0) > 0 ? 'starting' : 'cold'
+  else state = (probe.count ?? 0) > 0 ? 'starting' : 'cold'
 
   // The estimate is read only for the state that shows it. `coldStartEstimate()`
   // is cheap (a median over a handful of samples), but a field that is always
@@ -208,7 +222,7 @@ function displayWarmth(
   const estimate = state === 'starting' ? coldStartEstimate() : null
   let estimateMs: number | null = null
   if (estimate) {
-    const startedAt = probe?.ok ? probe.oldestReplicaStartedAtMs : null
+    const startedAt = probe?.ok ? probe.oldestStartedAtMs : null
     const elapsedMs = startedAt !== null ? Math.max(0, Date.now() - startedAt) : 0
     const remainingMs = estimate.estimateMs - elapsedMs
     estimateMs = remainingMs > 0 ? remainingMs : null
@@ -237,13 +251,39 @@ function displayWarmth(
  * 5s-per-fetch bound instead of hanging a poll that is supposed to be safe
  * beside a live chat. Skipped entirely when there is no endpoint: the whole
  * indicator is hidden for that deployment, so a probe would be noise. */
+/** The 27B's control-plane probe — the ONE question the strip asks a control
+ *  plane: Modal's while its sidecar is configured (`modal-control.server.ts`,
+ *  #1057), Verda's on the deployment it was built for, `null` when neither
+ *  answers. On the OpenRouter route the 27B is not a Modal box of ours, so
+ *  the Modal probe is skipped exactly as the wake skips the box — the strip
+ *  then has Verda or nothing, which is today's behaviour. */
+async function boxProbeFor(): Promise<BoxControlProbe | null> {
+  if (selfDeployedConfigured() && modalControlConfigured() && !largeOnOpenRouter()) {
+    const modal = modalBoxProbe(await probeModalBoxes(), 'large')
+    return {
+      ok: modal.ok,
+      count: modal.containerCount,
+      oldestStartedAtMs: modal.oldestContainerStartedAtMs,
+    }
+  }
+  if (verdaControlPlaneConfigured()) {
+    const verda = await probeVerdaReplicas()
+    return {
+      ok: verda.ok,
+      count: verda.replicaCount,
+      oldestStartedAtMs: verda.oldestReplicaStartedAtMs,
+    }
+  }
+  return null
+}
+
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   const user = await requireUser()
   const [stored, activeUsers, usage, probe] = await Promise.all([
     getStoredInferenceTier(user.id),
     countActiveUsers(),
     getUsageToday(),
-    selfDeployedConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
+    boxProbeFor(),
   ])
   const tier = resolveTier(null, stored)
   return {

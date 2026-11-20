@@ -215,3 +215,102 @@ describe('the boot hook and the timer it arms', () => {
     spy.mockRestore()
   })
 })
+
+// ============================================================================
+// #1057: with the Modal control route configured, the tick drives the
+// autoscaler — the shared wake is the fallback
+// ============================================================================
+//
+// The switch's demo promise is "kept running with no browser attached"; with
+// the control sidecar reachable, Modal's own autoscaler is what keeps the
+// boxes up (min_containers=1), so the tick asserts it and sends NO request to
+// either box — a wake ping would be a GPU-second billed for nothing. The
+// per-tick assertion also covers the one thing a set-and-forget autoscaler
+// cannot: a Modal redeploy resets the override to the app's static value, and
+// the next tick is what brings the demo's box back.
+describe('#1057: the tick through the Modal control route', () => {
+  const MODAL_BASE = 'http://127.0.0.1:8124'
+  const autoscalerPosts = () =>
+    fetchMock.mock.calls.filter(([u]) => String(u) === `${MODAL_BASE}/autoscaler`)
+
+  beforeEach(() => {
+    vi.stubEnv('MODAL_CONTROL_BASE', MODAL_BASE)
+    vi.stubEnv('MODAL_CONTROL_TOKEN', 'test-modal-token')
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, min_containers: 1 })))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+  })
+
+  it('asserts min_containers=1 per box and pings NEITHER box', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(3 * TICK)
+
+    const posts = autoscalerPosts()
+    expect(posts.length).toBeGreaterThanOrEqual(4) // both boxes, several ticks
+    const bodies = posts.map(
+      ([, init]) =>
+        JSON.parse(String((init as RequestInit).body)) as { box: string; min_containers: number },
+    )
+    expect(bodies.every((b) => b.min_containers === 1)).toBe(true)
+    expect(new Set(bodies.map((b) => b.box))).toEqual(new Set(['large', 'small']))
+    // THE acceptance: no request to either inference endpoint, at any tick.
+    expect(largePings()).toBe(0)
+    expect(smallPings()).toBe(0)
+  })
+
+  it('asserts nothing while the switch is off — this loop only ever re-asserts ON', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(3 * TICK)
+    expect(autoscalerPosts()).toEqual([])
+    expect(urls()).toEqual([])
+  })
+
+  it('swallows a refused assertion once per cause and keeps the switch on', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: false, error: 'quota' })))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      startGpuKeepRunningLoop(TICK)
+      await vi.advanceTimersByTimeAsync(3 * TICK)
+      // One log per cause, not one per tick — the loop runs forever.
+      const saids = warn.mock.calls.map(([msg]) => String(msg))
+      expect(saids.filter((msg) => msg.includes('keeping the boxes up'))).toHaveLength(1)
+      expect(saids[0]).toContain('quota')
+      // And the switch row is untouched by the failure.
+      expect(getGpuState).toHaveBeenCalledTimes(4) // one read per tick, nothing else
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('keeps a refusing control route OFF the model endpoints — no ping fallback mid-tick', async () => {
+    // The tick's autoscaler assertion failing is NOT a reason to start
+    // sending keep-warm pings: the boxes are Modal's to hold up, and a ping
+    // against a broken control plane would bill GPU seconds for nothing.
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.reject(new Error('the sidecar is gone'))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(2 * TICK)
+    expect(largePings()).toBe(0)
+    expect(smallPings()).toBe(0)
+  })
+})

@@ -64,8 +64,25 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
  *  its fetches, caches and degraded results — is `verda-control-plane.test.ts`'s
  *  subject. */
 const probeVerdaReplicas = vi.fn<() => Promise<VerdaControlPlaneProbe>>()
+const verdaControlPlaneConfigured = vi.fn<() => boolean>(() => true)
 vi.mock('../../../lib/inference/verda-control-plane.server', () => ({
   probeVerdaReplicas: () => probeVerdaReplicas(),
+  // #1057: the strip now picks its control plane by configuration, and this
+  // mock is what keeps the Verda one "configured" in these tests while the
+  // Modal one (pointed at nothing) stays out of the way.
+  verdaControlPlaneConfigured: () => verdaControlPlaneConfigured(),
+}))
+
+// #1057: the Modal control client — unconfigured by default in these tests, so
+// the Verda probe (and its tests) keep answering the strip exactly as before;
+// the Modal half has its own describe below. The ORIGINAL is spread first
+// because the wake poll also imports this module's boot-clock notes.
+const probeModalBoxes = vi.fn()
+const modalControlConfigured = vi.fn(() => false)
+vi.mock('../../../lib/inference/modal-control.server', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  probeModalBoxes: () => probeModalBoxes(),
+  modalControlConfigured: () => modalControlConfigured(),
 }))
 
 import * as previewHeader from '../../../lib/harness-client/preview-header.server'
@@ -852,5 +869,105 @@ describe('keepPrivateTierWarm', () => {
     getStoredInferenceTier.mockResolvedValue('self_deployed')
     fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
     await expect(keepPrivateTierWarm()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
+  })
+})
+
+// ============================================================================
+// #1057: the strip picks its control plane — Modal's while its sidecar is
+// configured, Verda's on the deployment it was built for
+// ============================================================================
+//
+// The state machine is the one above, unchanged; what is pinned here is only
+// WHICH probe feeds it, and that the two cannot both be consulted (two probes
+// would be two answers about one box, and the second one a bill the strip
+// never needed to pay). The Modal answers are per-BOX, so the 27B's is picked
+// out of the pair before display — the small box's half serves the admin
+// panel, not the strip.
+describe('#1057: the strip control plane', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    // `configureSelfDeployed`, not a bare env spread: the strip's probe picks
+    // its control plane only for a configured private tier, so both halves
+    // (endpoints AND the probe mocks) have to be in place per case.
+    configureSelfDeployed()
+    modalControlConfigured.mockReturnValue(false)
+    verdaControlPlaneConfigured.mockReturnValue(false)
+    probeVerdaReplicas.mockReset()
+    probeModalBoxes.mockReset()
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+    modalControlConfigured.mockReturnValue(false)
+    verdaControlPlaneConfigured.mockReturnValue(false)
+  })
+
+  /** The Modal pair answer, with the 27B's half said out loud. */
+  const modalProbe = (large: {
+    ok: boolean
+    containerCount: number | null
+    oldestContainerStartedAtMs: number | null
+  }) => ({
+    at: 0,
+    large: { ...large, reason: null },
+    small: { ok: true, containerCount: 0, oldestContainerStartedAtMs: null, reason: null },
+  })
+
+  it('consults Modal — and NOT Verda — while the sidecar is configured', async () => {
+    modalControlConfigured.mockReturnValue(true)
+    verdaControlPlaneConfigured.mockReturnValue(true)
+    probeModalBoxes.mockResolvedValue(
+      modalProbe({ ok: true, containerCount: 0, oldestContainerStartedAtMs: null }),
+    )
+
+    expect((await getPreviewHeaderState()).warmth.state).toBe('cold')
+    expect(probeModalBoxes).toHaveBeenCalled()
+    expect(probeVerdaReplicas).not.toHaveBeenCalled()
+  })
+
+  it('maps a container to starting — never ready, the weight load happens inside it', async () => {
+    modalControlConfigured.mockReturnValue(true)
+    const started = Date.now() - 30_000
+    probeModalBoxes.mockResolvedValue(
+      modalProbe({ ok: true, containerCount: 1, oldestContainerStartedAtMs: started }),
+    )
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('starting')
+    // The countdown's elapsed base is the CONTROL PLANE's container start,
+    // exactly as the Verda probe's oldest replica start was.
+    expect(warmth.coldStartEstimateMs).not.toBeNull()
+    expect(warmth.coldStartEstimateMs!).toBeLessThanOrEqual(157_000 - 30_000)
+  })
+
+  it('answers unknown when the Modal probe fails — never ready on a probe', async () => {
+    modalControlConfigured.mockReturnValue(true)
+    probeModalBoxes.mockResolvedValue(
+      modalProbe({ ok: false, containerCount: null, oldestContainerStartedAtMs: null }),
+    )
+    expect((await getPreviewHeaderState()).warmth.state).toBe('unknown')
+  })
+
+  it('skips the Modal probe on the OpenRouter route — the 27B is not one of ours there', async () => {
+    modalControlConfigured.mockReturnValue(true)
+    verdaControlPlaneConfigured.mockReturnValue(false)
+    process.env.LARGE_LLM_ROUTE = 'openrouter'
+
+    expect((await getPreviewHeaderState()).warmth.state).toBe('unknown')
+    expect(probeModalBoxes).not.toHaveBeenCalled()
+  })
+
+  it('still answers from Verda when only Verda is configured', async () => {
+    verdaControlPlaneConfigured.mockReturnValue(true)
+    probeVerdaReplicas.mockResolvedValue({
+      ok: true,
+      replicaCount: 0,
+      oldestReplicaStartedAtMs: null,
+      reason: null,
+      at: 0,
+    })
+    expect((await getPreviewHeaderState()).warmth.state).toBe('cold')
+    expect(probeModalBoxes).not.toHaveBeenCalled()
   })
 })

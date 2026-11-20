@@ -11,20 +11,31 @@
  * mechanism that can do it is a process-side timer, because a timer is the
  * only thing in the server that acts when nobody asks.
  *
- * ## It is the same wake, not a second one
+ * ## It is the same wake, not a second one — and since #1057, only the fallback
  *
- * Every tick the switch is on, this loop calls `ensurePrivateTierAwake({
- * keepWarm: true })` — the SAME entry point a turn, the header button and the
- * open-page keep-warm use — so it inherits, rather than re-implements, every
- * property that module documents: the in-flight dedupe (a tick during a turn's
- * cold-start poll JOINS it instead of queueing a second one on a
- * single-replica box), the warm clocks and their short-circuits (a tick on a
- * box this process saw answer inside the keep-warm fraction costs nothing),
- * and the cold-start recording gates (a loop tick never enters the estimate's
- * history as a reading it is not). Reusing the browser's cadence numbers
- * (`KEEP_WARM_FRACTION`, the `*_SCALEDOWN_SECONDS` windows) also means the
- * loop pings at exactly the rate that keeps each box from scaling down, and
- * an operator tuning a window tunes every driver at once.
+ * **With Modal control available** (`MODAL_CONTROL_BASE`/`MODAL_CONTROL_TOKEN`
+ * set) the tick asserts `min_containers=1` per kept box through the control
+ * sidecar (`modal-control.server.ts`) and sends NO request to either box: the
+ * autoscaler is what holds them up, and a request would be a GPU-second billed
+ * for nothing. The per-tick assertion is deliberate — the autoscaler override
+ * survives until the Modal app is redeployed, and a redeploy resets it to the
+ * app's own static value, so the demo's box would otherwise silently scale
+ * down on the next deploy. `switch off` asserts `0` from the panel action
+ * (`gpu-admin.server.ts`), not from here — this loop only ever re-asserts the
+ * switch's ON.
+ *
+ * **Without it** every tick calls `ensurePrivateTierAwake({ keepWarm: true })`
+ * — the SAME entry point a turn, the header button and the open-page keep-warm
+ * use — so it inherits, rather than re-implements, every property that module
+ * documents: the in-flight dedupe (a tick during a turn's cold-start poll
+ * JOINS it instead of queueing a second one on a single-replica box), the warm
+ * clocks and their short-circuits (a tick on a box this process saw answer
+ * inside the keep-warm fraction costs nothing), and the cold-start recording
+ * gates (a loop tick never enters the estimate's history as a reading it is
+ * not). Reusing the browser's cadence numbers (`KEEP_WARM_FRACTION`, the
+ * `*_SCALEDOWN_SECONDS` windows) also means the loop pings at exactly the rate
+ * that keeps each box from scaling down, and an operator tuning a window tunes
+ * every driver at once.
  *
  * ## Where the state lives, and why the tick re-reads it
  *
@@ -59,7 +70,13 @@
  * admin page's live state, not by the switch quietly reverting itself).
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { getGpuState } from '../db/gpu-state.server'
+import {
+  modalControlConfigured,
+  setModalBoxMinContainers,
+  type ModalBox,
+} from './modal-control.server'
 import { ensurePrivateTierAwake, wakeEnvMs } from './wake.server'
 
 assertServerOnImport()
@@ -133,8 +150,16 @@ export function startGpuKeepRunningLoop(intervalMs: number = gpuKeepTickMs()): v
   void tick(loop)
 }
 
-/** One wake-up: re-read the switch, and if it is on, touch the boxes through
- *  the one shared wake. Never throws — a timer callback that rejects is an
+/** The boxes this loop keeps up: the 4B always, the 27B only while it is one
+ *  of ours (`LARGE_LLM_ROUTE=openrouter` puts it on a public per-token API,
+ *  which the wake skips for the same reason). */
+function keptBoxes(): ModalBox[] {
+  return largeOnOpenRouter() ? ['small'] : ['large', 'small']
+}
+
+/** One wake-up: re-read the switch, and if it is on, hold the boxes up —
+ *  through Modal's autoscaler where the control route exists, through the one
+ *  shared wake otherwise. Never throws — a timer callback that rejects is an
  *  unhandled rejection away from taking the process down. */
 async function tick(loop: ArmedLoop): Promise<void> {
   let on: boolean
@@ -151,13 +176,25 @@ async function tick(loop: ArmedLoop): Promise<void> {
     return
   }
   try {
-    await ensurePrivateTierAwake({ keepWarm: true })
+    if (modalControlConfigured()) {
+      // The autoscaler route: assert min_containers=1 per kept box, sending
+      // no request to either. Not idempotence for its own sake — a Modal
+      // redeploy resets the override to the app's static value, and the next
+      // tick is what brings the demo's box back before anyone notices.
+      for (const box of keptBoxes()) {
+        const answer = await setModalBoxMinContainers(box, 1)
+        if (!answer.ok) throw new Error(answer.reason ?? 'the control sidecar refused')
+      }
+    } else {
+      // The fallback: keep-warm pings through the one shared wake.
+      await ensurePrivateTierAwake({ keepWarm: true })
+    }
     if (loop.lastFailure !== null) {
       loop.lastFailure = null
-      console.log('[gpu-keep] the boxes answered again; keep-running resumes quietly')
+      console.log('[gpu-keep] the boxes are held up again; keep-running resumes quietly')
     }
   } catch (err) {
-    logFailure(loop, 'keeping the boxes warm', err)
+    logFailure(loop, 'keeping the boxes up', err)
   }
 }
 

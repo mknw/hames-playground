@@ -54,6 +54,17 @@ import { smallProvenWarm, smallUpSince } from '../inference/cold-start.server'
 import { ensurePrivateTierAwake, smallWakeInFlight } from '../inference/wake.server'
 import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import {
+  modalBootPendingSince,
+  modalBoxProbe,
+  modalControlConfigured,
+  modalNotStartingAfterMs,
+  probeModalBoxes,
+  setModalBoxMinContainers,
+  stopModalBoxContainers,
+  type ModalBox,
+} from '../inference/modal-control.server'
+import { readBoxStatus } from '../inference/box-status.server'
 
 async function requireUser(): Promise<{ id: string; email: string }> {
   if (isBypassEnabled()) return { id: BYPASS_USER.id, email: BYPASS_USER.email }
@@ -89,6 +100,126 @@ async function requireAdmin(): Promise<{ id: string; email: string }> {
   }
   if (!isAdminEmail(user.email)) throw forbidden()
   return user
+}
+
+// ============================================================================
+// The Modal control plane's word on each box (#1057)
+// ============================================================================
+
+/**
+ * One box's state as the panel renders it, composed from Modal's control
+ * plane plus the box's own `GET /status` — the two sources the admin panel
+ * did not have before this: the state words were INFERRED from this process's
+ * clocks (a wake in flight, each box's last answer), and "restored vs full
+ * boot" was nowhere at all.
+ *
+ * The states:
+ *  - `up` — a container is up AND its `/status` answered: the box's own
+ *    readiness file, written after its post-restore checks, so `restored`
+ *    (snapshot vs full boot) and `gpu` are the box's own words, not an
+ *    inference from age.
+ *  - `booting` — a container exists (its weights load INSIDE it), or a boot
+ *    has been requested and Modal has not answered with a container yet.
+ *  - `cold` — zero containers, no boot pending: observed scaled-to-zero.
+ *  - `not-starting` — zero containers while a boot has been pending longer
+ *    than `modalNotStartingAfterMs()`: the 2026-11-19 failure, named as one
+ *    instead of sitting out the whole 1200 s timeout (the morning's 237
+ *    unanswered attempts over 1200 s).
+ *  - `unknown` — the control-plane read failed; the panel says so and falls
+ *    back to the inferred display beside it.
+ */
+export type GpuBoxLineState = 'up' | 'booting' | 'cold' | 'not-starting' | 'unknown'
+
+/** One box's admin line — everything the panel's per-box sentence renders. */
+export interface GpuBoxLine {
+  state: GpuBoxLineState
+  /** Containers Modal reports; `null` when the read failed. */
+  containers: number | null
+  /** The oldest container's start per the control plane, epoch ms, when it
+   *  reports one — the honest "up since" for the panel's line and the cost
+   *  meter's seed. `null` when unknown. */
+  containerStartedAtMs: number | null
+  /** `/status` `restored`, read only once a container is up: `true` a
+   *  snapshot restore, `false` a full boot; `null` when unread. */
+  restored: boolean | null
+  /** `/status` `gpu` (the small box reports `nvidia-smi`'s name; the 27B's
+   *  status file carries none), `null` when unread or absent. */
+  gpu: string | null
+  /** When `state` is not healthy: why, in the panel's own words. */
+  reason: string | null
+}
+
+/** Both boxes, or `null` while Modal control is unavailable — the payload the
+ *  panel's per-box lines render, and the marker its fallback label reads. */
+export interface ModalAdminState {
+  /** The 27B's line, or `null` on the OpenRouter route (`LARGE_LLM_ROUTE=
+   *  openrouter`): a public per-token API is not a scale-to-zero box of ours
+   *  to keep, boot or stop, and the panel already says so in the rate
+   *  breakdown — this line must not invent a second box to control. */
+  large: GpuBoxLine | null
+  small: GpuBoxLine
+}
+
+/** Compose one box's line. Never throws: every failure is a degraded line the
+ *  panel renders as `unknown` — a broken control plane costs a line, not the
+ *  payload. */
+async function modalBoxLine(box: ModalBox, now: number): Promise<GpuBoxLine | null> {
+  if (box === 'large' && largeOnOpenRouter()) return null
+  const probe = modalBoxProbe(await probeModalBoxes(), box)
+  if (!probe.ok || probe.containerCount === null) {
+    return {
+      state: 'unknown',
+      containers: null,
+      containerStartedAtMs: null,
+      restored: null,
+      gpu: null,
+      reason: probe.reason,
+    }
+  }
+  if (probe.containerCount === 0) {
+    // Zero containers: cold unless THIS process is waiting on a boot for the
+    // box — and past the not-starting threshold that wait is a failure.
+    const pendingSince = modalBootPendingSince(box)
+    const waitedMs = pendingSince !== null ? now - pendingSince : 0
+    const notStarting = pendingSince !== null && waitedMs > modalNotStartingAfterMs()
+    return {
+      state: notStarting ? 'not-starting' : pendingSince !== null ? 'booting' : 'cold',
+      containers: 0,
+      containerStartedAtMs: null,
+      restored: null,
+      gpu: null,
+      reason: notStarting
+        ? `Modal reports no container after ${Math.round(waitedMs / 1000)}s of asking`
+        : null,
+    }
+  }
+  // A container is up: the weights load inside it. `/status` is the box's own
+  // readiness gate (its supervisor writes the file after the post-restore
+  // checks), so an answer is `up` and a 503 is `booting` — both honest.
+  // (`box-status.server.ts` is the one request this read path may send a box,
+  // and this gate is the only place that opens it: zero containers must never
+  // be asked, because the asking would START the box.)
+  const status = await readBoxStatus(box)
+  const base = {
+    containers: probe.containerCount,
+    containerStartedAtMs: probe.oldestContainerStartedAtMs,
+  }
+  if (!status) return { ...base, state: 'booting', restored: null, gpu: null, reason: null }
+  return { ...base, state: 'up', restored: status.restored, gpu: status.gpu, reason: null }
+}
+
+/** The boxes the switch drives through Modal — the 27B only when it is one of
+ *  ours (not on the OpenRouter route), matching the wake's own skip. */
+function modalBoxes(): ModalBox[] {
+  return largeOnOpenRouter() ? ['small'] : ['large', 'small']
+}
+
+/** One line's thrown error, in the panel's own words. */
+function controlFailure(box: ModalBox, doing: string, reason: string | null): Error {
+  return new Error(
+    `Modal control could not ${doing} for the ${box === 'large' ? '27B' : '4B'} box` +
+      `${reason ? ` (${reason})` : ''}.`,
+  )
 }
 
 /** Everything the admin panel renders, in one payload — the switch and its
@@ -138,6 +269,12 @@ export interface GpuAdminState {
   /** The 4B's own `upSince` (`cold-start.server.ts`), seeding the small
    *  half of the meter exactly as `largeUpSince` seeds the 27B's. */
   smallUpSince: number | null
+  /** Modal's word on each box (#1057), or `null` while Modal control is
+   *  unavailable (`MODAL_CONTROL_BASE` / `MODAL_CONTROL_TOKEN` unset): the
+   *  panel then says "Modal control unavailable (no token)", the switch drives
+   *  the boxes through keep-warm pings — today's behaviour, labelled as the
+   *  fallback — and every other field falls back to its own inference. */
+  modal: ModalAdminState | null
 }
 
 /** Is THIS caller an admin? Never throws: a signed-out visitor is simply not
@@ -157,7 +294,18 @@ export async function isAdminUser(): Promise<boolean> {
  *  read is a panel a non-admin can be tricked into acting on. */
 export async function getGpuAdminState(): Promise<GpuAdminState> {
   await requireAdmin()
+  const now = Date.now()
   const state = await getGpuState()
+  // Both lines compose from ONE control-plane probe (cached 12 s process-side)
+  // and at most one `/status` per box with a container up. `null` while the
+  // control route is unconfigured — the payload the fallback label reads.
+  let modal: ModalAdminState | null = null
+  if (modalControlConfigured()) {
+    modal = {
+      large: await modalBoxLine('large', now),
+      small: (await modalBoxLine('small', now)) as GpuBoxLine,
+    }
+  }
   return {
     keepRunning: state.keepRunning,
     switchedOnAt: state.switchedOnAt,
@@ -168,13 +316,36 @@ export async function getGpuAdminState(): Promise<GpuAdminState> {
     largeUpSince: largeUpSince(),
     smallState: smallProvenWarm() ? 'ready' : smallWakeInFlight() ? 'starting' : 'cold',
     smallUpSince: smallUpSince(),
+    modal,
   }
 }
 
 /**
- * Flip the switch. `on` wakes both boxes NOW and waits for them (see the
- * module docstring); `off` is a plain write, and the boxes then scale down
- * after their own windows.
+ * Flip the switch (#1047, and #1057's control route).
+ *
+ * **With Modal control available** the switch drives Modal's autoscaler: `on`
+ * asserts `min_containers=1` per box — which BOOTS both boxes with no request
+ * sent to either, the acceptance #1057 asks for — and `off` asserts `0`, which
+ * returns each box to scale-to-zero after its own configured window. The
+ * action does NOT wait for a boot: `min_containers=1` is an instruction, not
+ * a poll, and a full boot can take 8–15 minutes (the panel's per-box lines show
+ * it). The process-side loop (`inference/gpu-keep-running.server.ts`)
+ * re-asserts `1` every tick while the switch is on, so a redeploy — which
+ * resets the override to the app's own static value — cannot silently scale
+ * the demo box down.
+ *
+ * **Without it** (`MODAL_CONTROL_BASE`/`MODAL_CONTROL_TOKEN` unset) this is
+ * exactly the #1047 behaviour: `on` wakes both boxes through the one shared
+ * wake and WAITS (a cold start can take minutes; the caller learns whether they
+ * came up), the loop keeps them warm with pings, and `off` is a plain write
+ * after which the boxes scale down after their own windows. The panel labels
+ * this as the fallback.
+ *
+ * Either way the switch is written BEFORE the boxes are touched: "on" is a
+ * promise the loop keeps, not a result the first call must succeed at. A
+ * failed boot/autoscaler call rejects — carrying the reason — and the switch
+ * STAYS ON (no silent auto-off, the owner's explicit call): the owner sees the
+ * failure, and the loop retries.
  *
  * Refuses — without writing anything — when the private tier is not
  * configured, for the same reason `igniteSelfDeployedBox` does: there is
@@ -198,11 +369,58 @@ export async function setGpuKeepRunning(on: boolean): Promise<GpuAdminState> {
         'variables (see app/.env.example).',
     )
   }
-  // The switch is written BEFORE the wake: "on" is a promise the loop keeps
-  // retrying, not a result the wake must succeed at first try. If the wake
-  // fails, the owner sees the failure and the switch stays on — no silent
-  // auto-off.
   await setGpuState(on)
-  if (on) await ensurePrivateTierAwake()
+  if (!modalControlConfigured()) {
+    // Today's behaviour, untouched: the wake-and-wait, the pings, the plain off.
+    if (on) await ensurePrivateTierAwake()
+    return getGpuAdminState()
+  }
+  // The control route: assert the autoscaler per box, without a request to
+  // either. A box the deployment does not keep (the 27B on the OpenRouter
+  // route) is skipped exactly as the wake skips it.
+  for (const box of modalBoxes()) {
+    const answer = await setModalBoxMinContainers(box, on ? 1 : 0)
+    if (!answer.ok)
+      throw controlFailure(
+        box,
+        on ? 'set min_containers to 1' : 'release the autoscaler (min_containers 0)',
+        answer.reason,
+      )
+  }
+  return getGpuAdminState()
+}
+
+/**
+ * Stop a box's containers NOW (#1057) — `ops.py stop`'s call through the
+ * control sidecar, one container at a time — instead of waiting out the
+ * billed scaledown window. The panel calls it for a box that is stuck
+ * (billing for a boot that is not going anywhere) from a per-line button
+ * behind a confirmation, and it is admin-gated like every other control
+ * here. A turn in flight against the stopped box fails exactly as a scaled
+ * box does — visibly, with the message naming the box.
+ *
+ * The one argument is validated at the RPC boundary: the wire can carry
+ * anything as `box`, so only one of the two real boxes is accepted.
+ */
+export async function stopGpuBoxNow(box: 'large' | 'small'): Promise<GpuAdminState> {
+  if (box !== 'large' && box !== 'small') {
+    throw new Response('The box must be "large" (the 27B) or "small" (the 4B).', { status: 400 })
+  }
+  await requireAdmin()
+  if (!modalControlConfigured()) {
+    throw new Error(
+      'Modal control is unavailable (no token), so there is nothing to stop from here. ' +
+        'Set MODAL_CONTROL_BASE and MODAL_CONTROL_TOKEN (see app/.env.example), or run ' +
+        '`ops.py stop` from deploy/modal.',
+    )
+  }
+  if (box === 'large' && largeOnOpenRouter()) {
+    throw new Error(
+      'The 27B runs through OpenRouter (LARGE_LLM_ROUTE=openrouter): it is not a Modal box ' +
+        'of ours, so there is nothing here to stop.',
+    )
+  }
+  const answer = await stopModalBoxContainers(box)
+  if (!answer.ok) throw controlFailure(box, 'stop its containers', answer.reason)
   return getGpuAdminState()
 }

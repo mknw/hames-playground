@@ -190,6 +190,14 @@ import {
   noteLargeCallCompleted,
 } from './large-activity.server'
 import { resampleSmallBoxGpu } from './small-gpu.server'
+import {
+  modalBoxProbe,
+  modalControlConfigured,
+  modalNotStartingAfterMs,
+  noteModalBootEnded,
+  noteModalBootRequested,
+  probeModalBoxes,
+} from './modal-control.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -709,51 +717,109 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
   const intervalMs = target.interval()
 
   const started = Date.now()
-  const remaining = (): number => budgetMs - (Date.now() - started)
-  let attempts = 0
-  // Overwritten by the first attempt, always: `wakeEnvMs` refuses a non-positive
-  // budget, so the loop below runs at least once and this initializer cannot
-  // reach the message. It is here because TypeScript needs one, not as a case.
-  let lastReason = 'it was never asked'
+  // THIS process is now asking this box to boot. Stamp the clock the admin
+  // panel and the header read (`modal-control.server.ts`): the stamp is what
+  // makes "not starting" a fact with a start time rather than a state the
+  // panel can only show once it is over. The `finally` below clears it on
+  // EVERY exit — the answer, the budget, a refusal, an abort — so no stale
+  // pending boot can keep naming a box as not starting after its poll ended.
+  noteModalBootRequested(target.box, started)
+  try {
+    const remaining = (): number => budgetMs - (Date.now() - started)
+    let attempts = 0
+    // Overwritten by the first attempt, always: `wakeEnvMs` refuses a non-positive
+    // budget, so the loop below runs at least once and this initializer cannot
+    // reach the message. It is here because TypeScript needs one, not as a case.
+    let lastReason = 'it was never asked'
 
-  while (remaining() > 0) {
-    signal.throwIfAborted()
-    attempts += 1
-    // Capped by what is left, so the final attempt cannot overshoot the budget
-    // the user was promised — and so a `LARGE_LLM_WAKE_TIMEOUT_MS` set BELOW the
-    // per-attempt timeout still means what it says rather than being silently
-    // rounded up to one full attempt.
-    const failure = await attempt(target, Math.min(attemptMs, remaining()), signal)
-    if (failure === null) {
-      // THE BOX IS UP, and this is the evidence the warm clock asks for: a
-      // completion the deployment answered, on `LARGE_LLM_MODEL_ID`. Stamped only on
-      // the SUCCESS path, which is where this diverges from the usage observer's
-      // rule ("success or failure — a failed call woke the box exactly as much").
-      // That rule is safe for a sample: a BAML call that failed still got far
-      // enough to be attributed. Here it would be self-defeating — the clock is
-      // what makes `largeProvenWarm()` skip the wake, so stamping it on a 400 for
-      // an unknown model id, or on the platform's own 504, would suppress the
-      // next wake on the strength of a box that answered an error.
-      target.completed()
-      target.onUp?.()
-      return Date.now() - started
+    while (remaining() > 0) {
+      signal.throwIfAborted()
+      attempts += 1
+      // Capped by what is left, so the final attempt cannot overshoot the budget
+      // the user was promised — and so a `LARGE_LLM_WAKE_TIMEOUT_MS` set BELOW the
+      // per-attempt timeout still means what it says rather than being silently
+      // rounded up to one full attempt.
+      const failure = await attempt(target, Math.min(attemptMs, remaining()), signal)
+      if (failure === null) {
+        // THE BOX IS UP, and this is the evidence the warm clock asks for: a
+        // completion the deployment answered, on `LARGE_LLM_MODEL_ID`. Stamped only on
+        // the SUCCESS path, which is where this diverges from the usage observer's
+        // rule ("success or failure — a failed call woke the box exactly as much").
+        // That rule is safe for a sample: a BAML call that failed still got far
+        // enough to be attributed. Here it would be self-defeating — the clock is
+        // what makes `largeProvenWarm()` skip the wake, so stamping it on a 400 for
+        // an unknown model id, or on the platform's own 504, would suppress the
+        // next wake on the strength of a box that answered an error.
+        target.completed()
+        target.onUp?.()
+        return Date.now() - started
+      }
+      lastReason = failure
+      // The control plane's verdict on the boot, past the not-starting
+      // threshold: a box Modal cannot give a container is named as failing here,
+      // well before the wake budget runs out (see `notStartingFailure`).
+      const notStarting = await notStartingFailure(target, started, attempts)
+      if (notStarting) throw notStarting
+      // Do not sleep out the tail of the budget: a gap that ends after the budget
+      // does is time the user waits for nothing.
+      if (remaining() <= 0) break
+      await sleep(Math.min(intervalMs, remaining()), signal)
     }
-    lastReason = failure
-    // Do not sleep out the tail of the budget: a gap that ends after the budget
-    // does is time the user waits for nothing.
-    if (remaining() <= 0) break
-    await sleep(Math.min(intervalMs, remaining()), signal)
-  }
 
+    const waitedS = Math.round((Date.now() - started) / 1000)
+    throw new WakeFailure(
+      target.box,
+      `${target.failed}: ${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s, ` +
+        `and the last one ${lastReason}. The deployment scales to zero and its first call is ` +
+        (target.box === 'large'
+          ? 'slow — the longest start measured on it is about 6 minutes (2026-08-27) — but this is '
+          : 'slow — a first boot after redeploy was measured at 577s — but this is ') +
+        `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,
+    )
+  } finally {
+    noteModalBootEnded(target.box)
+  }
+}
+
+/**
+ * "Is this boot going anywhere?" — the 2026-11-19 rule (#1057).
+ *
+ * A box that cannot start does not answer its endpoint with progress: it
+ * answers the same bare 503 as one that is merely slow (237 attempts over
+ * 1200 s that morning), so the app cannot tell them apart from the wire. The
+ * CONTROL plane can: Modal reports how many containers the box has, and a
+ * container is created within seconds of the scale-up the poll's own first
+ * request triggers — a full boot happens INSIDE a container. So after
+ * `modalNotStartingAfterMs()` (default 300 s, deliberately well under the
+ * 1200 s wake budget) of asking, no container means the SCALE-UP is failing
+ * — quota, payment, misconfiguration — and every later attempt is the same
+ * rejection. The poll then ends EARLY, visibly, with the message that names
+ * it and the user's options, instead of hammering 503s until the budget
+ * expires (#1057: "a real failure is named as one before the 20-minute wake
+ * timeout").
+ *
+ * Every degraded answer is `null` — keep polling — because this check must
+ * never be the reason a turn fails: an unreachable sidecar, a probe error or
+ * an unexpected shape falls back to today's budget-bound behaviour exactly,
+ * and a box with containers up is slow, not failing.
+ */
+async function notStartingFailure(
+  target: WakeTarget,
+  started: number,
+  attempts: number,
+): Promise<WakeFailure | null> {
+  if (!modalControlConfigured()) return null
+  if (Date.now() - started < modalNotStartingAfterMs()) return null
+  const box = modalBoxProbe(await probeModalBoxes(), target.box)
+  if (!box.ok || box.containerCount === null) return null // degraded — keep polling
+  if (box.containerCount > 0) return null // a container is up: booting, not failing
   const waitedS = Math.round((Date.now() - started) / 1000)
-  throw new WakeFailure(
+  return new WakeFailure(
     target.box,
-    `${target.failed}: ${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s, ` +
-      `and the last one ${lastReason}. The deployment scales to zero and its first call is ` +
-      (target.box === 'large'
-        ? 'slow — the longest start measured on it is about 6 minutes (2026-08-27) — but this is '
-        : 'slow — a first boot after redeploy was measured at 577s — but this is ') +
-      `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,
+    `${target.failed}: Modal's control plane reports NO container for this box after ` +
+      `${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s — the start is ` +
+      `failing, not slow. You can wait and retry (send again), or stop the box from the ` +
+      `admin panel and switch it back on. ${NO_FALLBACK}`,
   )
 }
 

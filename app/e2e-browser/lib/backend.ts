@@ -88,6 +88,16 @@ export async function startBackend(): Promise<Backend> {
       case 'POST /down':
         await llm.goDown()
         return json(res, 200, { ok: true })
+      // #1057: the fake Modal control sidecar's levers — arm a box's
+      // container count (the `starting`/`up` observation the panel renders),
+      // and read back what the app asked of it (`min_containers`, `stop`).
+      case 'POST /modal-arm': {
+        const { large, small } = body as { large?: number; small?: number }
+        llm.modal.arm({ large, small })
+        return json(res, 200, { ok: true })
+      }
+      case 'GET /modal-calls':
+        return json(res, 200, { calls: llm.modal.calls() })
       case 'POST /up':
         await llm.comeBack()
         return json(res, 200, { ok: true })

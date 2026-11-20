@@ -189,11 +189,14 @@ describe('LiveProgressBar — fill', () => {
  *    countdown would interrupt a screen-reader user once a second for two
  *    minutes.
  */
-const notice = (over: Partial<{ estimateMs: number; receivedAt: number }> = {}) => ({
+const notice = (
+  over: Partial<{ estimateMs: number; receivedAt: number; boxes: ('large' | 'small')[] }> = {},
+) => ({
   sessionId: 's1',
   estimateMs: 146_000,
   basis: 'default' as const,
   samples: 0,
+  boxes: ['large'] as ('large' | 'small')[],
   receivedAt: 1_000_000,
   ...over,
 })
@@ -214,6 +217,9 @@ describe('LiveProgressBar — the cold-start notice', () => {
     const box = coldNotice(container)
     expect(box, 'the notice did not render').toBeTruthy()
     expect(box!.textContent).toContain('starting GPU')
+    // #1057: the headline names WHICH box the wait is on — the same payload
+    // field, so the figure and the name cannot disagree.
+    expect(box!.textContent).toContain('the 27B')
     expect(box!.textContent).toContain('estimated time to first token: ~2 min')
     expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
     // The countdown is the notice's only informational line, so it clears the
@@ -229,6 +235,22 @@ describe('LiveProgressBar — the cold-start notice', () => {
       container.querySelector('[data-part="range"]'),
       'the progress bar rendered during a cold start',
     ).toBeNull()
+  })
+
+  it('names BOTH boxes when the wait is on both — large first, never two orders', async () => {
+    // #1057: the same wait can hold either box; the payload names which, and
+    // the headline renders what it names. The order is the helper's own
+    // (`coldStartBoxSuffix`), so two notices about one wait always read the
+    // same.
+    const { container } = render(() => (
+      <LiveProgressBar
+        {...props({ warming: notice({ boxes: ['small', 'large'] }), now: () => 1_000_000 })}
+      />
+    ))
+    await pastDelay()
+
+    const box = coldNotice(container)
+    expect(box!.textContent).toContain('starting GPU — the 27B and the 4B')
   })
 
   it('gives the bar back the moment the notice clears, in the same box', async () => {
@@ -284,8 +306,10 @@ describe('LiveProgressBar — the cold-start notice', () => {
     await pastDelay()
 
     const live = liveRegion(container)
+    // #1057: the phrase names the box(es) the wait is on — the same names the
+    // headline shows, never a second derivation of them.
     expect(live?.textContent).toBe(
-      'Waiting for the self-hosted model to start. Estimated time to first token: about 2 min.',
+      'Waiting for the self-hosted model (the 27B) to start. Estimated time to first token: about 2 min.',
     )
     // Everything that ticks is aria-hidden, so the region above is the only
     // thing announced and it does not change while the wait runs.

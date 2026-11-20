@@ -212,6 +212,30 @@ interface ArmedFault {
  */
 export const DEFAULT_MAX_HOLD_MS = 60_000
 
+/** #1057: one recorded request to the fake Modal control sidecar — the wire
+ *  a switch's `min_containers` assertion and a `stop now` travel. */
+export interface ModalControlCall {
+  at: number
+  route: 'autoscaler' | 'stop'
+  box: 'large' | 'small'
+  /** The `min_containers` an autoscaler assertion carried. */
+  minContainers?: number
+}
+
+/** The fake Modal control sidecar (`FakeLlm.modal`). */
+export interface FakeModalControl {
+  /** Arm each box's container count. Unnamed boxes keep their state; `0` is
+   *  the scaled-to-zero observation, the default every scenario starts from
+   *  (the same rule the Verda fake's empty replica list follows, for the same
+   *  reason: no scenario's answer may leak a real deployment's state). */
+  arm(boxes: { large?: number; small?: number }): void
+  /** Every `/autoscaler` and `/stop` request served, oldest first. */
+  calls(): readonly ModalControlCall[]
+  /** Container ids the boxes' `/status` fakes name — one per armed container,
+   *  stable per box so a scenario can assert a stop named what was armed. */
+  containerIds(box: 'large' | 'small'): string[]
+}
+
 /** One request currently parked by a `hold` fault. What a scenario reads to
  *  learn that a call ARRIVED and has not been answered — which `calls` cannot
  *  say, because a call is recorded only once the fake has answered it. */
@@ -250,6 +274,13 @@ export interface FakeLlm {
   /** What the memory store's confirmation question is answered with: `skip`
    *  (default) or `ask`. Restored by `reset()`. */
   memoryConfirm(answer: 'ask' | 'skip'): void
+  /** #1057: the fake Modal control sidecar — the same server, reached at its
+   *  ROOT (the base the app's `MODAL_CONTROL_BASE` points at, with the `/v1`
+   *  the model routes want stripped, exactly as `VERDA_CONTROL_PLANE_BASE`
+   *  is handed it). Arming is the control-plane half of the switch: a box
+   *  with `containers > 0` reads as `starting`/`up` exactly as the real
+   *  control plane would answer it, and `0` as `cold`. */
+  modal: FakeModalControl
   /** Disarm faults, release everything parked, and clear recorded calls. Called
    *  between scenarios. */
   reset(): void
@@ -275,10 +306,47 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   let boundPort = port
   const startedAt = Date.now()
 
+  // #1057: the fake Modal control sidecar. ZERO containers in both boxes is
+  // the default every scenario starts from — the fake deployment is observed
+  // scaled down, exactly the rule the Verda fake's empty replica list follows,
+  // so no scenario inherits a warm box from a real deployment's state.
+  const modalContainers: Record<'large' | 'small', number> = { large: 0, small: 0 }
+  const modalCalls: ModalControlCall[] = []
+  const containerId = (box: 'large' | 'small', i: number): string => `ct-e2e-${box}-${i + 1}`
+  const boxState = (box: 'large' | 'small') => ({
+    ok: true,
+    app: box === 'large' ? 'e2e-hames-private-27b' : 'e2e-hames-small-models',
+    server: box === 'large' ? 'Qwen27B' : 'SmallModels',
+    // started_at_ms: None — the SDK's container objects carry none, and the
+    // app's own clocks are the fallback path in exactly that shape.
+    containers: Array.from({ length: modalContainers[box] }, (_, i) => ({
+      container_id: containerId(box, i),
+      started_at_ms: null,
+    })),
+  })
+  const modal: FakeModalControl = {
+    arm(boxes) {
+      if (typeof boxes.large === 'number') modalContainers.large = boxes.large
+      if (typeof boxes.small === 'number') modalContainers.small = boxes.small
+    },
+    calls: () => modalCalls,
+    containerIds: (box) =>
+      Array.from({ length: modalContainers[box] }, (_, i) => containerId(box, i)),
+  }
+
   const handler: http.RequestListener = (req, res) => {
     // The small box has a truthful, generation-free readiness endpoint.
     if (req.method === 'GET' && req.url === '/health') {
       json(res, 200, { status: 'ok' })
+      return
+    }
+    // The boxes' own `/status` (#1057): the readiness file the supervisor
+    // writes after the post-restore checks, which the admin read path fetches
+    // once the CONTROL plane says a container is up — never for a scaled-to-
+    // zero box. Answered at the root, where `box-status.server.ts` strips
+    // the `/v1` to find it; `restored` and `gpu` are the two fields it reads.
+    if (req.method === 'GET' && req.url === '/status') {
+      json(res, 200, { restored: true, gpu: 'NVIDIA L4' })
       return
     }
     if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
@@ -308,6 +376,57 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     }
     if (req.method === 'GET' && req.url?.startsWith('/v1/container-deployments/')) {
       json(res, 200, { list: [] })
+      return
+    }
+    // #1057: the Modal CONTROL sidecar (`modal-control.server.ts`), reached
+    // through `MODAL_CONTROL_BASE` pointed at this server's root — the one
+    // surface the admin panel's switch and the wake's not-starting check
+    // consult. Never sends a request to a box: the same three routes the real
+    // sidecar answers (`deploy/modal/control_sidecar.py`), answers in its
+    // shapes, and records what the app asked for, so a scenario can assert the
+    // switch booted the boxes with NO model request sent.
+    if (req.method === 'GET' && req.url === '/state') {
+      json(res, 200, {
+        ok: true,
+        boxes: { large: boxState('large'), small: boxState('small') },
+      })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/autoscaler') {
+      let rawModal = ''
+      req.on('data', (chunk) => (rawModal += chunk))
+      req.on('end', () => {
+        const body = JSON.parse(rawModal || '{}') as { box?: string; min_containers?: number }
+        const box = body.box === 'large' || body.box === 'small' ? body.box : null
+        if (!box || (body.min_containers !== 0 && body.min_containers !== 1)) {
+          json(res, 400, { ok: false, error: 'box and min_containers 0|1 are required' })
+          return
+        }
+        modalCalls.push({
+          at: Date.now() - startedAt,
+          route: 'autoscaler',
+          box,
+          minContainers: body.min_containers,
+        })
+        json(res, 200, { ok: true, min_containers: body.min_containers })
+      })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/stop') {
+      let rawStop = ''
+      req.on('data', (chunk) => (rawStop += chunk))
+      req.on('end', () => {
+        const body = JSON.parse(rawStop || '{}') as { box?: string }
+        const box = body.box === 'large' || body.box === 'small' ? body.box : null
+        if (!box) {
+          json(res, 400, { ok: false, error: 'box is required' })
+          return
+        }
+        const stopped = modal.containerIds(box)
+        modalContainers[box] = 0
+        modalCalls.push({ at: Date.now() - startedAt, route: 'stop', box })
+        json(res, 200, { ok: true, stopped })
+      })
       return
     }
     // Both decision tiers use the systemone request and response format.
@@ -670,6 +789,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   await listen()
 
   return {
+    modal,
     get baseUrl() {
       return `http://127.0.0.1:${boundPort}/v1`
     },
@@ -700,6 +820,9 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     reset() {
       armed = null
       confirmIndex = 1
+      modalContainers.large = 0
+      modalContainers.small = 0
+      modalCalls.length = 0
       // Release BEFORE clearing the log, and always: a parked request left
       // behind by a failed scenario holds a socket the dev server is waiting on,
       // and the next scenario's first turn would inherit that wait.

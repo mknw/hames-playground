@@ -106,6 +106,42 @@ uv run --env-file deploy.local.env measure.py --box 27b --samples 1
 
 Run each smoke after a confirmed full boot and again after a confirmed snapshot restore. Each measure waits for scale-to-zero before waking the box; repeat until both report `box.restored: true`, then rerun the smokes while warm. Correlate with lifecycle logs because `restored` is inferred from snapshot age. Require both smokes to exit 0, successful health/model routes, the small-box adapter check, and the 27B answer/MTP and reference checks. Retain the results locally. This verifies the compensating behavior through boot and restore; it is **not evidence of blocked egress**. No deploy, Modal API call, or live smoke was made for this change.
 
+## The control sidecar (#1057)
+
+The app's admin panel controls the GPU boxes through Modal's **control API** —
+`Server.update_autoscaler(min_containers=1|0)` to boot and release, and
+`Server._experimental_list_containers()` to ask "is it up?" without starting
+anything. Modal's JavaScript SDK does not cover either call (it has no
+`Server` class at all), so the app reaches them through this directory's
+Python: **`control_sidecar.py`**, a stdlib HTTP service that holds the Modal
+workspace token the app must never see and answers the app over
+`127.0.0.1:8124` (configurable) behind a shared bearer.
+
+```bash
+# once: a workspace token (deploy/delete rights — this is why it stays here)
+uv run modal token new
+# the sidecar's env file (gitignored): MODAL_TOKEN_ID, MODAL_TOKEN_SECRET,
+# MODAL_CONTROL_TOKEN (+ the HAMES_MODAL_* app names if not the defaults)
+cp control.env.example control.local.env   # fill in the two tokens
+uv run --env-file deploy.local.env --env-file control.local.env python control_sidecar.py
+```
+
+Then the app side (its runtime env): `MODAL_CONTROL_BASE=http://127.0.0.1:8124`
+and `MODAL_CONTROL_TOKEN` (the shared bearer). Without either, the app falls
+back to today's behaviour — keep-warm pings and inferred state — and the admin
+panel says "Modal control unavailable (no token)". Nothing about the sidecar
+ever sends a request to a box: its three routes are `/state`, `/autoscaler`,
+`/stop`, all answered from Modal's control plane, so reading it never starts
+a container (`ops.py status`'s property, now the panel's too).
+
+`_experimental_list_containers` is marked experimental; the day Modal drops
+it, `control_sidecar.py` falls back to `modal container list --json` (which
+also carries each container's start time), and
+`python3 test_control_sidecar.py` — run in CI via the deploy Vitest suite —
+goes red naming it. Host steps for a production deployment (a systemd unit,
+the env files, the token) are in the lane's done file; none of it is required
+for the hermetic suites, which point `MODAL_CONTROL_BASE` at their fake.
+
 ## Operator commands
 
 ```bash

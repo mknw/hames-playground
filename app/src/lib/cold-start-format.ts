@@ -24,6 +24,26 @@
  *  short, and independent of the estimate so it can never read as a promise. */
 export const COLD_START_HEADLINE = 'starting GPU'
 
+/** Each box's name as the notice says it (#1057): 'large' is the 27B, 'small'
+ *  the 4B summarizer — the ids `cold-start.server.ts` and `wake.server.ts`
+ *  already use, so the notice cannot name a third box. */
+export const COLD_START_BOX_LABEL: Record<'large' | 'small', string> = {
+  large: 'the 27B',
+  small: 'the 4B',
+}
+
+/** Which boxes the notice waits on, as a phrase appended to the headline
+ *  (#1057): nothing when the payload names no boxes (a notice from before the
+ *  field existed), one name, or both joined — the order is the boxes' own,
+ *  large first, so two notices about one wait never read as two orders. */
+export function coldStartBoxSuffix(boxes: readonly ('large' | 'small')[] | undefined): string {
+  if (!boxes || boxes.length === 0) return ''
+  const ordered: ('large' | 'small')[] = []
+  for (const box of ['large', 'small'] as const) if (boxes.includes(box)) ordered.push(box)
+  const names = ordered.map((box) => COLD_START_BOX_LABEL[box])
+  return ` — ${names.join(' and ')}`
+}
+
 /**
  * A duration in milliseconds as a coarse phrase (`'2 min'`, `'40 sec'`), or
  * `null` when there is nothing worth stating — a non-finite reading, or under
@@ -79,9 +99,18 @@ export function coldStartDetail(estimateMs: number, elapsedMs: number): string {
  * minutes. Same rule as the header strip's warm indicator, where the ticking
  * countdown is `aria-hidden` and only the state word is announced.
  */
-export function coldStartAnnouncement(estimateMs: number): string {
+export function coldStartAnnouncement(
+  estimateMs: number,
+  boxes?: readonly ('large' | 'small')[],
+): string {
   const eta = formatColdStartEstimate(estimateMs)
-  const opening = 'Waiting for the self-hosted model to start.'
+  // #1057: the screen reader hears which models it waits on — the same names
+  // the headline shows, never a second derivation of them.
+  const opening = `Waiting for the self-hosted model${
+    boxes && boxes.length > 0
+      ? ` (${boxes.map((box) => COLD_START_BOX_LABEL[box]).join(' and ')})`
+      : ''
+  } to start.`
   return eta ? `${opening} Estimated time to first token: about ${eta}.` : opening
 }
 

@@ -1521,16 +1521,16 @@ describe('general-next scenario catalogue', () => {
         /next\.memory && mem \? \{ \.\.\.deps, memory: mem\.config \} : deps/,
       )
     })
-    it('M1: a row whose catalogue graders its module does not read', () => {
-      const text = moduleText('24-memory-isolation').replace(
-        "...catalogueChecks('24-memory-isolation'),",
-        '',
-      )
-      const s = catalogue().scenarios as Json[]
-      expect(againstModule(row(s, '24-memory-isolation'), text).join()).toMatch(
-        /24-memory-isolation: differs from its module on its catalogue graders/,
-      )
-    })
+    it.each(['24-memory-isolation', '51-org-projects-public-org'])(
+      'M1: %s must read its catalogue graders',
+      (id) => {
+        const text = moduleText(id).replace(`...catalogueChecks('${id}'),`, '')
+        const s = catalogue().scenarios as Json[]
+        expect(againstModule(row(s, id), text)).toContain(
+          `${id}: differs from its module on its catalogue graders (catalogueChecks)`,
+        )
+      },
+    )
     it('M1: a module reading another row’s graders', () => {
       const text = moduleText('25-memory-small-talk').replace(
         "...catalogueChecks('25-memory-small-talk')",

@@ -138,6 +138,8 @@ describe('catalogue graders', () => {
       'I could not find a dedicated Project node; please consult internal DTSC documentation.',
       'I found nothing in the graph; please consult internal Lantern documentation.',
       'Try consulting your internal documentation for the projects.',
+      'The answer requires someone who consults internal documentation.',
+      'Please arrange a consultation of internal documentation for the projects.',
       "I cannot find your company's projects; please consult your company's internal project documentation.",
       'Please contact the organization for its projects.',
       'Please contact the organisation.',
@@ -237,7 +239,7 @@ describe('catalogue graders', () => {
     const spec = catalogueGraders(catalogue, '51-org-projects-public-org').toolsNotBefore
     expect(spec).toMatchObject({
       says: expect.any(String),
-      tools: ['graph_files_search', 'graph_files_list', 'graph_files_recent'],
+      tools: ['graph_files_search', 'graph_files_list', 'graph_files_recent', 'graph_files_shared'],
       before: 'search',
     })
     const call = (name: string) => ({ name, success: true })
@@ -306,6 +308,8 @@ describe('catalogue graders', () => {
     // 51: an office files call before the web search fails; the web first passes.
     expect(graded('51-org-projects-public-org', 'graph_files_search', 'search').pass).toBe(false)
     expect(graded('51-org-projects-public-org', 'search', 'graph_files_search').pass).toBe(true)
+    expect(graded('51-org-projects-public-org', 'graph_files_shared', 'search').pass).toBe(false)
+    expect(graded('51-org-projects-public-org', 'search', 'graph_files_shared').pass).toBe(true)
   })
 
   it('an unknown row throws at module load', () => {

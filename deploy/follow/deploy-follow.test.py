@@ -9,12 +9,14 @@ each source edit below to a temporary copy and requires these same tests to go
 red; a mutation that survives fails the run.
 """
 import contextlib
+import errno
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -622,10 +624,11 @@ class HostCommands(unittest.TestCase):
         self.assertIn(stderr.strip(), str(caught.exception))
 
     def test_ancestry_errors_keep_stderr(self):
-        with patch.object(follow.subprocess, "run", return_value=completed(code=128, stderr="fatal: bad object")):
+        stderr = "error: cannot read commit\nerror: corrupt object\nfatal: bad object\n"
+        with patch.object(follow.subprocess, "run", return_value=completed(code=128, stderr=stderr)):
             with self.assertRaises(follow.Refusal) as caught:
                 self.host().is_ancestor(A, B)
-        self.assertIn("fatal: bad object", str(caught.exception))
+        self.assertIn(stderr.strip(), str(caught.exception))
 
     def test_non_git_error_detail_is_bounded_to_the_last_line(self):
         for argv in (["docker", "inspect", "container"], ["sudo", "docker", "inspect", "container"]):
@@ -747,7 +750,8 @@ class HostCommands(unittest.TestCase):
 
 
 def git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                           "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 class CheckoutPermissions(unittest.TestCase):
@@ -923,27 +927,33 @@ class Switch(unittest.TestCase):
 
 
 class ChangedPaths(unittest.TestCase):
-    def test_renaming_infra_to_markdown_keeps_the_old_infra_path(self):
+    def test_infra_renames_flag_the_infra_side_under_every_rename_setting(self):
         with tempfile.TemporaryDirectory() as temp:
-            repo = Path(temp)
-            git(repo, "init", "-q")
-            git(repo, "config", "user.email", "t@example.invalid")
-            git(repo, "config", "user.name", "t")
-            git(repo, "config", "diff.renames", "true")
-            old_path = "docker/neo4j/Dockerfile"
-            new_path = old_path + ".md"
-            (repo / old_path).parent.mkdir(parents=True)
-            (repo / old_path).write_text("FROM scratch\n# same content before and after\n")
-            git(repo, "add", old_path)
-            git(repo, "commit", "-qm", "infra")
-            old = git(repo, "rev-parse", "HEAD")
-            git(repo, "mv", old_path, new_path)
-            git(repo, "commit", "-qm", "rename")
-            new = git(repo, "rev-parse", "HEAD")
-            host = follow.Host(config(FOLLOW_CHECKOUT=str(repo)))
-            changed = host.changed_paths(old, new)
-            self.assertEqual(set(changed), {old_path, new_path})
-            self.assertEqual(follow.infra_paths(changed), [old_path])
+            content = "FROM scratch\n" + "".join("# identical line %d\n" % i for i in range(30))
+            cases = (("docker/neo4j/Dockerfile", "docker/neo4j/Dockerfile.md"),
+                     ("docs/neo4j.md", "docker/neo4j/Dockerfile"),
+                     ("docker/neo4j/Dockerfile", "docker/redis/Dockerfile"),
+                     ("configs/Caddyfile", "notes/Caddyfile.txt"))
+            for setting in (None, "true", "copies", "false"):
+                for old_path, new_path in cases:
+                    with self.subTest(setting=setting, rename=(old_path, new_path)):
+                        repo = Path(tempfile.mkdtemp(dir=temp))
+                        subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+                        if setting:
+                            git(repo, "config", "diff.renames", setting)
+                        (repo / old_path).parent.mkdir(parents=True, exist_ok=True)
+                        (repo / old_path).write_text(content)
+                        git(repo, "add", "-A")
+                        git(repo, "commit", "-qm", "before")
+                        old = git(repo, "rev-parse", "HEAD")
+                        (repo / new_path).parent.mkdir(parents=True, exist_ok=True)
+                        git(repo, "mv", old_path, new_path)
+                        git(repo, "commit", "-qm", "rename")
+                        new = git(repo, "rev-parse", "HEAD")
+                        expected = sorted(path for path in (old_path, new_path) if follow.infra_paths([path]))
+                        changed = follow.Host(config(FOLLOW_CHECKOUT=str(repo))).changed_paths(old, new)
+                        self.assertEqual(set(changed), {old_path, new_path})
+                        self.assertEqual(follow.infra_paths(changed), expected)
 
 
 class Promotion(unittest.TestCase):
@@ -1040,30 +1050,11 @@ class Units(unittest.TestCase):
         self.assertIn("python3 deploy/follow/deploy-follow.test.py --mutations\n", ci)
 
 
-# Real-Git regression coverage adopted from the PR #1064 review.
-IDENT = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-A = "a" * 40
-GREEN = [{"id": 1, "name": "typecheck · lint · test · build", "status": "completed", "conclusion": "success"},
-         {"id": 2, "name": "changeset · version intent", "status": "completed", "conclusion": "skipped"},
-         {"id": 3, "name": "docker image · build · boot", "status": "completed", "conclusion": "success"}]
+# Real-Git fixtures for permissions, maintenance races, and diagnostics.
 # Root-owned directories that are normally empty, and root-owned files that are normally readable.
 ROOT_DIRS = ("/usr/local/src", "/var/opt", "/media", "/usr/local/games", "/var/local", "/usr/games", "/mnt", "/srv")
 ROOT_FILES = ("/etc/hostname", "/etc/hosts", "/etc/passwd")
 AS_ROOT = os.geteuid() == 0
-
-
-def fixture_git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *IDENT, "-c", "gc.auto=0", *args], check=True, capture_output=True,
-                          text=True).stdout.strip()
-
-
-def permission_config(checkout, state_dir):
-    values = {"FOLLOW_ENV": "dev", "FOLLOW_BRANCH": "main", "FOLLOW_REPO": "owner/repo",
-              "FOLLOW_CHECKOUT": str(checkout), "FOLLOW_COMPOSE_DIR": str(Path(state_dir) / "compose"),
-              "FOLLOW_SERVICE": "app-dev", "FOLLOW_IMAGE": "hames-app:dev",
-              "FOLLOW_RUNTIME_ENV": str(Path(state_dir) / "runtime.env"), "FOLLOW_STATE_DIR": str(state_dir),
-              "FOLLOW_LOCK": str(Path(state_dir) / "lock")}
-    return follow.parse_config("\n".join("%s=%s" % item for item in values.items()))
 
 
 def root_owned_empty_dir():
@@ -1108,8 +1099,8 @@ class GitFixture(unittest.TestCase):
         repo = self.base / name
         subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
         (repo / "tracked").write_text("content\n")
-        fixture_git(repo, "add", "tracked")
-        fixture_git(repo, "commit", "-qm", "initial")
+        git(repo, "add", "tracked")
+        git(repo, "commit", "-qm", "initial")
         return repo
 
     def origin_and_checkout(self, name):
@@ -1119,22 +1110,24 @@ class GitFixture(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
         subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True, capture_output=True)
         (work / "README").write_text("one\n")
-        fixture_git(work, "add", "README")
-        fixture_git(work, "commit", "-qm", "first")
-        fixture_git(work, "push", "-q", "origin", "HEAD:main")
+        git(work, "add", "README")
+        git(work, "commit", "-qm", "first")
+        git(work, "push", "-q", "origin", "HEAD:main")
         subprocess.run(["git", "clone", "-q", "--no-local", str(origin), str(checkout)], check=True,
                        capture_output=True)
         return work, checkout
 
     def push(self, work, name):
         (work / name).write_text(name + "\n")
-        fixture_git(work, "add", name)
-        fixture_git(work, "commit", "-qm", name)
-        fixture_git(work, "push", "-q", "origin", "HEAD:main")
-        return fixture_git(work, "rev-parse", "HEAD")
+        git(work, "add", name)
+        git(work, "commit", "-qm", name)
+        git(work, "push", "-q", "origin", "HEAD:main")
+        return git(work, "rev-parse", "HEAD")
 
     def host(self, checkout):
-        return follow.Host(permission_config(checkout, self.state))
+        return follow.Host(config("dev", str(self.state), FOLLOW_CHECKOUT=str(checkout),
+                                  FOLLOW_COMPOSE_DIR=str(self.state / "compose"),
+                                  FOLLOW_RUNTIME_ENV=str(self.state / "runtime.env")))
 
     def assert_refused_before_fetch(self, operation, *named):
         with patch.object(follow.subprocess, "run", wraps=subprocess.run) as run:
@@ -1149,12 +1142,9 @@ class GitFixture(unittest.TestCase):
 
 
 @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
-class Survivors(GitFixture):
+class GitPermissionBlocks(GitFixture):
     def test_incident_root_owned_fanout_dir_blocks_both_fetches_before_git_runs(self):
-        """#1062's own test, on real permissions: the new commit's fan-out directory is a root-owned
-        0755 directory (a symlink to one, so no privilege is needed). Without the preflight, git fails
-        with 'fatal: unpack-objects failed', the incident's error. Kills: no preflight, preflight on
-        Host.fetch only, and the preflight without os.W_OK (a root 0755 dir is readable+searchable)."""
+        """A foreign-owned fan-out directory is refused before either fetch."""
         target = root_owned_empty_dir()
         if target is None:
             self.skipTest("no empty root-owned directory on this host")
@@ -1170,10 +1160,9 @@ class Survivors(GitFixture):
                 self.assertIn("owner=root uid=0", message)
 
     def test_own_read_only_directory_is_refused(self):
-        """Own 0555 fan-out directory: readable and searchable, not writable, so git cannot add an
-        object to it. Kills: os.W_OK dropped from the directory mode."""
+        """Own read-only directories cannot accept Git objects."""
         repo = self.repo()
-        blob = fixture_git(repo, "rev-parse", "HEAD:tracked")
+        blob = git(repo, "rev-parse", "HEAD:tracked")
         fanout = repo / ".git/objects" / blob[:2]
         self.assertTrue(fanout.is_dir())
         self.chmod(fanout, 0o555)
@@ -1181,9 +1170,7 @@ class Survivors(GitFixture):
         self.assert_refused_before_fetch(lambda: host.fetch(A), fanout)
 
     def test_own_read_only_metadata_outside_objects_is_refused(self):
-        """A real 0444 .git/FETCH_HEAD makes `git fetch` exit 255 ('cannot open .git/FETCH_HEAD:
-        Permission denied'). Only immutable OBJECTS may be read-only. Kills: the objects/ scope of
-        the read-only exemption dropped (the mocked-access test denies R too, so it cannot see this)."""
+        """Read-only FETCH_HEAD is metadata, outside the immutable-object exemption."""
         repo = self.repo()
         fetch_head = repo / ".git/FETCH_HEAD"
         fetch_head.write_text("")
@@ -1192,19 +1179,16 @@ class Survivors(GitFixture):
         self.assert_refused_before_fetch(lambda: host.fetch(A), fetch_head)
 
     def test_unreadable_own_object_is_refused(self):
-        """An own object the service cannot even read is not a 'normal immutable object'.
-        Kills: the read check of the own-object exemption replaced by True."""
+        """An own object the service cannot even read is not a 'normal immutable object'."""
         repo = self.repo()
-        blob = fixture_git(repo, "rev-parse", "HEAD:tracked")
+        blob = git(repo, "rev-parse", "HEAD:tracked")
         obj = repo / ".git/objects" / blob[:2] / blob[2:]
         self.chmod(obj, 0o000)
         host = self.host(repo)
         self.assert_refused_before_fetch(lambda: host.fetch(A), obj)
 
     def test_foreign_owned_object_is_refused(self):
-        """A root-owned, readable, non-writable object file (a symlink to one) inside a writable
-        fan-out directory: the code says 'still reject foreign-owned objects'. Kills: the owner
-        check of the own-object exemption replaced by True."""
+        """Foreign-owned objects must still be writable by the service."""
         target = root_owned_readable_file()
         if target is None:
             self.skipTest("no readable root-owned file on this host")
@@ -1218,9 +1202,7 @@ class Survivors(GitFixture):
         self.assertIn("uid=0", message)
 
     def test_preflight_uses_the_effective_uid(self):
-        """Pins effective_ids=True. In production real and effective uid are equal (systemd User=,
-        NoNewPrivileges), so this mutant is behaviour-equivalent there: adopt only if the PR wants
-        the argument pinned. The fake access answers for the service (effective) uid only."""
+        """Access checks use the service effective uid."""
         repo = self.repo()
         real_access = os.access
 
@@ -1232,24 +1214,24 @@ class Survivors(GitFixture):
 
 
 @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
-class Coverage(GitFixture):
+class HealthyGitStorage(GitFixture):
     def test_healthy_checkouts_are_not_refused(self):
-        """No false refusal on real, healthy storage: --no-local clone (0444 pack/idx/rev), gc,
-        split commit-graph, bitmap + multi-pack-index, new loose objects, a real fetch, all under the
-        unit's UMask=0077 (objects 0400, dirs 0700), checked from the main and a linked worktree."""
+        """Packed and loose objects under UMask 0077 allow fetch and on_main, including linked storage."""
         old = os.umask(0o077)
         try:
             work, checkout = self.origin_and_checkout("healthy")
-            fixture_git(checkout, "gc", "-q")
-            fixture_git(checkout, "commit-graph", "write", "--reachable", "--split")
-            fixture_git(checkout, "repack", "-adb", "--write-midx", "-q")
+            git(checkout, "gc", "-q")
+            git(checkout, "commit-graph", "write", "--reachable", "--split")
+            git(checkout, "repack", "-adb", "--write-midx", "-q")
             (checkout / "local").write_text("loose\n")
-            fixture_git(checkout, "add", "local")
-            fixture_git(checkout, "commit", "-qm", "loose")
-            self.push(work, "second")
-            fixture_git(checkout, "fetch", "-q", "origin", "main")
+            git(checkout, "add", "local")
+            git(checkout, "commit", "-qm", "loose")
+            new = self.push(work, "second")
+            host = self.host(checkout)
+            host.fetch(new)
+            self.assertTrue(host.on_main(new))
             linked = self.base / "linked"
-            fixture_git(checkout, "worktree", "add", "-q", "--detach", str(linked))
+            git(checkout, "worktree", "add", "-q", "--detach", str(linked))
         finally:
             os.umask(old)
         modes = {oct(path.stat().st_mode & 0o777) for path in (checkout / ".git/objects").rglob("*") if path.is_file()}
@@ -1258,46 +1240,19 @@ class Coverage(GitFixture):
             with self.subTest(repo=repo.name):
                 self.host(repo).check_checkout_writable()
 
-    def test_infra_renames_flag_the_infra_side_under_every_rename_setting(self):
-        """#1051 across diff.renames unset/true/copies/false and both directions. Kills: --no-renames dropped."""
-        content = "FROM scratch\n" + "".join("# identical line %d\n" % i for i in range(30))
-        cases = (("docker/neo4j/Dockerfile", "docker/neo4j/Dockerfile.md"),
-                 ("docs/neo4j.md", "docker/neo4j/Dockerfile"),
-                 ("docker/neo4j/Dockerfile", "docker/redis/Dockerfile"),
-                 ("configs/Caddyfile", "notes/Caddyfile.txt"))
-        for setting in (None, "true", "copies", "false"):
-            for old_path, new_path in cases:
-                with self.subTest(setting=setting, rename=(old_path, new_path)):
-                    repo = Path(tempfile.mkdtemp(dir=self.base))
-                    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
-                    if setting:
-                        fixture_git(repo, "config", "diff.renames", setting)
-                    (repo / old_path).parent.mkdir(parents=True, exist_ok=True)
-                    (repo / old_path).write_text(content)
-                    fixture_git(repo, "add", "-A")
-                    fixture_git(repo, "commit", "-qm", "before")
-                    old = fixture_git(repo, "rev-parse", "HEAD")
-                    (repo / new_path).parent.mkdir(parents=True, exist_ok=True)
-                    fixture_git(repo, "mv", old_path, new_path)
-                    fixture_git(repo, "commit", "-qm", "rename")
-                    new = fixture_git(repo, "rev-parse", "HEAD")
-                    expected = sorted(path for path in (old_path, new_path) if follow.infra_paths([path]))
-                    self.assertEqual(follow.infra_paths(self.host(repo).changed_paths(old, new)), expected)
-
-
-class Findings(GitFixture):
+class GitWalkAndDiagnostics(GitFixture):
     STDERR = ("error: insufficient permission for adding an object to repository database .git/objects\n"
               "fatal: failed to write object\nfatal: unpack-objects failed\n")
 
-    def tick(self, host):
+    def tick(self, host, head=B):
         (self.base / "follow.conf").write_text("")
         out = io.StringIO()
         with patch.object(follow, "parse_config", return_value=host.config), \
                 patch.object(follow, "Host", return_value=host), \
                 patch.object(follow.os, "geteuid", return_value=1000), \
-                patch.object(host, "remote_head", return_value="b" * 40), \
+                patch.object(host, "remote_head", return_value=head), \
                 patch.object(host, "checkout_head", return_value=A), \
-                patch.object(host, "check_runs", return_value=GREEN), \
+                patch.object(host, "check_runs", return_value=green_runs()), \
                 patch.object(host, "statuses", return_value=[]), \
                 patch.object(host, "check_checkout_writable", return_value=None), \
                 contextlib.redirect_stdout(out):
@@ -1305,10 +1260,7 @@ class Findings(GitFixture):
         return code, out.getvalue()
 
     def test_multiline_git_error_is_one_journal_record_at_err_priority(self):
-        """journald gives the <N> prefix to ONE line: `printf '<3>a\\nb\\n' | systemd-cat` stores b at
-        priority 6. Full stderr must stay one record, at err, in stdout and in journal.log.
-        Regression: the 2nd and 3rd stderr lines print without <3> and become stampless journal.log
-        lines. Contract: Journal flattens a message to one line (e.g. ' | '.join(message.splitlines()))."""
+        """Both journal sinks keep the full Git error in one err-priority record."""
         host = self.host(self.base)
 
         def run(argv, **kwargs):
@@ -1320,7 +1272,8 @@ class Findings(GitFixture):
             code, out = self.tick(host)
         self.assertEqual(code, 1)
         printed = out.splitlines()
-        self.assertTrue(printed and all(re.match(r"<\d>", line) for line in printed), printed)
+        self.assertEqual(len(printed), 1, printed)
+        self.assertTrue(printed[0].startswith("<3>"), printed[0])
         records = (self.state / "journal.log").read_text().splitlines()
         self.assertEqual(len(records), 1, records)
         self.assertRegex(records[0], r"^\S+ dev ERROR git exited 128: ")
@@ -1330,12 +1283,9 @@ class Findings(GitFixture):
 
     @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
     def test_entry_pruned_mid_walk_is_not_an_error(self):
-        """`git fetch` leaves git's auto-gc running DETACHED; a RELEASE tick's on_main preflight then
-        walks objects the gc is pruning (reproduced on real git 2.55: FileNotFoundError in 19 of 22
-        walks). A path that vanished cannot be unwritable. Regression: FileNotFoundError, journaled
-        as an ERROR tick. Contract: skip FileNotFoundError from stat()/iterdir() in the walk."""
+        """An entry gone before stat does not hide a genuine metadata block."""
         repo = self.repo()
-        blob = fixture_git(repo, "rev-parse", "HEAD:tracked")
+        blob = git(repo, "rev-parse", "HEAD:tracked")
         pruned = repo / ".git/objects" / blob[:2] / blob[2:]
         fetch_head = repo / ".git/FETCH_HEAD"
         fetch_head.write_text("")
@@ -1354,8 +1304,7 @@ class Findings(GitFixture):
         self.assertNotIn(str(pruned), str(caught.exception))
 
     def test_dangling_symlink_in_git_dir_is_not_an_error(self):
-        """A stale hook symlink does not stop git; it must not stop every tick either.
-        Regression: FileNotFoundError must not cause ERROR on every tick. Contract: same as the pruned-entry test."""
+        """A stale hook symlink has no target for Git to maintain."""
         repo = self.repo()
         (repo / ".git/hooks/post-checkout").symlink_to(self.base / "gone")
         self.host(repo).check_checkout_writable()
@@ -1383,11 +1332,10 @@ class Findings(GitFixture):
 
     @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
     def test_linked_worktree_blocked_path_is_named_once(self):
-        """Cosmetic: a linked worktree's git-dir sits inside the common dir, so it is walked twice.
-        Regression: the path is named twice. Contract: de-duplicate `blocked` (dict.fromkeys)."""
+        """Overlapping Git directories report each blocked path once."""
         repo = self.repo()
         linked = self.base / "linked"
-        fixture_git(repo, "worktree", "add", "-q", "--detach", str(linked))
+        git(repo, "worktree", "add", "-q", "--detach", str(linked))
         index = repo / ".git/worktrees/linked/index"
         self.chmod(index, 0o444)
         with self.assertRaises(follow.Refusal) as caught:
@@ -1395,13 +1343,10 @@ class Findings(GitFixture):
         self.assertEqual(str(caught.exception).count(str(index)), 1, str(caught.exception))
 
     def test_show_surfaces_git_errors_other_than_a_missing_path(self):
-        """Adjacent to #1062 ('surface git's stderr'): Host.show maps EVERY git failure to None, which
-        the tick reports as 'the target has no deploy/follow/env-keys.conf'. A corrupt object must be
-        an error carrying git's stderr; a genuinely missing path stays None.
-        Regression. Contract: `git ls-tree --name-only <sha> -- <path>` for existence, then _run(git show)."""
+        """Missing paths return None; corrupt content carries the Git error."""
         repo = self.repo()
-        sha = fixture_git(repo, "rev-parse", "HEAD")
-        blob = fixture_git(repo, "rev-parse", "HEAD:tracked")
+        sha = git(repo, "rev-parse", "HEAD")
+        blob = git(repo, "rev-parse", "HEAD:tracked")
         obj = repo / ".git/objects" / blob[:2] / blob[2:]
         obj.chmod(0o644)
         obj.write_bytes(b"not a zlib stream")
@@ -1413,12 +1358,139 @@ class Findings(GitFixture):
 
     def test_show_preserves_content_and_refuses_an_invalid_commit(self):
         repo = self.repo()
-        sha = fixture_git(repo, "rev-parse", "HEAD")
+        sha = git(repo, "rev-parse", "HEAD")
         host = self.host(repo)
         self.assertEqual(host.show(sha, "tracked"), "content\n")
         self.assertIsNone(host.show(sha, "missing"))
         with self.assertRaisesRegex(follow.Refusal, "git exited 128: fatal:"):
             host.show("0" * 40, "tracked")
+
+    def check_pruned_entry(self, hook, kind):
+        repo = self.repo("%s-%s" % (hook, kind))
+        blob = git(repo, "rev-parse", "HEAD:tracked")
+        if kind == "object":
+            target = repo / ".git/objects" / blob[:2] / blob[2:]
+            remove = target.unlink
+        else:
+            target = repo / ".git/objects/ee"
+            target.mkdir()
+            remove = target.rmdir
+        fired = []
+        real_access, real_is_dir = os.access, Path.is_dir
+
+        def access(path, mode, **kwargs):
+            if Path(path) == target and not fired:
+                fired.append(remove())
+            return real_access(path, mode, **kwargs)
+
+        def is_dir(path, *args, **kwargs):
+            if path == target and not fired:
+                fired.append(remove())
+            return real_is_dir(path, *args, **kwargs)
+        hooked = (patch.object(follow.os, "access", side_effect=access) if hook == "access"
+                  else patch.object(Path, "is_dir", is_dir))
+        with hooked:
+            self.host(repo).check_checkout_writable()
+        self.assertEqual(len(fired), 1, "the hook did not fire; the test proves nothing")
+
+    def test_entry_pruned_after_stat_is_not_refused(self):
+        for hook in ("access", "is_dir"):
+            for kind in ("object", "fanout-dir"):
+                with self.subTest(hook=hook, kind=kind):
+                    self.check_pruned_entry(hook, kind)
+
+    @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
+    def test_real_fetch_error_is_one_err_record_with_every_line(self):
+        target = root_owned_empty_dir()
+        if target is None:
+            self.skipTest("no empty root-owned directory on this host")
+        work, checkout = self.origin_and_checkout("incident-journal")
+        new = self.push(work, "app.txt")
+        (checkout / ".git/objects" / new[:2]).symlink_to(target)
+        code, out = self.tick(self.host(checkout), head=new)
+        self.assertEqual(code, 1)
+        printed = out.splitlines()
+        self.assertEqual(len(printed), 1, printed)
+        self.assertTrue(printed[0].startswith("<3>"), printed[0])
+        records = (self.state / "journal.log").read_text().splitlines()
+        self.assertEqual(len(records), 1, records)
+        for needle in ("git exited", "insufficient permission", "unpack-objects failed"):
+            self.assertIn(needle, records[0])
+            self.assertIn(needle, printed[0])
+
+    def test_failed_access_restat_errors_are_not_ignored(self):
+        repo = self.repo()
+        target = repo / ".git/FETCH_HEAD"
+        target.write_text("")
+        real_access, real_stat = os.access, Path.stat
+        failed = []
+
+        def access(path, mode, **kwargs):
+            if Path(path) == target:
+                failed.append(True)
+                return False
+            return real_access(path, mode, **kwargs)
+
+        for error in (PermissionError("denied"), OSError(errno.ELOOP, "symlink loop")):
+            failed.clear()
+
+            def stat(path, *args, **kwargs):
+                if path == target and failed:
+                    raise error
+                return real_stat(path, *args, **kwargs)
+
+            with self.subTest(error=type(error).__name__), patch.object(Path, "stat", stat), \
+                    patch.object(follow.os, "access", side_effect=access):
+                with self.assertRaises(type(error)):
+                    self.host(repo).check_checkout_writable()
+
+    def test_real_merge_base_error_keeps_every_stderr_line(self):
+        repo = self.repo()
+        sha = git(repo, "rev-parse", "HEAD")
+        obj = repo / ".git/objects" / sha[:2] / sha[2:]
+        obj.chmod(0o644)
+        obj.write_bytes(b"not a zlib stream")
+        with self.assertRaises(follow.Refusal) as caught:
+            self.host(repo).is_ancestor(sha, sha)
+        message = str(caught.exception)
+        self.assertIn("error: inflate", message)
+        self.assertIn("fatal: Not a valid commit name", message)
+
+    def test_show_on_real_git_distinguishes_both_failure_stages(self):
+        manifest = "deploy/follow/env-keys.conf"
+        repo = self.base / "show"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+        (repo / "deploy/follow").mkdir(parents=True)
+        (repo / manifest).write_text("required A\n\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "one")
+        sha = git(repo, "rev-parse", "HEAD")
+        host = self.host(repo)
+        self.assertEqual(host.show(sha, manifest), "required A\n\n")
+        self.assertIsNone(host.show(sha, "deploy/follow/absent.conf"))
+        with self.assertRaisesRegex(follow.Refusal, "^git exited 128: fatal: not a tree object$"):
+            host.show("0" * 40, manifest)
+        cases = {"tree-missing": "fatal: not a tree object", "tree-corrupt": "is corrupt",
+                 "blob-missing": "fatal: bad object", "blob-corrupt": "is corrupt"}
+        for kind, needle in cases.items():
+            with self.subTest(kind=kind):
+                copy = self.base / kind
+                shutil.copytree(repo, copy, symlinks=True)
+                oid = git(copy, "rev-parse", "HEAD^{tree}" if kind.startswith("tree") else "HEAD:" + manifest)
+                obj = copy / ".git/objects" / oid[:2] / oid[2:]
+                obj.chmod(0o644)
+                obj.unlink() if kind.endswith("missing") else obj.write_bytes(b"not a zlib stream")
+                with self.assertRaises(follow.Refusal) as caught:
+                    self.host(copy).show(sha, manifest)
+                self.assertTrue(str(caught.exception).startswith("git exited 128: "), str(caught.exception))
+                self.assertIn(needle, str(caught.exception))
+
+    def test_a_real_symlink_loop_still_propagates(self):
+        repo = self.repo()
+        (repo / ".git/hooks/loop").symlink_to("loop")
+        with self.assertRaises(OSError) as caught:
+            self.host(repo).check_checkout_writable()
+        self.assertEqual(caught.exception.errno, errno.ELOOP)
 
 
 MUTATIONS = [
@@ -1471,7 +1543,7 @@ MUTATIONS = [
     ("git-stderr-last-line", "FOLLOW_SCRIPT", 'full=argv[0] == "git"', 'full=False'),
     ("ancestry-stderr-hidden", "FOLLOW_SCRIPT", 'detail = stderr_detail(result.stderr, full=True)', 'detail = ""'),
     # Checkout preflight and journal regressions from PR #1064's review.
-    ("checkout-common-dir-missing", "FOLLOW_SCRIPT", '"--git-dir", "--git-common-dir", repo=repo)', '"--git-dir", repo=repo)'),
+    ("checkout-common-dir-missing", "FOLLOW_SCRIPT", '"--git-dir", "--git-common-dir")', '"--git-dir")'),
     ("checkout-path-format-missing", "FOLLOW_SCRIPT", '"rev-parse", "--path-format=absolute", "--git-dir"', '"rev-parse", "--git-dir"'),
     ("checkout-object-owner-ignored", "FOLLOW_SCRIPT", 'and info.st_uid == os.geteuid()\n', 'and True\n'),
     ("checkout-object-scope-ignored", "FOLLOW_SCRIPT", 'path.is_relative_to(Path(root) / "objects")', 'True'),
@@ -1487,6 +1559,11 @@ MUTATIONS = [
     ("command-detail-unbounded", "FOLLOW_SCRIPT", 'text.splitlines()[-1][-500:]', 'text.splitlines()[-1]'),
     ("show-errors-hidden", "FOLLOW_SCRIPT", '        return self._run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "show", "%s:%s" % (sha, path)])', '        return None'),
     ("show-missing-path-errors", "FOLLOW_SCRIPT", '        if not self._git("ls-tree", "--name-only", sha, "--", path):', '        if False:'),
+    # Permission re-stat and diagnostic boundaries.
+    ('checkout-pruned-after-stat-not-skipped', 'FOLLOW_SCRIPT', '                    try:\n                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        continue\n', ''),
+    ('ancestry-stderr-last-line', 'FOLLOW_SCRIPT', 'detail = stderr_detail(result.stderr, full=True)', 'detail = stderr_detail(result.stderr, full=False)'),
+    ('error-tick-warning', 'FOLLOW_SCRIPT', 'journal("err", "ERROR", str(error))', 'journal("warning", "ERROR", str(error))'),
+    ('checkout-restat-errors-ignored', 'FOLLOW_SCRIPT', '                    try:\n                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        continue\n', '                    try:\n                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except OSError:\n                        continue\n'),
     # promotion
     ("partial-go", "PROMOTE_SCRIPT", '    if GO_LINE not in text.splitlines():', '    if "Verdict" not in text:'),
     ("dirty-go", "PROMOTE_SCRIPT", '    if dirty:\n        return None', '    if False:\n        return None'),

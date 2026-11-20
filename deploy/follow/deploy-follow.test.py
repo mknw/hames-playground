@@ -614,6 +614,19 @@ class HostCommands(unittest.TestCase):
                 self.host().compose_hashes()
         self.assertNotIn(SECRET, str(caught.exception))
 
+    def test_git_errors_keep_all_stderr_lines(self):
+        stderr = "error: cannot write object\nfatal: unpack-objects failed\n"
+        with patch.object(follow.subprocess, "run", return_value=completed(code=128, stderr=stderr)):
+            with self.assertRaises(follow.Refusal) as caught:
+                self.host()._git("status")
+        self.assertIn(stderr.strip(), str(caught.exception))
+
+    def test_ancestry_errors_keep_stderr(self):
+        with patch.object(follow.subprocess, "run", return_value=completed(code=128, stderr="fatal: bad object")):
+            with self.assertRaises(follow.Refusal) as caught:
+                self.host().is_ancestor(A, B)
+        self.assertIn("fatal: bad object", str(caught.exception))
+
     def test_the_api_is_read_without_credentials(self):
         source = FILES["FOLLOW_SCRIPT"].read_text()
         self.assertNotIn("Authorization", source)
@@ -675,11 +688,13 @@ class HostCommands(unittest.TestCase):
 
         def run(args, **kwargs):
             argv.append(args)
+            if "rev-parse" in args:
+                return completed(self.dir + "\n" + self.dir + "\n")
             return completed(code=1 if "merge-base" in args else 0)
         with patch.object(follow.subprocess, "run", side_effect=run):
             self.assertFalse(self.host().on_main(B))
-        self.assertIn("+refs/heads/main:refs/remotes/origin/main", argv[0])
-        self.assertEqual(argv[1][-2:], [B, "refs/remotes/origin/main"])
+        self.assertIn("+refs/heads/main:refs/remotes/origin/main", argv[1])
+        self.assertEqual(argv[2][-2:], [B, "refs/remotes/origin/main"])
         with patch.object(follow.subprocess, "run", return_value=completed(code=128, stderr="fatal")):
             with self.assertRaises(follow.Refusal):
                 self.host().on_main(B)
@@ -717,6 +732,108 @@ class HostCommands(unittest.TestCase):
 
 def git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+class CheckoutPermissions(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.repo = Path(temp.name) / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q")
+        self.git_dir = self.repo / ".git"
+        self.object_dir = self.git_dir / "objects/ab"
+        self.object_dir.mkdir()
+        self.object_file = self.object_dir / ("c" * 38)
+        self.object_file.write_bytes(b"immutable git object")
+        self.object_file.chmod(0o444)
+        self.cfg = config("dev", temp.name, FOLLOW_CHECKOUT=str(self.repo))
+        self.host = follow.Host(self.cfg)
+
+    def test_unwritable_root_owned_paths_are_named_before_any_fetch(self):
+        blocked = [self.object_dir, self.git_dir / "FETCH_HEAD"]
+        blocked[1].write_text("")
+        real_stat, real_access = Path.stat, os.access
+
+        def stat(path, *args, **kwargs):
+            result = real_stat(path, *args, **kwargs)
+            if path in blocked:
+                fields = list(result)
+                fields[4] = 0  # root ownership, without privileged fixture setup
+                return os.stat_result(fields)
+            return result
+
+        def access(path, mode, **kwargs):
+            return False if Path(path) in blocked else real_access(path, mode, **kwargs)
+
+        for operation in (lambda: self.host.fetch(B), lambda: self.host.on_main(B)):
+            with self.subTest(operation=operation), patch.object(Path, "stat", stat), \
+                    patch.object(follow.os, "access", side_effect=access), \
+                    patch.object(self.host, "_run", wraps=self.host._run) as run:
+                with self.assertRaises(follow.Refusal) as caught:
+                    operation()
+                for path in blocked:
+                    self.assertIn(str(path), str(caught.exception))
+                self.assertIn("root", str(caught.exception))
+                self.assertIn("uid=0", str(caught.exception))
+                self.assertFalse(any("fetch" in call.args[0] for call in run.call_args_list))
+
+    def test_permission_refusal_is_journaled_as_error(self):
+        with patch.object(follow, "parse_config", return_value=self.cfg), \
+                patch.object(follow, "Host", return_value=self.host), \
+                patch.object(follow.os, "geteuid", return_value=1000), \
+                patch.object(self.host, "remote_head", return_value=B), \
+                patch.object(self.host, "checkout_head", return_value=A), \
+                patch.object(self.host, "check_runs", return_value=green_runs()), \
+                patch.object(self.host, "statuses", return_value=[]), \
+                patch.object(follow.os, "access", return_value=False), \
+                patch.object(self.host, "_run", wraps=self.host._run) as run, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(follow.main(["tick", "--config", str(self.git_dir / "config")]), 1)
+        self.assertIn("ERROR", out.getvalue())
+        self.assertIn(str(self.git_dir), out.getvalue())
+        self.assertIn("owner=", out.getvalue())
+        self.assertFalse(any("fetch" in call.args[0] for call in run.call_args_list))
+
+    def test_normal_git_objects_do_not_block_fetch(self):
+        # Git deliberately creates immutable objects as 0444, unlike mutable
+        # metadata and directories. A normal checkout must pass the preflight.
+        real_run = self.host._run
+
+        def run(argv, **kwargs):
+            return "" if "fetch" in argv or "cat-file" in argv else real_run(argv, **kwargs)
+
+        with patch.object(self.host, "_run", side_effect=run) as call:
+            self.host.fetch(B)
+        self.assertTrue(any("fetch" in entry.args[0] for entry in call.call_args_list))
+
+    def test_read_only_metadata_is_refused(self):
+        path = self.git_dir / "FETCH_HEAD"
+        path.write_text("")
+        real_access = os.access
+        with patch.object(follow.os, "access", side_effect=lambda p, mode, **kw:
+                          False if Path(p) == path else real_access(p, mode, **kw)), \
+                patch.object(self.host, "_run", wraps=self.host._run) as run:
+            with self.assertRaises(follow.Refusal) as caught:
+                self.host.fetch(B)
+        self.assertIn(str(path), str(caught.exception))
+        self.assertFalse(any("fetch" in call.args[0] for call in run.call_args_list))
+
+    def test_linked_worktree_checks_the_common_object_directory(self):
+        (self.repo / "tracked").write_text("content")
+        git(self.repo, "add", "tracked")
+        git(self.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial")
+        linked = self.repo.parent / "linked"
+        git(self.repo, "worktree", "add", "--detach", str(linked))
+        self.host.config["FOLLOW_CHECKOUT"] = str(linked)
+        real_access = os.access
+        with patch.object(follow.os, "access", side_effect=lambda p, mode, **kw:
+                          False if Path(p) == self.object_dir else real_access(p, mode, **kw)), \
+                patch.object(self.host, "_run", wraps=self.host._run) as run:
+            with self.assertRaises(follow.Refusal) as caught:
+                self.host.fetch(B)
+        self.assertIn(str(self.object_dir), str(caught.exception))
+        self.assertFalse(any("fetch" in call.args[0] for call in run.call_args_list))
 
 
 class Switch(unittest.TestCase):
@@ -925,6 +1042,11 @@ MUTATIONS = [
     ("ask-every-tick", "FOLLOW_SCRIPT", '        if state.get(key) != record:', '        if True:'),
     ("compose-error-shown", "FOLLOW_SCRIPT", 'quiet=True)\n\n    def _api', 'quiet=False)\n\n    def _api'),
     ("root-allowed", "FOLLOW_SCRIPT", '    if os.geteuid() == 0:', '    if False:'),
+    ("no-checkout-preflight", "FOLLOW_SCRIPT", '            self.check_checkout_writable(repo)', '            pass'),
+    ("checkout-root-only", "FOLLOW_SCRIPT", '                    pending.extend(sorted(path.iterdir(), reverse=True))', '                    pass'),
+    ("checkout-permissions-ignored", "FOLLOW_SCRIPT", 'if not os.access(path, mode, effective_ids=True) and not own_object:', 'if False:'),
+    ("git-stderr-last-line", "FOLLOW_SCRIPT", 'else ": " + result.stderr.strip()\n', 'else ": " + result.stderr.strip().splitlines()[-1]\n'),
+    ("ancestry-stderr-hidden", "FOLLOW_SCRIPT", 'detail = ": " + result.stderr.strip() if result.stderr.strip() else ""', 'detail = ""'),
     # promotion
     ("partial-go", "PROMOTE_SCRIPT", '    if GO_LINE not in text.splitlines():', '    if "Verdict" not in text:'),
     ("dirty-go", "PROMOTE_SCRIPT", '    if dirty:\n        return None', '    if False:\n        return None'),
@@ -951,7 +1073,7 @@ MUTATIONS = [
     ("none-is-healthy", "FOLLOW_SCRIPT", 'if status == "none":\n                    return "without a healthcheck"', 'if status == "none":\n                    return "healthy"'),
     # term 1: release only takes main commits, fail-closed
     ("release-off-main-deploys", "FOLLOW_SCRIPT", 'if self.env == "release" and not self.host.on_main(head):', 'if False:'),
-    ("ancestry-error-is-no", "FOLLOW_SCRIPT", '        if code not in (0, 1):\n            raise Refusal', '        if False:\n            raise Refusal'),
+    ("ancestry-error-is-no", "FOLLOW_SCRIPT", '        if result.returncode not in (0, 1):', '        if False:'),
     ("on-main-stale", "FOLLOW_SCRIPT", 'self._git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")', 'pass'),
     # term 2: config that weakens the gate
     ("empty-checks-ok", "FOLLOW_SCRIPT", 'if not split_list(values["FOLLOW_REQUIRED_CHECKS"]):', 'if False:'),

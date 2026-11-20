@@ -23,6 +23,7 @@ import fcntl
 import fnmatch
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -325,12 +326,44 @@ class Host:
         if result.returncode != 0:
             # Compose and docker errors can echo interpolated values: name the
             # command and its exit code, never its output.
-            detail = "" if quiet else (": " + result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "")
+            detail = "" if quiet or not result.stderr.strip() else ": " + result.stderr.strip()
             raise Refusal("%s exited %d%s" % (argv[0] if argv[0] != "sudo" else argv[1], result.returncode, detail))
         return result.stdout
 
     def _git(self, *args, repo=None):
+        if args[0] == "fetch":
+            self.check_checkout_writable(repo)
         return self._run(["git", "-C", repo or self.config["FOLLOW_CHECKOUT"], *args]).strip()
+
+    def check_checkout_writable(self, repo=None):
+        # Resolve both directories: linked worktrees keep their objects and
+        # shared refs in the common directory, outside their .git pointer file.
+        roots = self._git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", repo=repo).splitlines()
+        blocked = []
+        for root in dict.fromkeys(roots):
+            pending = [Path(root)]
+            while pending:
+                path = pending.pop()
+                info = path.stat()
+                directory = path.is_dir()
+                mode = os.R_OK | os.W_OK | (os.X_OK if directory else 0)
+                # Git's immutable objects are normally 0444. They need read
+                # access, not writes; still reject foreign-owned objects that
+                # this service user cannot write or maintain.
+                own_object = (not directory and path.is_relative_to(Path(root) / "objects")
+                              and info.st_uid == os.geteuid()
+                              and os.access(path, os.R_OK, effective_ids=True))
+                if not os.access(path, mode, effective_ids=True) and not own_object:
+                    try:
+                        owner = pwd.getpwuid(info.st_uid).pw_name
+                    except KeyError:
+                        owner = "unknown"
+                    blocked.append("%s (owner=%s uid=%d)" % (path, owner, info.st_uid))
+                elif directory:
+                    pending.extend(sorted(path.iterdir(), reverse=True))
+        if blocked:
+            raise Refusal("checkout Git paths are not writable by service uid=%d: %s"
+                          % (os.geteuid(), "; ".join(blocked)))
 
     def _compose(self, *args, cwd=None):
         return self._run([*self.docker, "compose", *args], cwd=cwd or self.config["FOLLOW_COMPOSE_DIR"], quiet=True)
@@ -367,11 +400,12 @@ class Host:
 
     def is_ancestor(self, older, newer):
         """Fail closed: git's exit 1 is "no", anything but 0 or 1 is an error."""
-        code = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
-                               older, newer], capture_output=True).returncode
-        if code not in (0, 1):
-            raise Refusal("git merge-base exited %d" % code)
-        return code == 0
+        result = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
+                                 older, newer], capture_output=True, text=True)
+        if result.returncode not in (0, 1):
+            detail = ": " + result.stderr.strip() if result.stderr.strip() else ""
+            raise Refusal("git merge-base exited %d%s" % (result.returncode, detail))
+        return result.returncode == 0
 
     def on_main(self, sha):
         """Whether sha is main's head or an ancestor of it, against a fresh fetch."""

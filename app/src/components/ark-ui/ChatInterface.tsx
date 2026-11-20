@@ -558,10 +558,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     registry.registerAbort(runSessionId, abortController)
     registry.updateRunState(runSessionId, { isProcessing: true })
 
-    // Settle any tier flip first — see `pendingTierWrite`.
-    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
-
     try {
+      // Settle any tier flip first — see `pendingTierWrite`. Stop or page
+      // teardown may happen during this round trip, before any turn is sent.
+      if (pendingTierWrite) await pendingTierWrite.catch(() => {})
+      if (abortController.signal.aborted) {
+        if (stoppedSessions.has(runSessionId)) {
+          registry.appendMessage(runSessionId, {
+            id: `stop-${Date.now()}`,
+            role: 'warning',
+            content: mode === 'interactive' ? 'Message not sent.' : 'Resume cancelled.',
+            timestamp: new Date(),
+          })
+        }
+        return
+      }
+
       const { outcome, aborted } = await runTurn(
         {
           sessionId: runSessionId,

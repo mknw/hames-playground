@@ -25,7 +25,7 @@ test('Stop during a pending tier save says the message was not sent and posts no
   const pending = new Promise<void>((resolve) => (writePending = resolve))
   await page.route('**/_server', async (route) => {
     const id = decodeURIComponent(route.request().headers()['x-server-id'] ?? '')
-    if (!id.endsWith('#setConversationTier')) return route.fallback()
+    if (!id.includes('--setConversationTier_')) return route.fallback()
     const response = await route.fetch()
     writePending()
     await released

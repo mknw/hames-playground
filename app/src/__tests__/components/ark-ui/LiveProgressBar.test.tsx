@@ -189,11 +189,14 @@ describe('LiveProgressBar — fill', () => {
  *    countdown would interrupt a screen-reader user once a second for two
  *    minutes.
  */
-const notice = (over: Partial<{ estimateMs: number; receivedAt: number }> = {}) => ({
+const notice = (
+  over: Partial<{ estimateMs: number; receivedAt: number; boxes: ('large' | 'small')[] }> = {},
+) => ({
   sessionId: 's1',
   estimateMs: 146_000,
   basis: 'default' as const,
   samples: 0,
+  boxes: ['large'] as ('large' | 'small')[],
   receivedAt: 1_000_000,
   ...over,
 })
@@ -214,6 +217,9 @@ describe('LiveProgressBar — the cold-start notice', () => {
     const box = coldNotice(container)
     expect(box, 'the notice did not render').toBeTruthy()
     expect(box!.textContent).toContain('starting GPU')
+    // #1057: the headline names WHICH box the wait is on — the same payload
+    // field, so the figure and the name cannot disagree.
+    expect(box!.textContent).toContain('the 27B')
     expect(box!.textContent).toContain('estimated time to first token: ~2 min')
     expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
     // The countdown is the notice's only informational line, so it clears the
@@ -229,6 +235,22 @@ describe('LiveProgressBar — the cold-start notice', () => {
       container.querySelector('[data-part="range"]'),
       'the progress bar rendered during a cold start',
     ).toBeNull()
+  })
+
+  it('names BOTH boxes when the wait is on both — large first, never two orders', async () => {
+    // #1057: the same wait can hold either box; the payload names which, and
+    // the headline renders what it names. The order is the helper's own
+    // (`coldStartBoxSuffix`), so two notices about one wait always read the
+    // same.
+    const { container } = render(() => (
+      <LiveProgressBar
+        {...props({ warming: notice({ boxes: ['small', 'large'] }), now: () => 1_000_000 })}
+      />
+    ))
+    await pastDelay()
+
+    const box = coldNotice(container)
+    expect(box!.textContent).toContain('starting GPU — the 27B and the 4B')
   })
 
   it('gives the bar back the moment the notice clears, in the same box', async () => {
@@ -284,8 +306,10 @@ describe('LiveProgressBar — the cold-start notice', () => {
     await pastDelay()
 
     const live = liveRegion(container)
+    // #1057: the phrase names the box(es) the wait is on — the same names the
+    // headline shows, never a second derivation of them.
     expect(live?.textContent).toBe(
-      'Waiting for the self-hosted model to start. Estimated time to first token: about 2 min.',
+      'Waiting for the self-hosted model (the 27B) to start. Estimated time to first token: about 2 min.',
     )
     // Everything that ticks is aria-hidden, so the region above is the only
     // thing announced and it does not change while the wait runs.
@@ -310,5 +334,108 @@ describe('LiveProgressBar — the cold-start notice', () => {
       .map((n) => n.getAttribute('title'))
       .join(' ')
     expect(hint).toContain('3 most recent cold starts')
+  })
+
+  // #1057 §3: the notice says what MODAL says about each box it waits on —
+  // booting, restoring, or not starting — with the elapsed time measured from
+  // Modal's own container start, set against the restore-vs-full-boot estimate.
+  describe('Modal’s word on each box', () => {
+    const states = (
+      ...list: {
+        box: 'large' | 'small'
+        phase: 'waiting' | 'booting' | 'not-starting'
+        elapsedMs: number | null
+      }[]
+    ) => ({
+      receivedAt: 1_000_000,
+      states: list.map((st) => ({ ...st, restoreEstimateMs: 157_000 })),
+    })
+
+    it('names a container that is booting in full, with elapsed time and the full-boot range', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice({ boxes: ['large', 'small'] }),
+            boxStates: states({ box: 'large', phase: 'booting', elapsedMs: 6 * 60_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      const line = container.querySelector('[data-testid="cold-start-box-large"]')!
+      expect(line.textContent).toBe(
+        'the 27B: booting, a full boot — 6 min of ~8–16 min (a snapshot restore takes ~3 min)',
+      )
+    })
+
+    it('says restoring while the boot is inside the snapshot-restore estimate', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice({ boxes: ['small'] }),
+            boxStates: states({ box: 'small', phase: 'booting', elapsedMs: 40_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      expect(
+        container.querySelector('[data-testid="cold-start-box-small"]')!.textContent,
+      ).toContain('booting, likely a snapshot restore — 40 sec of ~3 min')
+    })
+
+    it('keeps the elapsed figure counting between reads, on the browser’s own clock', async () => {
+      const [now, setNow] = createSignal(1_000_000)
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice(),
+            boxStates: states({ box: 'large', phase: 'booting', elapsedMs: 20_000 }),
+            now: now,
+          })}
+        />
+      ))
+      await pastDelay()
+      expect(
+        container.querySelector('[data-testid="cold-start-box-large"]')!.textContent,
+      ).toContain('20 sec of ~3 min')
+      setNow(1_000_000 + 100_000) // 100s after the reading arrived: 120s in
+      await wait(1100)
+      expect(
+        container.querySelector('[data-testid="cold-start-box-large"]')!.textContent,
+      ).toContain('2 min of ~3 min')
+    })
+
+    it('says NOT STARTING in the danger role, with what the user can do', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice(),
+            boxStates: states({ box: 'large', phase: 'not-starting', elapsedMs: 7 * 60_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      const line = container.querySelector<HTMLElement>('[data-testid="cold-start-box-large"]')!
+      expect(line.textContent).toContain(
+        'NOT STARTING — Modal has created no container after 7 min',
+      )
+      expect(line.textContent).toContain('stop this turn, wait, or send it again')
+      expect(line.getAttribute('text')).toContain('ui-danger')
+      // The phase — never the counting figure — is what a screen reader hears.
+      const announced = container.querySelector('[data-testid="cold-start-box-announcement"]')!
+      expect(announced.textContent).toContain('the 27B is not starting')
+      expect(announced.textContent).not.toMatch(/\d+ min/)
+    })
+
+    it('shows no box line while Modal control gives none — today’s notice, unchanged', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar {...props({ warming: notice(), boxStates: null, now: () => 1_000_000 })} />
+      ))
+      await pastDelay()
+      expect(container.querySelector('[data-testid^="cold-start-box-large"]')).toBeNull()
+      expect(coldNotice(container)).toBeTruthy()
+    })
   })
 })

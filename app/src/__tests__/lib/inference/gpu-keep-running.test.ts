@@ -21,8 +21,10 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 vi.mock('../../../lib/inference/small-gpu.server', () => ({ resampleSmallBoxGpu: vi.fn() }))
 
 const getGpuState = vi.fn()
+const setGpuState = vi.fn()
 vi.mock('../../../lib/db/gpu-state.server', () => ({
   getGpuState: () => getGpuState(),
+  setGpuState: (on: boolean) => setGpuState(on),
 }))
 
 import {
@@ -30,7 +32,21 @@ import {
   stopGpuKeepRunningLoop,
   gpuKeepTickMs,
   DEFAULT_GPU_KEEP_TICK_MS,
+  driveModalSwitch,
+  pendingReleaseBoxes,
+  releaseBackoffMs,
+  resetPendingReleases,
+  RELEASE_BACKOFF_BASE_MS,
+  RELEASE_BACKOFF_MAX_MS,
+  OFF_REASSERT_MS,
 } from '../../../lib/inference/gpu-keep-running.server'
+import {
+  modalBootPendingSince,
+  noteModalBootEnded,
+  noteModalBootRequested,
+  resetModalBootPending,
+  resetModalControlCache,
+} from '../../../lib/inference/modal-control.server'
 import {
   keepWarmIntervalMs,
   resetLargeWake,
@@ -66,7 +82,11 @@ beforeEach(() => {
   resetSmallActivity()
   resetColdStartHistory()
   resetSmallColdStartHistory()
+  resetPendingReleases()
+  resetModalBootPending()
+  resetModalControlCache()
   vi.clearAllMocks()
+  setGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
   vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
   vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic-key')
   vi.stubEnv('LARGE_LLM_BASE_URL', 'https://example.invalid/large/v1')
@@ -213,5 +233,456 @@ describe('the boot hook and the timer it arms', () => {
     startGpuKeepRunningLoop(TICK)
     expect(unref).toHaveBeenCalled()
     spy.mockRestore()
+  })
+})
+
+// ============================================================================
+// #1057: with the Modal control route configured, the tick drives the
+// autoscaler — the shared wake is the fallback
+// ============================================================================
+//
+// The switch's demo promise is "kept running with no browser attached"; with
+// the control sidecar reachable, Modal's own autoscaler is what keeps the
+// boxes up (min_containers=1), so the tick asserts it and sends NO request to
+// either box — a wake ping would be a GPU-second billed for nothing. The
+// per-tick assertion also covers the one thing a set-and-forget autoscaler
+// cannot: a Modal redeploy resets the override to the app's static value, and
+// the next tick is what brings the demo's box back.
+describe('#1057: the tick through the Modal control route', () => {
+  const MODAL_BASE = 'http://127.0.0.1:8124'
+  const autoscalerPosts = () =>
+    fetchMock.mock.calls.filter(([u]) => String(u) === `${MODAL_BASE}/autoscaler`)
+
+  beforeEach(() => {
+    vi.stubEnv('MODAL_CONTROL_BASE', MODAL_BASE)
+    vi.stubEnv('MODAL_CONTROL_TOKEN', 'test-modal-token')
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, min_containers: 1 })))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+  })
+
+  it('asserts min_containers=1 per box and pings NEITHER box', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(3 * TICK)
+
+    const posts = autoscalerPosts()
+    expect(posts.length).toBeGreaterThanOrEqual(4) // both boxes, several ticks
+    const bodies = posts.map(
+      ([, init]) =>
+        JSON.parse(String((init as RequestInit).body)) as { box: string; min_containers: number },
+    )
+    expect(bodies.every((b) => b.min_containers === 1)).toBe(true)
+    expect(new Set(bodies.map((b) => b.box))).toEqual(new Set(['large', 'small']))
+    // THE acceptance: no request to either inference endpoint, at any tick.
+    expect(largePings()).toBe(0)
+    expect(smallPings()).toBe(0)
+  })
+
+  it('asserts only 0 while the switch is off — never a 1, never a ping', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(3 * TICK)
+    // The boot tick re-asserts the release once per box (the OFF re-assertion,
+    // pinned below); nothing else leaves the process.
+    const bodies = autoscalerPosts().map(
+      ([, init]) => JSON.parse(String((init as RequestInit).body)) as { min_containers: number },
+    )
+    expect(bodies.length).toBe(2)
+    expect(bodies.every((b) => b.min_containers === 0)).toBe(true)
+    expect(urls().filter((u) => !u.startsWith(MODAL_BASE))).toEqual([])
+  })
+
+  it('swallows a refused assertion once per cause and keeps the switch on', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: false, error: 'quota' })))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      startGpuKeepRunningLoop(TICK)
+      await vi.advanceTimersByTimeAsync(3 * TICK)
+      // One log per cause, not one per tick — the loop runs forever.
+      const saids = warn.mock.calls.map(([msg]) => String(msg))
+      const failures = saids.filter((msg) => msg.includes('keeping the boxes up'))
+      expect(failures).toHaveLength(1)
+      expect(failures[0]).toContain('quota')
+      // And the switch row is untouched by the failure.
+      expect(getGpuState).toHaveBeenCalledTimes(4) // one read per tick, nothing else
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('keeps a refusing control route OFF the model endpoints — no ping fallback mid-tick', async () => {
+    // The tick's autoscaler assertion failing is NOT a reason to start
+    // sending keep-warm pings: the boxes are Modal's to hold up, and a ping
+    // against a broken control plane would bill GPU seconds for nothing.
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    fetchMock.mockImplementation(((url: unknown) => {
+      const u = String(url)
+      if (u.startsWith(MODAL_BASE)) {
+        return Promise.reject(new Error('the sidecar is gone'))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(2 * TICK)
+    expect(largePings()).toBe(0)
+    expect(smallPings()).toBe(0)
+  })
+})
+
+// ============================================================================
+// #1057 review round 2: OFF is a promise the loop keeps; ON and OFF never race
+// ============================================================================
+//
+// Round 1 wrote the switch OFF and then asked Modal for `min_containers=0`
+// exactly once: a sidecar that was down or slow left the box at 1 (billed)
+// under a switch reading OFF, and a tick that had read ON could land its `1`
+// AFTER the panel's `0`. Pinned here:
+//
+//   - an OFF Modal does not CONFIRM (a failure, or an `ok` that does not report
+//     0) is retried by the loop with a bounded backoff until it does;
+//   - a flip and a tick run under one lock, so a tick that read ON can never
+//     land its `1` after the flip's `0`;
+//   - a tick that asserted `1` re-reads the switch and takes it back if the
+//     switch went OFF meanwhile (the other-instance flip a lock cannot see);
+//   - the switch's own boot stamps the boot clock, so a boot Modal never
+//     answers is named, not `cold`.
+describe('#1057 review: the release is confirmed, retried, and never raced', () => {
+  const MODAL_BASE = 'http://127.0.0.1:8124'
+  type Posted = { box: string; min_containers: number }
+  /** Autoscaler requests in the order they REACHED the sidecar. */
+  let posted: Posted[]
+  /** What the sidecar answers an autoscaler call with, per request. */
+  let answer: (body: Posted) => Response | Promise<Response>
+
+  const bodyOf = (init: unknown): Posted => JSON.parse(String((init as RequestInit).body)) as Posted
+  const okAnswer = (body: Posted) =>
+    new Response(JSON.stringify({ ok: true, min_containers: body.min_containers }))
+
+  beforeEach(() => {
+    vi.stubEnv('MODAL_CONTROL_BASE', MODAL_BASE)
+    vi.stubEnv('MODAL_CONTROL_TOKEN', 'test-modal-token')
+    posted = []
+    answer = okAnswer
+    fetchMock.mockImplementation(((url: unknown, init: unknown) => {
+      const u = String(url)
+      if (u === `${MODAL_BASE}/autoscaler`) {
+        const body = bodyOf(init)
+        posted.push(body)
+        return Promise.resolve(answer(body))
+      }
+      if (u === `${MODAL_BASE}/state`) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              boxes: {
+                large: { ok: true, containers: [] },
+                small: { ok: true, containers: [] },
+              },
+            }),
+          ),
+        )
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+  })
+
+  it('the backoff doubles from 30s and is BOUNDED at 5 min', () => {
+    expect([1, 2, 3, 4, 5, 6, 20].map(releaseBackoffMs)).toEqual([
+      30_000, 60_000, 120_000, 240_000, 300_000, 300_000, 300_000,
+    ])
+    expect(RELEASE_BACKOFF_BASE_MS).toBe(30_000)
+    expect(RELEASE_BACKOFF_MAX_MS).toBe(300_000)
+  })
+
+  it('an OFF the sidecar refused is retried by the loop until Modal confirms min_containers=0', async () => {
+    let up = false
+    answer = (body) =>
+      up || body.min_containers === 1
+        ? okAnswer(body)
+        : new Response(JSON.stringify({ ok: false, error: 'sidecar restarting' }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const failure = await driveModalSwitch(false, ['large', 'small'])
+    expect(failure).toMatchObject({ doing: 'release', reason: 'sidecar restarting' })
+    expect(pendingReleaseBoxes().sort()).toEqual(['large', 'small'])
+    expect(setGpuState).toHaveBeenCalledWith(false)
+    expect(posted).toHaveLength(2)
+
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    // Before the first backoff elapses (30s): nothing is re-sent.
+    await vi.advanceTimersByTimeAsync(20 * TICK)
+    expect(posted).toHaveLength(2)
+    // The first retry lands at 30s, fails again, and backs off to 60s.
+    await vi.advanceTimersByTimeAsync(11 * TICK)
+    expect(posted).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(50 * TICK)
+    expect(posted).toHaveLength(4) // still inside the 60s backoff
+    // Modal comes back: the next retry confirms, and the retrying STOPS.
+    up = true
+    await vi.advanceTimersByTimeAsync(12 * TICK)
+    expect(posted).toHaveLength(6)
+    expect(posted.slice(2).every((b) => b.min_containers === 0)).toBe(true)
+    expect(pendingReleaseBoxes()).toEqual([])
+    await vi.advanceTimersByTimeAsync(200 * TICK)
+    expect(posted).toHaveLength(6)
+  })
+
+  it('an ok that does not report 0 is not a release', async () => {
+    answer = () => new Response(JSON.stringify({ ok: true, min_containers: 1 }))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failure = await driveModalSwitch(false, ['small'])
+    expect(failure).toMatchObject({ box: 'small', doing: 'release' })
+    expect(failure?.reason).toContain('min_containers=1')
+    expect(pendingReleaseBoxes()).toEqual(['small'])
+  })
+
+  it('a confirmed OFF leaves nothing pending and nothing to retry', async () => {
+    const failure = await driveModalSwitch(false, ['large', 'small'])
+    expect(failure).toBeNull()
+    expect(pendingReleaseBoxes()).toEqual([])
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(100 * TICK)
+    expect(posted).toHaveLength(2) // the flip's own two calls, nothing after
+  })
+
+  it('a tick that read ON can never land its 1 AFTER the flip’s 0', async () => {
+    // The tick reads ON, and its autoscaler `1` for the first box is held in
+    // flight. The panel flips OFF meanwhile. Without the shared lock the flip's
+    // `0` reaches the sidecar first and the tick's late `1` is the last word:
+    // min_containers=1 under an OFF switch.
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let first = true
+    answer = (body) => {
+      if (body.min_containers === 1 && first) {
+        first = false
+        return held.then(() => okAnswer(body))
+      }
+      return okAnswer(body)
+    }
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10) // the boot tick is now inside its first `1`
+    expect(posted).toEqual([{ box: 'large', min_containers: 1 }])
+
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    const flip = driveModalSwitch(false, ['large', 'small'])
+    await vi.advanceTimersByTimeAsync(10)
+    // The flip is QUEUED behind the tick's in-flight call: not one `0` has
+    // reached the sidecar while the tick's `1` is still open. (The cross-
+    // instance re-read below would also take a late `1` back, so the lock is
+    // pinned on this ordering, not only on the final state.)
+    expect(posted).toEqual([{ box: 'large', min_containers: 1 }])
+    release()
+    await flip
+    await vi.advanceTimersByTimeAsync(5 * TICK)
+
+    const lastPerBox = new Map<string, number>()
+    for (const b of posted) lastPerBox.set(b.box, b.min_containers)
+    expect([...lastPerBox.entries()].sort()).toEqual([
+      ['large', 0],
+      ['small', 0],
+    ])
+  })
+
+  it('a tick whose 1 outlived an OFF on ANOTHER instance takes it back', async () => {
+    // Two reads per ON tick: the first says ON, the second (after the `1`s)
+    // says OFF — a flip the lock cannot serialise because it ran elsewhere.
+    getGpuState
+      .mockResolvedValueOnce({ keepRunning: true, switchedOnAt: Date.now() })
+      .mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(posted).toEqual([
+      { box: 'large', min_containers: 1 },
+      { box: 'small', min_containers: 1 },
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+  })
+
+  it('the switch’s own boot starts the boot clock — a boot nothing answers is named, not cold', async () => {
+    expect(modalBootPendingSince('large')).toBeNull()
+    await driveModalSwitch(true, ['large', 'small'])
+    expect(modalBootPendingSince('large')).toBe(Date.now())
+    expect(modalBootPendingSince('small')).toBe(Date.now())
+    // …and OFF ends it: no stale failure after the owner gave up on the boot.
+    await driveModalSwitch(false, ['large', 'small'])
+    expect(modalBootPendingSince('large')).toBeNull()
+  })
+
+  it('the loop keeps the clock while Modal lists no container, without restarting it', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10)
+    const first = modalBootPendingSince('large')
+    expect(first).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(40 * TICK)
+    expect(modalBootPendingSince('large')).toBe(first) // the ORIGINAL ask
+  })
+
+  it('an OFF flip does not clear a chat wake’s boot clock, and the wake ending does not clear the switch’s', async () => {
+    const t0 = Date.now()
+    await driveModalSwitch(true, ['large'])
+    noteModalBootRequested('large', t0 + 5_000, 'wake')
+    // The wake's poll ends (answered, failed or aborted) while the switch's
+    // boot is still unanswered: its clock stands.
+    noteModalBootEnded('large', 'wake')
+    expect(modalBootPendingSince('large')).toBe(t0)
+    // And the other way round: OFF while a turn's wake is still waiting.
+    resetModalBootPending()
+    noteModalBootRequested('large', t0, 'wake')
+    await driveModalSwitch(true, ['large'])
+    await driveModalSwitch(false, ['large'])
+    expect(modalBootPendingSince('large')).toBe(t0)
+  })
+
+  it('an OFF the sidecar confirmed is RE-ASSERTED at the release cap, and Modal’s value is checked', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(OFF_REASSERT_MS).toBe(RELEASE_BACKOFF_MAX_MS)
+    expect(await driveModalSwitch(false, ['large', 'small'])).toBeNull()
+    expect(posted).toHaveLength(2)
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS - 5 * TICK)
+    expect(posted).toHaveLength(2) // not before the cap
+    await vi.advanceTimersByTimeAsync(10 * TICK)
+    expect(posted.slice(2)).toEqual([
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS)
+    expect(posted).toHaveLength(6) // and again one cap later: a steady low rate
+    expect(pendingReleaseBoxes()).toEqual([])
+    // Modal answering ok but NOT 0 on a re-assertion is an unconfirmed release.
+    answer = () => new Response(JSON.stringify({ ok: true, min_containers: 1 }))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS + 2 * TICK)
+    expect(pendingReleaseBoxes().sort()).toEqual(['large', 'small'])
+  })
+
+  it('a loop that starts under an OFF switch re-asserts 0 at once (a restart forgot the ledger)', async () => {
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(posted).toEqual([
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+  })
+
+  it('re-asserts the last known OFF during a database outage, including pending releases', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10) // last successful read is OFF
+    expect(posted).toHaveLength(2)
+    getGpuState.mockRejectedValue(new Error('database down'))
+    // Model an ON from a different instance landing during this outage.
+    answer = () => new Response(JSON.stringify({ ok: true, min_containers: 1 }))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS + TICK)
+    expect(posted.slice(2)).toEqual([
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+    expect(pendingReleaseBoxes().sort()).toEqual(['large', 'small'])
+    answer = okAnswer
+    await vi.advanceTimersByTimeAsync(RELEASE_BACKOFF_BASE_MS)
+    expect(pendingReleaseBoxes()).toEqual([])
+    expect(posted).toHaveLength(6)
+  })
+
+  it('does not guess OFF when the database has never answered or was last ON', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    getGpuState.mockRejectedValue(new Error('database down'))
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(TICK)
+    expect(posted).toEqual([])
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    await vi.advanceTimersByTimeAsync(TICK)
+    expect(posted.map((p) => p.min_containers)).toEqual([1, 1])
+    getGpuState.mockRejectedValue(new Error('database down'))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS + TICK)
+    expect(posted.map((p) => p.min_containers)).toEqual([1, 1])
+  })
+})
+
+describe('#1060 round 2: an ON request the app abandoned (timeout) still lands at Modal after a confirmed OFF', () => {
+  const MODAL_BASE = 'http://127.0.0.1:8124'
+  it('the loop leaves min_containers=0 under an OFF switch', async () => {
+    vi.stubEnv('MODAL_CONTROL_BASE', MODAL_BASE)
+    vi.stubEnv('MODAL_CONTROL_TOKEN', 'test-modal-token')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    // Modal's real autoscaler value per box, as the sidecar's SDK calls set it.
+    const modalMin: Record<string, number> = { large: 0, small: 0 }
+    let slowFirstOn = true
+    fetchMock.mockImplementation(((url: unknown, init: RequestInit) => {
+      const u = String(url)
+      if (u === `${MODAL_BASE}/autoscaler`) {
+        const body = JSON.parse(String(init.body)) as { box: string; min_containers: number }
+        if (body.min_containers === 1 && body.box === 'large' && slowFirstOn) {
+          slowFirstOn = false
+          // The sidecar thread is inside update_autoscaler (gRPC retries); it applies the
+          // value 40 s later whatever the client does. The app aborts at 15 s.
+          setTimeout(() => {
+            modalMin[body.box] = 1
+          }, 40_000)
+          return new Promise((_res, rej) => {
+            init.signal?.addEventListener('abort', () => {
+              const e = new Error('aborted')
+              e.name = 'AbortError'
+              rej(e)
+            })
+          })
+        }
+        modalMin[body.box] = body.min_containers
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, min_containers: body.min_containers })),
+        )
+      }
+      if (u === `${MODAL_BASE}/state`) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              boxes: { large: { ok: true, containers: [] }, small: { ok: true, containers: [] } },
+            }),
+          ),
+        )
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+
+    // Admin flips ON; the large box's 1 times out at the app (panel shows the error).
+    const on = driveModalSwitch(true, ['large', 'small'])
+    await vi.advanceTimersByTimeAsync(16_000)
+    const onFailure = await on
+    expect(onFailure).toMatchObject({ box: 'large', doing: 'boot' })
+    // Admin flips OFF: both 0s are confirmed at once.
+    getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+    const off = await driveModalSwitch(false, ['large', 'small'])
+    expect(off).toBeNull()
+    expect(pendingReleaseBoxes()).toEqual([])
+    // The loop runs for 10 minutes with the switch OFF.
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(600 * TICK)
+    // Modal: the abandoned 1 landed after the confirmed 0, and nothing re-asserted 0.
+    expect(modalMin).toEqual({ large: 0, small: 0 })
   })
 })

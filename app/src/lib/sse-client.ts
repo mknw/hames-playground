@@ -140,6 +140,11 @@ export interface WarmingEventData {
   basis: 'measured' | 'default'
   /** How many measurements the median is over; `0` on the fallback. */
   samples: number
+  /** WHICH boxes this turn waits on (#1057): each self-deployed box nothing
+   *  proves warm when the wait began — 'large' is the 27B, 'small' the 4B
+   *  summarizer. The same derivation as `estimateMs`'s filter, so the notice
+   *  cannot name a box it is not counting down for. */
+  boxes: ('large' | 'small')[]
 }
 
 /** A standard harness event with the sessionId envelope added in #47.

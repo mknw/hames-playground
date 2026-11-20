@@ -50,6 +50,7 @@ const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.u
 const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 
 const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
+const sidecarScript = path('../../../../deploy/modal/test_control_sidecar.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
 const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
 const selfDeployedClient = read('../../../../packages/harness-baml/baml_src/large-client.baml')
@@ -480,4 +481,20 @@ describe('deploy/modal: Python behaviour (hermetic unit layer)', () => {
       execFileSync('python3', [behaviourScript], { encoding: 'utf8', timeout: 10000 }),
     ).not.toThrow()
   })
+})
+
+// #1057: the control sidecar's own contract — the same stdlib-only invocation
+// as `test_behaviour.py`, so the sidecar's rules run in CI with the rest of
+// the deploy pins. The loud one: "has Modal created a container" comes from
+// Modal's TASK list (`modal container list`), never the SDK's serving registry
+// (which lists nothing for a whole boot) — a fake whose booting box is in the
+// one and not the other goes red the day that source moves.
+describe('deploy/modal: the control sidecar (hermetic unit layer)', () => {
+  it('answers /state from the task list, degrades per box, and guards its token', () => {
+    // The sidecar suite serves real sockets on ephemeral ports; name a budget
+    // rather than lean on the vitest default of 5s.
+    expect(() =>
+      execFileSync('python3', [sidecarScript], { encoding: 'utf8', timeout: 30000 }),
+    ).not.toThrow()
+  }, 30_000)
 })

@@ -223,6 +223,15 @@ export function browserServerEnv(
     VERDA_CLIENT_ID: 'e2e-browser-fake-client-id',
     VERDA_CLIENT_SECRET: 'e2e-browser-fake-client-secret',
     VERDA_DEPLOYMENT_ID: 'e2e-browser-fake-deployment',
+    // #1057: the Modal control sidecar's fake — the SAME fake server, at its
+    // root (the base is host+port, as `VERDA_CONTROL_PLANE_BASE` is handed
+    // it, because the sidecar's routes `/state`/`/autoscaler`/`stop` carry no
+    // `/v1` prefix — the same trap the Verda base's `/v1` was). Zero
+    // containers per box is the armed default, so every scenario starts from
+    // the scaled-down observation and the switch's autoscaler assertions
+    // assert on the FAKE's records, never a real deployment's state.
+    MODAL_CONTROL_BASE: backend.llm.baseUrl.replace(/\/v1$/, ''),
+    MODAL_CONTROL_TOKEN: 'e2e-browser-fake-modal-token',
     // See the constant: with the shipped 180s, the suite's own preflight turn
     // would leave the box "warm" for the whole run and the cold-start notice
     // could never fire again.

@@ -485,13 +485,14 @@ describe('deploy/modal: Python behaviour (hermetic unit layer)', () => {
 
 // #1057: the control sidecar's own contract — the same stdlib-only invocation
 // as `test_behaviour.py`, so the sidecar's rules run in CI with the rest of
-// the deploy pins. The loud one is the first: the container list comes from
-// the SDK's experimental call, so the day Modal drops it, THIS goes red
-// naming it (and the CLI fallback takes over at run time).
+// the deploy pins. The loud one: "has Modal created a container" comes from
+// Modal's TASK list (`modal container list`), never the SDK's serving registry
+// (which lists nothing for a whole boot) — a fake whose booting box is in the
+// one and not the other goes red the day that source moves.
 describe('deploy/modal: the control sidecar (hermetic unit layer)', () => {
-  it('answers /state from the experimental call, degrades per box, and guards its token', () => {
-    // The sidecar suite serves real sockets on ephemeral ports (~10s measured);
-    // the vitest default of 5s would flake it, so this one names its budget.
+  it('answers /state from the task list, degrades per box, and guards its token', () => {
+    // The sidecar suite serves real sockets on ephemeral ports; name a budget
+    // rather than lean on the vitest default of 5s.
     expect(() =>
       execFileSync('python3', [sidecarScript], { encoding: 'utf8', timeout: 30000 }),
     ).not.toThrow()

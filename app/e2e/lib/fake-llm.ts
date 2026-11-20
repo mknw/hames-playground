@@ -227,8 +227,17 @@ export interface FakeModalControl {
   /** Arm each box's container count. Unnamed boxes keep their state; `0` is
    *  the scaled-to-zero observation, the default every scenario starts from
    *  (the same rule the Verda fake's empty replica list follows, for the same
-   *  reason: no scenario's answer may leak a real deployment's state). */
-  arm(boxes: { large?: number; small?: number }): void
+   *  reason: no scenario's answer may leak a real deployment's state).
+   *
+   *  `ready` follows the REAL semantics (#1057 review): a container Modal has
+   *  CREATED is in its task list from the moment it is queued, but is
+   *  registered to serve only once its `@modal.enter` boot is done — so
+   *  `{ready: false}` is a BOOTING box (listed, not serving, with a start
+   *  `startedAgoMs` ago) and the default `true` an up one. */
+  arm(
+    boxes: { large?: number; small?: number },
+    opts?: { ready?: boolean; startedAgoMs?: number },
+  ): void
   /** Every `/autoscaler` and `/stop` request served, oldest first. */
   calls(): readonly ModalControlCall[]
   /** Container ids the boxes' `/status` fakes name — one per armed container,
@@ -311,23 +320,31 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   // scaled down, exactly the rule the Verda fake's empty replica list follows,
   // so no scenario inherits a warm box from a real deployment's state.
   const modalContainers: Record<'large' | 'small', number> = { large: 0, small: 0 }
+  let modalReady = true
+  let modalStartedAgoMs: number | null = null
+  let modalArmedAt = Date.now()
   const modalCalls: ModalControlCall[] = []
   const containerId = (box: 'large' | 'small', i: number): string => `ct-e2e-${box}-${i + 1}`
   const boxState = (box: 'large' | 'small') => ({
     ok: true,
     app: box === 'large' ? 'e2e-hames-private-27b' : 'e2e-hames-small-models',
     server: box === 'large' ? 'Qwen27B' : 'SmallModels',
-    // started_at_ms: None — the SDK's container objects carry none, and the
-    // app's own clocks are the fallback path in exactly that shape.
+    // The sidecar's real shape: Modal's task list (a booting container is IN
+    // it, with its start) plus `ready` from the serving registry (false while
+    // it boots).
     containers: Array.from({ length: modalContainers[box] }, (_, i) => ({
       container_id: containerId(box, i),
-      started_at_ms: null,
+      started_at_ms: modalStartedAgoMs === null ? null : modalArmedAt - modalStartedAgoMs,
+      ready: modalReady,
     })),
   })
   const modal: FakeModalControl = {
-    arm(boxes) {
+    arm(boxes, opts) {
       if (typeof boxes.large === 'number') modalContainers.large = boxes.large
       if (typeof boxes.small === 'number') modalContainers.small = boxes.small
+      modalReady = opts?.ready ?? true
+      modalStartedAgoMs = opts?.startedAgoMs ?? null
+      modalArmedAt = Date.now()
     },
     calls: () => modalCalls,
     containerIds: (box) =>
@@ -821,6 +838,8 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       armed = null
       confirmIndex = 1
       modalContainers.large = 0
+      modalReady = true
+      modalStartedAgoMs = null
       modalContainers.small = 0
       modalCalls.length = 0
       // Release BEFORE clearing the log, and always: a parked request left

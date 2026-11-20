@@ -908,9 +908,13 @@ describe('#1057: the not-starting check', () => {
       ok: true,
       app: 'test-app',
       server: 'test-server',
+      // A container Modal CREATED and that is not serving yet: in its task list
+      // (`modal container list`), absent from the serving registry — what a
+      // booting box really looks like for its whole boot.
       containers: Array.from({ length: n }, (_, i) => ({
         container_id: `ct-${i}`,
         started_at_ms: null,
+        ready: false,
       })),
     })
     return new Response(
@@ -961,7 +965,7 @@ describe('#1057: the not-starting check', () => {
     expect(err.message).not.toContain('past the 100s this wake is given')
     expect(err.message).toContain('NO container')
     expect(err.message).toContain('failing, not slow')
-    expect(err.message).toContain('stop the box from the admin panel')
+    expect(err.message).toContain('Modal never created a container')
     expect(err.message).toContain(NOTHING_SENT_ELSEWHERE)
     // And it really was EARLY: the full budget would have spent FAST_ATTEMPTS
     // model attempts; the threshold cut it at the first check past 20 s.
@@ -1000,7 +1004,7 @@ describe('#1057: the not-starting check', () => {
     expect(err.message).not.toContain('NO container')
   })
 
-  it('keeps polling while a container is UP — a boot inside a container is slow, not failing', async () => {
+  it('keeps polling while a container EXISTS — a boot inside a container is slow, not failing', async () => {
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(route(() => modalState({ large: 1 })))
@@ -1011,6 +1015,56 @@ describe('#1057: the not-starting check', () => {
 
     expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
     expect(err.message).not.toContain('NO container')
+  })
+
+  it('a full boot of 10 MINUTES with a container present is NOT ended early — the 300s default is for "no container at all"', async () => {
+    // The review-round-1 blocker: with "no container" read from the serving
+    // registry, every full boot (the 27B takes 8-15 min, all of it inside
+    // @modal.enter) was ended at 300s as "NOT STARTING … failing, not slow",
+    // although the turn would have succeeded. Modal HAS a container the whole
+    // time here; the box answers at minute 10, and the wake must reach it.
+    delete process.env.MODAL_NOT_STARTING_AFTER_MS // the shipped 300s default
+    vi.useFakeTimers()
+    Object.assign(process.env, {
+      LARGE_LLM_WAKE_TIMEOUT_MS: '1200000',
+      LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: '30000',
+      LARGE_LLM_WAKE_POLL_INTERVAL_MS: '5000',
+    })
+    const t0 = Date.now()
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.startsWith(MODAL_BASE)) return Promise.resolve(modalState({ large: 1 }))
+      return Date.now() - t0 >= 600_000 ? Promise.resolve(ok()) : stalls()(url, init)
+    })
+
+    let settled = false
+    const wake = ensureLargeAwake().then(
+      () => 'woke',
+      (err: unknown) => ((settled = true), err as Error),
+    )
+    await vi.advanceTimersByTimeAsync(590_000)
+    expect(settled, 'still booting at minute 9:50 — nothing may have ended it').toBe(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await wake).toBe('woke')
+    expect(settled).toBe(false)
+    // The control plane WAS consulted past the threshold (the rule is live)…
+    expect(fetchMock.mock.calls.some(([u]) => String(u) === `${MODAL_BASE}/state`)).toBe(true)
+  })
+
+  it('"no container at all" needs TWO distinct control-plane readings — one reading is a blip', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    process.env.MODAL_NOT_STARTING_AFTER_MS = '20000'
+    fetchMock.mockImplementation(route(() => modalState()))
+    let settled = false
+    const wake = quiet(ensureLargeAwake()).then((e) => ((settled = true), e))
+    // The first zero reading lands at the first check past 20s; the probe is
+    // cached for 12s, so the SECOND (fresh) one cannot come before ~32s.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(settled, 'ended on a single zero reading').toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    const err = (await wake) as Error
+    expect(settled).toBe(true)
+    expect(err.message).toContain('NO container')
   })
 
   it('sends nothing to the control plane while the route is unconfigured', async () => {

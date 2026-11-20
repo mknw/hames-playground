@@ -88,9 +88,14 @@ vi.mock('../../../lib/inference/modal-control.server', async (importOriginal) =>
 import * as previewHeader from '../../../lib/harness-client/preview-header.server'
 import {
   getPreviewHeaderState,
+  getWarmingBoxStates,
   igniteSelfDeployedBox,
   keepPrivateTierWarm,
 } from '../../../lib/harness-client/preview-header.server'
+import {
+  noteModalBootRequested,
+  resetModalBootPending,
+} from '../../../lib/inference/modal-control.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
 import {
   resetSmallActivity,
@@ -738,6 +743,7 @@ describe('keepPrivateTierWarm', () => {
     const exported = Object.entries(previewHeader).filter(([, v]) => typeof v === 'function')
     expect(exported.map(([name]) => name).sort()).toEqual([
       'getPreviewHeaderState',
+      'getWarmingBoxStates',
       'igniteSelfDeployedBox',
       'keepPrivateTierWarm',
     ])
@@ -969,5 +975,103 @@ describe('#1057: the strip control plane', () => {
     })
     expect((await getPreviewHeaderState()).warmth.state).toBe('cold')
     expect(probeModalBoxes).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================================
+// #1057 §3: the chat notice's live read of Modal's word on each box
+// ============================================================================
+//
+// The notice says booting / restoring / not starting with the elapsed time from
+// MODAL's container start. It reads the same derivation as the admin panel
+// (`box-phase.server.ts`), asks only the control plane, and lists only boxes
+// that are a WAIT: an up, cold or unreadable box is not.
+describe('#1057: getWarmingBoxStates', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    configureSelfDeployed()
+    modalControlConfigured.mockReturnValue(true)
+    probeModalBoxes.mockReset()
+    resetModalBootPending()
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+    modalControlConfigured.mockReturnValue(false)
+    resetModalBootPending()
+  })
+
+  const box = (
+    containers: { id: string; startedAtMs: number | null; ready: boolean | null }[],
+  ) => ({
+    ok: true,
+    containerCount: containers.length,
+    oldestContainerStartedAtMs:
+      containers.flatMap((c) => (c.startedAtMs === null ? [] : [c.startedAtMs]))[0] ?? null,
+    containers,
+    reason: null,
+  })
+
+  it('authenticates before reading anything', async () => {
+    getAuthenticatedUser.mockRejectedValue(new Error('nope'))
+    await expect(getWarmingBoxStates()).rejects.toThrow('nope')
+    expect(probeModalBoxes).not.toHaveBeenCalled()
+  })
+
+  it('is empty — the notice unchanged — while Modal control is unconfigured', async () => {
+    modalControlConfigured.mockReturnValue(false)
+    expect(await getWarmingBoxStates()).toEqual([])
+    expect(probeModalBoxes).not.toHaveBeenCalled()
+  })
+
+  it('names a container that is booting, with the elapsed time from MODAL’s start', async () => {
+    const started = Date.now() - 6 * 60_000
+    probeModalBoxes.mockResolvedValue({
+      at: 0,
+      large: box([{ id: 'ct-1', startedAtMs: started, ready: false }]),
+      small: box([]),
+    })
+    const states = await getWarmingBoxStates()
+    expect(states).toHaveLength(1) // the cold 4B is not a wait
+    expect(states[0]).toMatchObject({ box: 'large', phase: 'booting' })
+    expect(states[0].elapsedMs).toBeGreaterThanOrEqual(6 * 60_000)
+    expect(states[0].elapsedMs).toBeLessThan(6 * 60_000 + 5_000)
+    expect(states[0].restoreEstimateMs).toBeGreaterThan(0)
+  })
+
+  it('names a box with no container as waiting, then as NOT STARTING past the threshold', async () => {
+    process.env.MODAL_NOT_STARTING_AFTER_MS = '300000'
+    probeModalBoxes.mockResolvedValue({ at: 0, large: box([]), small: box([]) })
+    noteModalBootRequested('large', Date.now() - 60_000)
+    expect((await getWarmingBoxStates()).map((s) => [s.box, s.phase])).toEqual([
+      ['large', 'waiting'],
+    ])
+    resetModalBootPending()
+    noteModalBootRequested('large', Date.now() - 400_000)
+    const states = await getWarmingBoxStates()
+    expect(states[0]).toMatchObject({ box: 'large', phase: 'not-starting' })
+    expect(states[0].elapsedMs).toBeGreaterThanOrEqual(400_000)
+  })
+
+  it('omits a box that is up, and sends no request to either box', async () => {
+    probeModalBoxes.mockResolvedValue({
+      at: 0,
+      large: box([{ id: 'ct-1', startedAtMs: 1, ready: true }]),
+      small: box([{ id: 'ct-2', startedAtMs: 1, ready: true }]),
+    })
+    expect(await getWarmingBoxStates()).toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('skips the 27B on the OpenRouter route — no Modal box of ours to wait on', async () => {
+    process.env.LARGE_LLM_ROUTE = 'openrouter'
+    process.env.LARGE_LLM_MODEL = 'openrouter/openai.gpt-4o-mini'
+    probeModalBoxes.mockResolvedValue({
+      at: 0,
+      large: box([{ id: 'ct-1', startedAtMs: Date.now() - 1000, ready: false }]),
+      small: box([{ id: 'ct-2', startedAtMs: Date.now() - 1000, ready: false }]),
+    })
+    expect((await getWarmingBoxStates()).map((s) => s.box)).toEqual(['small'])
   })
 })

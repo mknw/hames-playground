@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# The Modal control sidecar (control_sidecar.py, #1057) as its own container.
+#
+# WHY A CONTAINER: the sidecar holds the Modal WORKSPACE token (deploy/delete
+# rights, starts and stops billed GPUs). Run from a writable git checkout, anything
+# that can write that tree could change the code that holds the token; this
+# image carries a read-only copy of ONE file, built from a pinned commit, run as
+# a dedicated non-root uid with no capabilities. The token is never baked in:
+# compose passes it at run time from the sidecar's own env file.
+#
+#   docker compose build modal-control      # from a release checkout (compose: docker-compose.prod.yaml)
+#
+# The base tag is pinned to a minor and the SDK to the version `uv.lock` pins
+# (a source-scan test holds the two equal); the digest pin belongs to the
+# operator who builds it (docs: deploy/modal/README.md, "The control sidecar").
+FROM python:3.13-slim-bookworm
+
+RUN pip install --no-cache-dir modal==1.6.1 \
+ && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin modalctl
+
+WORKDIR /opt/control
+COPY --chmod=0444 control_sidecar.py /opt/control/control_sidecar.py
+
+# Inside its own network namespace the sidecar may bind every interface: the
+# only network it is on is shared with the app and nothing else, and compose
+# publishes no port for it. The CODE default stays 127.0.0.1 — this is the one
+# place that overrides it.
+ENV MODAL_CONTROL_HOST=0.0.0.0 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp
+
+USER 10001
+# -I: ignore PYTHON* env vars and the user site; the sidecar reads only its own env.
+CMD ["python", "-I", "control_sidecar.py"]

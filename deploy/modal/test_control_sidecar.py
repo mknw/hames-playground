@@ -138,7 +138,7 @@ class SidecarTestCase(unittest.TestCase):
         import threading
 
         httpd = module.ThreadingHTTPServer(("127.0.0.1", 0), module.Handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread = threading.Thread(target=lambda: httpd.serve_forever(poll_interval=0.01), daemon=True)
         thread.start()
         self.addCleanup(httpd.shutdown)
         self.addCleanup(httpd.server_close)

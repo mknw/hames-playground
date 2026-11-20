@@ -20,6 +20,12 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
+  boxBootText,
+  boxNotStartingText,
+  boxWaitAnnouncement,
+  boxWaitLine,
+  boxWaitingText,
+  formatFullBootRange,
   COLD_START_HEADLINE,
   coldStartAnnouncement,
   coldStartBasisHint,
@@ -121,5 +127,62 @@ describe('coldStartBasisHint', () => {
     expect(hint).toContain('snapshot restore')
     expect(hint).toContain('build a new one')
     expect(hint).not.toMatch(/median/i)
+  })
+})
+
+// ============================================================================
+// #1057: what Modal says about a box, in words
+// ============================================================================
+describe('the control-plane wait lines', () => {
+  it('states each box’s measured full-boot range in whole minutes', () => {
+    expect(formatFullBootRange('large')).toBe('8–16 min') // 505–938 s
+    expect(formatFullBootRange('small')).toBe('5–9 min') // 305–552 s
+  })
+
+  it('reads a container inside the restore estimate as a restore, past it as a full boot', () => {
+    expect(boxBootText('large', 40_000, 157_000)).toBe(
+      'booting, likely a snapshot restore — 40 sec of ~3 min (a full boot takes ~8–16 min)',
+    )
+    expect(boxBootText('large', 6 * 60_000, 157_000)).toBe(
+      'booting, a full boot — 6 min of ~8–16 min (a snapshot restore takes ~3 min)',
+    )
+  })
+
+  it('has no elapsed figure while Modal still lists the container as Pending', () => {
+    expect(boxBootText('small', null, 32_000)).toBe(
+      'queued by Modal — a snapshot restore takes ~40 sec, a full boot ~5–9 min',
+    )
+  })
+
+  it('names a boot with no container yet, and one Modal is not starting', () => {
+    expect(boxWaitingText(90_000)).toBe('waiting for Modal to start a container — 2 min so far')
+    expect(boxNotStartingText(7 * 60_000)).toBe(
+      'NOT STARTING — Modal has created no container after 7 min',
+    )
+  })
+
+  it('offers the user what they can do on a box that is not starting, in the chat', () => {
+    const line = boxWaitLine({
+      box: 'large',
+      phase: 'not-starting',
+      elapsedMs: 7 * 60_000,
+      restoreEstimateMs: 157_000,
+    })
+    expect(line).toBe(
+      'the 27B: NOT STARTING — Modal has created no container after 7 min. You can stop this turn, wait, or send it again.',
+    )
+  })
+
+  it('announces a phase, never a counting figure', () => {
+    for (const phase of ['waiting', 'booting', 'not-starting'] as const) {
+      const said = boxWaitAnnouncement({
+        box: 'small',
+        phase,
+        elapsedMs: 123_456,
+        restoreEstimateMs: 32_000,
+      })
+      expect(said).toContain('the 4B')
+      expect(said).not.toMatch(/\d+ (sec|min)/)
+    }
   })
 })

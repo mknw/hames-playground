@@ -61,7 +61,12 @@ import {
 } from '~/components/ark-ui/PreviewHeaderStrip'
 import { fmtEur } from '@hames-ai/harness-patterns/observability/token-totals'
 import { formatCountdown } from '~/lib/preview-header-format'
-import { COLD_START_FULL_BOOT_MS, formatColdStartEstimate } from '~/lib/cold-start-format'
+import {
+  boxBootText,
+  boxNotStartingText,
+  boxWaitingText,
+  formatColdStartEstimate,
+} from '~/lib/cold-start-format'
 
 /** The switch's label, on its own line: the words the owner asked for,
  *  following the header's "start self-deployed GPUs" vocabulary. */
@@ -84,7 +89,7 @@ const BOX_NAME: Record<'large' | 'small', string> = { large: '27B', small: '4B' 
  *  facts behind it. Coarse figures only (`formatColdStartEstimate`), because
  *  the estimate is a handful of samples on one process, and a `6:12` ticking
  *  by the second would present a median as a schedule. */
-function modalLineText(line: GpuBoxLine, now: number): string {
+function modalLineText(box: 'large' | 'small', line: GpuBoxLine, now: number): string {
   const boot = line.containerStartedAtMs ?? null
   switch (line.state) {
     case 'up': {
@@ -101,19 +106,21 @@ function modalLineText(line: GpuBoxLine, now: number): string {
       return `up — ${how}${line.gpu ? `, ${line.gpu}` : ''}${upFor}`
     }
     case 'booting': {
-      const elapsed = boot !== null ? now - boot : null
-      const elapsedText =
-        elapsed !== null
-          ? `${formatColdStartEstimate(elapsed) ?? 'under a minute'} so far`
-          : 'requested'
-      return `booting — ${elapsedText} (a snapshot restore is ~${formatColdStartEstimate(
-        157_000,
-      )}; a full boot can take ~${formatColdStartEstimate(COLD_START_FULL_BOOT_MS)})`
+      // Elapsed from MODAL's own container start where Modal has created one,
+      // from the ask while it has not yet; `restoreEstimateMs` is this box's
+      // snapshot-restore figure, set against its full-boot range.
+      if (line.containers === 0) return boxWaitingText(boot !== null ? now - boot : 0)
+      const text = boxBootText(
+        box,
+        boot !== null ? now - boot : null,
+        line.restoreEstimateMs ?? 157_000,
+      )
+      return line.reason ? `${text} (${line.reason})` : text
     }
     case 'cold':
       return 'cold — no container; it scales to zero'
     case 'not-starting':
-      return `NOT STARTING — ${line.reason ?? 'Modal reports no container'}; stop it below or switch off`
+      return `${boxNotStartingText(boot !== null ? now - boot : 0)}. Modal created no container, so there is nothing to stop: check the Modal app (quota, billing), then switch the keep-running off and on`
     case 'unknown':
       return `unknown — the control-plane read failed${line.reason ? ` (${line.reason})` : ''}`
   }
@@ -751,26 +758,43 @@ export default function Admin() {
                                     : 'ui-text-secondary'
                                 }`}
                               >
-                                {BOX_NAME[box]}: {modalLineText(line(), Date.now())}
+                                {BOX_NAME[box]}: {modalLineText(box, line(), Date.now())}
                               </span>
                               {/* Stop now: for a box that is stuck or billing
-                                  for nothing. Only offered while there is
-                                  something to stop (a container), and behind
-                                  a confirmation — the action is immediate
-                                  and it drops in-flight turns on that box. */}
+                                  for nothing. Only offered where there is a
+                                  container to stop AND the switch is OFF: with
+                                  min_containers=1 Modal starts a replacement
+                                  at once, so a stop would be a billed restart
+                                  — the panel says so instead of offering it.
+                                  Behind a confirmation either way: the action
+                                  is immediate and it drops in-flight turns on
+                                  that box. */}
                               <Show when={line().state === 'up' || line().state === 'booting'}>
-                                <button
-                                  text="xs ui-danger"
-                                  bg="transparent hover:ui-bg-hover"
-                                  border="1 ui-border-secondary"
-                                  rounded="md"
-                                  p="x-2 y-0.5"
-                                  disabled={stoppingBox() !== null}
-                                  onClick={() => void stopBox(box)}
-                                  title={`Stop the ${BOX_NAME[box]}'s containers now, instead of waiting out the scaledown window. A turn in flight on it will fail.`}
+                                <Show
+                                  when={!s().keepRunning}
+                                  fallback={
+                                    <span
+                                      text="xs ui-text-tertiary"
+                                      data-testid={`gpu-stop-disabled-${box}`}
+                                    >
+                                      stop now is off while the switch is on — Modal would start a
+                                      replacement at once. Switch it off first.
+                                    </span>
+                                  }
                                 >
-                                  {stoppingBox() === box ? 'stopping…' : 'stop now'}
-                                </button>
+                                  <button
+                                    text="xs ui-danger"
+                                    bg="transparent hover:ui-bg-hover"
+                                    border="1 ui-border-secondary"
+                                    rounded="md"
+                                    p="x-2 y-0.5"
+                                    disabled={stoppingBox() !== null}
+                                    onClick={() => void stopBox(box)}
+                                    title={`Stop the ${BOX_NAME[box]}'s containers now, instead of waiting out the scaledown window. A turn in flight on it will fail.`}
+                                  >
+                                    {stoppingBox() === box ? 'stopping…' : 'stop now'}
+                                  </button>
+                                </Show>
                               </Show>
                             </div>
                           )}

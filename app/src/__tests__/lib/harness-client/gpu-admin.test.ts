@@ -54,9 +54,14 @@ import {
   stopGpuBoxNow,
 } from '../../../lib/harness-client/gpu-admin.server'
 import {
+  noteModalBootRequested,
   resetModalBootPending,
   resetModalControlCache,
 } from '../../../lib/inference/modal-control.server'
+import {
+  pendingReleaseBoxes,
+  resetPendingReleases,
+} from '../../../lib/inference/gpu-keep-running.server'
 import { resetBoxStatusCacheForTests } from '../../../lib/inference/box-status.server'
 import {
   ensureSmallAwake,
@@ -138,6 +143,7 @@ beforeEach(() => {
   resetModalBootPending()
   resetModalControlCache()
   resetBoxStatusCacheForTests()
+  resetPendingReleases()
   fetchMock = vi.fn(
     async () =>
       new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }),
@@ -505,15 +511,23 @@ describe('#1057: the Modal lines on the payload', () => {
     })
   }
 
-  /** The sidecar's `/state`: zero containers in both boxes by default. */
-  const modalState = (containers: { large?: number; small?: number } = {}) => {
+  /** The sidecar's `/state`: zero containers in both boxes by default. Each
+   *  container is `ready` (registered to serve) unless `ready` says otherwise —
+   *  a BOOTING box is in Modal's task list and absent from the serving
+   *  registry, which is exactly the `ready: false` case. `ids` names the
+   *  containers per box (a new id is a new container). */
+  const modalState = (
+    containers: { large?: number; small?: number } = {},
+    opts: { ready?: boolean | null; startedAtMs?: number | null; ids?: string } = {},
+  ) => {
     const box = (n: number) => ({
       ok: true,
       app: 'test-app',
       server: 'test-server',
       containers: Array.from({ length: n }, (_, i) => ({
-        container_id: `ct-${i}`,
-        started_at_ms: null,
+        container_id: `${opts.ids ?? 'ct'}-${i}`,
+        started_at_ms: opts.startedAtMs === undefined ? null : opts.startedAtMs,
+        ready: opts.ready === undefined ? true : opts.ready,
       })),
     })
     return new Response(
@@ -574,7 +588,25 @@ describe('#1057: the Modal lines on the payload', () => {
     ])
   })
 
-  it('carries BOOTING, not up, while /status answers 503 inside a live container', async () => {
+  it('carries BOOTING — with Modal’s own start time — for a container that exists and is NOT serving, fetching no /status', async () => {
+    // THE review-round-1 blocker: a box that is booting has a container in
+    // Modal's task list and none in the serving registry for its whole boot.
+    // It must read BOOTING (not cold, not up) and must never be asked.
+    const startedAtMs = Date.now() - 6 * 60_000
+    configureModal(() => modalState({ large: 1 }, { ready: false, startedAtMs }))
+    const state = await getGpuAdminState()
+    expect(state.modal?.large).toMatchObject({
+      state: 'booting',
+      containers: 1,
+      containerStartedAtMs: startedAtMs,
+      restored: null,
+    })
+    expect(state.modal?.large.restoreEstimateMs).toBeGreaterThan(0)
+    expect(state.modal?.small.state).toBe('cold')
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([`${MODAL_BASE}/state`])
+  })
+
+  it('carries UP — restored unknown — when the one /status read of a serving container fails', async () => {
     configureModal(() => modalState({ large: 1 }))
     fetchMock.mockImplementation(((url: string) => {
       if (url.startsWith(MODAL_BASE)) return Promise.resolve(modalState({ large: 1 }))
@@ -583,8 +615,74 @@ describe('#1057: the Modal lines on the payload', () => {
     }) as never)
     resetModalControlCache()
     const state = await getGpuAdminState()
-    expect(state.modal?.large).toMatchObject({ state: 'booting', containers: 1, restored: null })
+    expect(state.modal?.large).toMatchObject({ state: 'up', containers: 1, restored: null })
     expect(state.modal?.small.state).toBe('cold')
+  })
+
+  it('names a booting box whose readiness Modal could not report, without asking it', async () => {
+    configureModal(() => modalState({ large: 1 }, { ready: null }))
+    const state = await getGpuAdminState()
+    expect(state.modal?.large).toMatchObject({ state: 'booting' })
+    expect(state.modal?.large.reason).toContain('serving')
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([`${MODAL_BASE}/state`])
+  })
+
+  it('reads /status AT MOST ONCE per container id — an open panel never holds a box awake', async () => {
+    // 10 minutes of a panel polling every 3s with the switch OFF and the box
+    // up. Round 1 re-read /status every 12s (100 reads in 600s): every one a
+    // request through Modal's proxy, which resets the scaledown window.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
+      configureModal(() => modalState({ large: 1, small: 1 }))
+      const statusReads = () =>
+        fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.endsWith('/status'))
+      for (let t = 0; t < 600; t += 3) {
+        vi.setSystemTime(Date.now() + 3_000)
+        await getGpuAdminState()
+      }
+      expect(statusReads().sort()).toEqual([
+        'https://example.invalid/deployment/status',
+        'https://example.invalid/small/status',
+      ])
+      // The probe itself is re-read on its TTL (that one is the control
+      // plane, which wakes nothing): the pin is that it is NOT the box.
+      expect(
+        fetchMock.mock.calls.filter(([u]) => String(u) === `${MODAL_BASE}/state`).length,
+      ).toBeGreaterThan(10)
+
+      // A NEW container (a restart, a replacement) is a new read — once.
+      fetchMock.mockClear()
+      configureModal(() => modalState({ large: 1, small: 1 }, { ids: 'ct-new' }))
+      for (let t = 0; t < 120; t += 3) {
+        vi.setSystemTime(Date.now() + 3_000)
+        await getGpuAdminState()
+      }
+      expect(statusReads()).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('remembers a FAILED /status read too — a 503 is not retried on the poll', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
+      configureModal(() => modalState({ small: 1 }))
+      fetchMock.mockImplementation(((url: string) => {
+        if (url.startsWith(MODAL_BASE)) return Promise.resolve(modalState({ small: 1 }))
+        return Promise.resolve(new Response('no', { status: 503 }))
+      }) as never)
+      for (let i = 0; i < 40; i++) {
+        vi.setSystemTime(Date.now() + 3_000)
+        await getGpuAdminState()
+      }
+      expect(
+        fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.endsWith('/status')),
+      ).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('carries UNKNOWN per box when the control-plane read fails, without throwing', async () => {
@@ -615,9 +713,16 @@ describe('#1057: the switch through the control route', () => {
   }
 
   /** Route: the sidecar's autoscaler answers ok; model routes answer too. */
-  const route = (url: string): Response => {
+  const route = (url: string, init?: unknown): Response => {
     if (url.startsWith(MODAL_BASE)) {
-      return new Response(JSON.stringify({ ok: true, min_containers: 1 }), { status: 200 })
+      // Modal reports back the value it now holds: the release is confirmed
+      // against it.
+      const asked = init
+        ? (JSON.parse(String((init as RequestInit).body)) as { min_containers?: number })
+        : {}
+      return new Response(JSON.stringify({ ok: true, min_containers: asked.min_containers ?? 1 }), {
+        status: 200,
+      })
     }
     return new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), {
       status: 200,
@@ -626,7 +731,8 @@ describe('#1057: the switch through the control route', () => {
 
   it('ON asserts min_containers=1 per box and sends NO request to either box', async () => {
     configureModal()
-    fetchMock.mockImplementation(((url: string) => Promise.resolve(route(url))) as never)
+    fetchMock.mockImplementation(((url: string, init?: unknown) =>
+      Promise.resolve(route(url, init))) as never)
     await setGpuKeepRunning(true)
 
     expect(setGpuState).toHaveBeenCalledWith(true)
@@ -649,7 +755,8 @@ describe('#1057: the switch through the control route', () => {
 
   it('does not wait for the boot: the call returns with the boxes still coming up', async () => {
     configureModal()
-    fetchMock.mockImplementation(((url: string) => Promise.resolve(route(url))) as never)
+    fetchMock.mockImplementation(((url: string, init?: unknown) =>
+      Promise.resolve(route(url, init))) as never)
     const state = await setGpuKeepRunning(true)
     // No wake ran, so no completion evidence — the switch flipped fast.
     expect(state.smallState).toBe('cold')
@@ -657,7 +764,8 @@ describe('#1057: the switch through the control route', () => {
 
   it('OFF asserts min_containers=0 per box — the release', async () => {
     configureModal()
-    fetchMock.mockImplementation(((url: string) => Promise.resolve(route(url))) as never)
+    fetchMock.mockImplementation(((url: string, init?: unknown) =>
+      Promise.resolve(route(url, init))) as never)
     await setGpuKeepRunning(false)
     const posts = fetchMock.mock.calls.filter(([u]) => String(u) === AUTOSCALER)
     expect(posts.length).toBe(2)
@@ -673,7 +781,8 @@ describe('#1057: the switch through the control route', () => {
     // tier is not configured and the switch refuses for the wrong reason.
     process.env.LARGE_LLM_ROUTE = 'openrouter'
     process.env.LARGE_LLM_MODEL = 'openrouter/openai.gpt-4o-mini'
-    fetchMock.mockImplementation(((url: string) => Promise.resolve(route(url))) as never)
+    fetchMock.mockImplementation(((url: string, init?: unknown) =>
+      Promise.resolve(route(url, init))) as never)
     await setGpuKeepRunning(true)
     const posts = fetchMock.mock.calls.filter(([u]) => String(u) === AUTOSCALER)
     expect(
@@ -703,6 +812,104 @@ describe('#1057: the switch through the control route', () => {
     expect((thrown as Error).message).toContain('min_containers')
     expect((thrown as Error).message).toContain('missing-modal-token')
     expect(setGpuState).toHaveBeenCalledWith(true)
+  })
+
+  it('ON starts the panel’s boot clock: a boot Modal never answers is NOT STARTING, not cold', async () => {
+    // Round 1: `setGpuKeepRunning(true)` never stamped the clock, so a box the
+    // SWITCH was booting read `cold — no container` for as long as it failed.
+    configureModal()
+    process.env.MODAL_NOT_STARTING_AFTER_MS = '300000'
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
+      fetchMock.mockImplementation(((url: string, init?: unknown) =>
+        url === `${MODAL_BASE}/state`
+          ? Promise.resolve(modalStateZero())
+          : Promise.resolve(route(url, init))) as never)
+      await setGpuKeepRunning(true)
+
+      // Inside the threshold: booting (a boot was asked for), with its start.
+      vi.setSystemTime(Date.now() + 60_000)
+      resetModalControlCache()
+      expect((await getGpuAdminState()).modal?.large).toMatchObject({
+        state: 'booting',
+        containers: 0,
+        containerStartedAtMs: Date.parse('2026-11-20T12:00:00Z'),
+      })
+
+      // Past it, with Modal still listing nothing: NOT STARTING.
+      vi.setSystemTime(Date.now() + 250_000)
+      resetModalControlCache()
+      const state = await getGpuAdminState()
+      expect(state.modal?.large).toMatchObject({ state: 'not-starting', containers: 0 })
+      expect(state.modal?.small).toMatchObject({ state: 'not-starting' })
+      expect(state.modal?.large.reason).toContain('310s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /** Both boxes with no container. */
+  const modalStateZero = (): Response =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        boxes: { large: { ok: true, containers: [] }, small: { ok: true, containers: [] } },
+      }),
+    )
+
+  /** Both boxes with a container Modal created and that is not serving yet. */
+  const modalStateBooting = (): Response => {
+    const box = {
+      ok: true,
+      containers: [{ container_id: 'ct-0', started_at_ms: null, ready: false }],
+    }
+    return new Response(JSON.stringify({ ok: true, boxes: { large: box, small: box } }))
+  }
+
+  it('a container appearing ends the boot clock — a later scale-down is cold, not hours of "not starting"', async () => {
+    configureModal()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
+      noteModalBootRequested('large')
+      noteModalBootRequested('small')
+      fetchMock.mockImplementation(((url: string) =>
+        Promise.resolve(
+          url === `${MODAL_BASE}/state` ? modalStateBooting() : new Response('{}'),
+        )) as never)
+      await getGpuAdminState() // Modal created containers: the ask was answered
+
+      vi.setSystemTime(Date.now() + 3 * 3600_000)
+      resetModalControlCache()
+      fetchMock.mockImplementation(((url: string) =>
+        Promise.resolve(
+          url === `${MODAL_BASE}/state` ? modalStateZero() : new Response('{}'),
+        )) as never)
+      expect((await getGpuAdminState()).modal?.large.state).toBe('cold')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an OFF that Modal does not confirm rejects naming it, leaves the switch OFF, and queues the retry', async () => {
+    configureModal()
+    fetchMock.mockImplementation(((url: string, init?: unknown) =>
+      url.startsWith(MODAL_BASE)
+        ? Promise.reject(new Error('the sidecar is gone'))
+        : Promise.resolve(route(url, init))) as never)
+    let thrown: unknown
+    try {
+      await setGpuKeepRunning(false)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('did not confirm the release')
+    expect((thrown as Error).message).toContain('keeps retrying')
+    expect(setGpuState).toHaveBeenCalledWith(false)
+    expect(setGpuState).not.toHaveBeenCalledWith(true)
+    expect(pendingReleaseBoxes().sort()).toEqual(['large', 'small'])
   })
 
   it('falls back to the WAKE when the control route is unconfigured — today’s behaviour', async () => {
@@ -762,6 +969,21 @@ describe('#1057: stopGpuBoxNow', () => {
     expect(url).toBe(`${MODAL_BASE}/stop`)
     expect(JSON.parse(String(init.body))).toEqual({ box: 'small' })
     expect(state).toHaveProperty('keepRunning')
+  })
+
+  it('is refused while the switch is ON — Modal would start a replacement at once', async () => {
+    configureModal()
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    let thrown: unknown
+    try {
+      await stopGpuBoxNow('small')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('switch is ON')
+    expect((thrown as Error).message).toContain('replacement')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('refuses an unconfigured control route with the panel’s own words', async () => {

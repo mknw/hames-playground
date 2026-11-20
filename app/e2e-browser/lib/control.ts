@@ -65,8 +65,11 @@ export class FakeBackend {
    *  observation the admin panel's per-box lines and the header's `cold` /
    *  `starting` render from. `0` (the default) is the scaled-down
    *  observation. Cleared by `reset()`. */
-  async modalArm(boxes: { large?: number; small?: number }): Promise<void> {
-    await this.post('/modal-arm', boxes)
+  async modalArm(
+    boxes: { large?: number; small?: number },
+    opts: { ready?: boolean; startedAgoMs?: number } = {},
+  ): Promise<void> {
+    await this.post('/modal-arm', { ...boxes, ...opts })
   }
 
   /** #1057: every `/autoscaler` and `/stop` request the app sent the fake

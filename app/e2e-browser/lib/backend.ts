@@ -92,8 +92,13 @@ export async function startBackend(): Promise<Backend> {
       // container count (the `starting`/`up` observation the panel renders),
       // and read back what the app asked of it (`min_containers`, `stop`).
       case 'POST /modal-arm': {
-        const { large, small } = body as { large?: number; small?: number }
-        llm.modal.arm({ large, small })
+        const { large, small, ready, startedAgoMs } = body as {
+          large?: number
+          small?: number
+          ready?: boolean
+          startedAgoMs?: number
+        }
+        llm.modal.arm({ large, small }, { ready, startedAgoMs })
         return json(res, 200, { ok: true })
       }
       case 'GET /modal-calls':

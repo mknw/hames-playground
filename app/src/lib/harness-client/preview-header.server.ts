@@ -50,7 +50,8 @@ import {
   modalControlConfigured,
   probeModalBoxes,
 } from '../inference/modal-control.server'
-import { coldStartEstimate } from '../inference/cold-start.server'
+import { coldStartEstimate, smallColdStartEstimate } from '../inference/cold-start.server'
+import { readBoxPhase } from '../inference/box-phase.server'
 import {
   ensurePrivateTierAwake,
   keepWarmIntervalMs,
@@ -275,6 +276,62 @@ async function boxProbeFor(): Promise<BoxControlProbe | null> {
     }
   }
   return null
+}
+
+/** One box a chat turn may be waiting on, as Modal's control plane has it
+ *  (#1057 §3): only the phases that are a wait — a box that is up, cold or
+ *  unreadable is not listed. The elapsed time is measured SERVER-side at the
+ *  moment of the answer (the browser adds its own time since receipt, never
+ *  subtracting a server stamp from its clock). */
+export interface WarmingBoxState {
+  box: 'large' | 'small'
+  /** `waiting` — asked, Modal has created no container yet; `booting` — a
+   *  container exists, not serving yet; `not-starting` — asked a long time ago
+   *  and Modal still created none. */
+  phase: 'waiting' | 'booting' | 'not-starting'
+  /** From Modal's container start (`booting`) or from the ask (`waiting`,
+   *  `not-starting`); `null` while Modal lists the container as `Pending`. */
+  elapsedMs: number | null
+  /** This box's snapshot-restore estimate, ms — what the notice sets the
+   *  elapsed time against (a full boot is stated past it). */
+  restoreEstimateMs: number
+}
+
+/**
+ * The chat notice's live read: which boxes a turn is waiting on and what Modal
+ * says about each. The same derivation as the admin panel's lines
+ * (`inference/box-phase.server.ts`), so the two surfaces cannot disagree. Empty
+ * while Modal control is unavailable (the notice then shows what it always did)
+ * and never a request to either box — the control plane only. No owner
+ * argument: the one read is the same for every signed-in user, and carries
+ * only box names, phases and durations.
+ */
+export async function getWarmingBoxStates(): Promise<WarmingBoxState[]> {
+  await requireUser()
+  if (!selfDeployedConfigured() || !modalControlConfigured()) return []
+  const probe = await probeModalBoxes()
+  const now = Date.now()
+  const out: WarmingBoxState[] = []
+  for (const box of (largeOnOpenRouter() ? ['small'] : ['large', 'small']) as (
+    'large' | 'small'
+  )[]) {
+    const reading = readBoxPhase(box, modalBoxProbe(probe, box), now)
+    if (
+      reading.phase !== 'waiting' &&
+      reading.phase !== 'booting' &&
+      reading.phase !== 'not-starting'
+    ) {
+      continue
+    }
+    out.push({
+      box,
+      phase: reading.phase,
+      elapsedMs: reading.startedAtMs !== null ? Math.max(0, now - reading.startedAtMs) : null,
+      restoreEstimateMs: (box === 'large' ? coldStartEstimate() : smallColdStartEstimate())
+        .estimateMs,
+    })
+  }
+  return out
 }
 
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {

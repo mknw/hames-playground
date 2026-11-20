@@ -39,17 +39,21 @@
  * rather than a sibling component — a shared geometry that lives in two files
  * is a geometry that drifts.
  */
-import { Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
+import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { Progress } from '@ark-ui/solid/progress'
 import { ProgressBar } from './ProgressBar'
 import {
   COLD_START_HEADLINE,
   coldStartAnnouncement,
   coldStartBasisHint,
+  boxWaitAnnouncement,
+  boxWaitLine,
   coldStartBoxSuffix,
   coldStartDetail,
+  type BoxWaitView,
 } from '~/lib/cold-start-format'
 import type { WarmingNotice } from '~/lib/run-registry'
+import type { WarmingBoxState } from '~/lib/harness-client/preview-header.server'
 
 export interface LiveProgressBarProps {
   status: string | null
@@ -65,6 +69,10 @@ export interface LiveProgressBarProps {
   /** Non-null while the turn waits on a cold self-hosted box. Suppresses the
    *  bar in favour of the spinner for as long as it is set. */
   warming?: WarmingNotice | null
+  /** Modal's live word on each box the notice waits on (#1057 §3), with the
+   *  browser time it was received so the elapsed figure keeps counting between
+   *  reads. Absent while Modal control is unavailable. */
+  boxStates?: { states: WarmingBoxState[]; receivedAt: number } | null
   /** Injectable clock, so the countdown is testable without waiting for it.
    *  Defaults to `Date.now`. */
   now?: () => number
@@ -169,6 +177,18 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
   const elapsedMs = createMemo(() => {
     const notice = props.warming
     return notice ? Math.max(0, now() - notice.receivedAt) : 0
+  })
+
+  /** Each box's live view: the server's elapsed figure plus this browser's
+   *  time since it received it (never a server stamp against this clock). */
+  const boxViews = createMemo<BoxWaitView[]>(() => {
+    const read = props.boxStates
+    if (!read) return []
+    const since = Math.max(0, now() - read.receivedAt)
+    return read.states.map((st) => ({
+      ...st,
+      elapsedMs: st.elapsedMs === null ? null : st.elapsedMs + since,
+    }))
   })
 
   const max = createMemo(() => Math.max(1, props.maxProjection))
@@ -313,12 +333,31 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                 >
                   {coldStartDetail(notice().estimateMs, elapsedMs())}
                 </span>
+                {/* #1057: what Modal says about each box — booting, restoring
+                    or not starting — with the elapsed time from Modal's own
+                    container start, set against the restore-vs-full-boot
+                    estimate. Visible text only; the phase (never the
+                    counting figure) is announced below. */}
+                <For each={boxViews()}>
+                  {(view) => (
+                    <span
+                      text={`xs ${view.phase === 'not-starting' ? 'ui-danger' : 'ui-text-secondary'}`}
+                      data-testid={`cold-start-box-${view.box}`}
+                      aria-hidden="true"
+                    >
+                      {boxWaitLine(view)}
+                    </span>
+                  )}
+                </For>
                 {/* Announced once, when the wait starts: the phrase is derived
                     from the estimate the frame carried, which does not change
                     for the life of the notice. Same shape as the header
                     strip's warm indicator. */}
                 <span sr-only aria-live="polite">
                   {coldStartAnnouncement(notice().estimateMs, notice().boxes)}
+                </span>
+                <span sr-only aria-live="polite" data-testid="cold-start-box-announcement">
+                  {boxViews().map(boxWaitAnnouncement).join(' ')}
                 </span>
               </div>
             )}

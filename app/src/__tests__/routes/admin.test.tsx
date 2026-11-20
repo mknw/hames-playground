@@ -871,6 +871,7 @@ describe('#1057: the Modal control lines', () => {
     containerStartedAtMs: Date.now() - 12 * 60_000,
     restored: true,
     gpu: 'NVIDIA H100',
+    restoreEstimateMs: null,
     reason: null,
   }
   const COLD_SMALL = {
@@ -879,6 +880,7 @@ describe('#1057: the Modal control lines', () => {
     containerStartedAtMs: null,
     restored: null,
     gpu: null,
+    restoreEstimateMs: null,
     reason: null,
   }
 
@@ -910,14 +912,15 @@ describe('#1057: the Modal control lines', () => {
     expect(within(screen.getByTestId('gpu-modal-small')).queryByRole('button')).toBeNull()
   })
 
-  it('renders the 27B’s NOT-STARTING line in the danger role — the failure is named, not waited out', async () => {
+  it('renders the 27B’s NOT-STARTING line in the danger role — named, with nothing to stop and no button', async () => {
     mocks.admin.mockResolvedValue({
       ...ADMIN_STATE,
       modal: {
         large: {
           ...COLD_SMALL,
           state: 'not-starting',
-          reason: 'Modal reports no container after 400s of asking',
+          containerStartedAtMs: Date.now() - 7 * 60_000,
+          reason: 'Modal reports no container after 420s of asking',
         },
         small: COLD_SMALL,
       },
@@ -925,7 +928,77 @@ describe('#1057: the Modal control lines', () => {
     renderAdmin()
     const large = await screen.findByTestId('gpu-modal-large')
     expect(large.textContent).toContain('NOT STARTING')
-    expect(large.textContent).toContain('after 400s of asking')
+    expect(large.textContent).toContain('no container after 7 min')
+    // Round 1 said "stop it below" while rendering no button for this state.
+    expect(large.textContent).not.toContain('stop it below')
+    expect(large.textContent).toContain('nothing to stop')
+    expect(within(large).queryByRole('button')).toBeNull()
+  })
+
+  it('renders a booting box with the elapsed time FROM MODAL’S container start and the restore-vs-full-boot estimate', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: {
+        large: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 1,
+          containerStartedAtMs: Date.now() - 6 * 60_000,
+          restoreEstimateMs: 157_000,
+        },
+        small: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 1,
+          containerStartedAtMs: Date.now() - 40_000,
+          restoreEstimateMs: 32_000,
+        },
+      },
+    })
+    renderAdmin()
+    // #1057's own example: "booting, full boot, 6 min of ~8–15".
+    expect((await screen.findByTestId('gpu-modal-large')).textContent).toContain(
+      '27B: booting, a full boot — 6 min of ~8–16 min (a snapshot restore takes ~3 min)',
+    )
+    // 40s against the 4B's 32s restore estimate is already past it: a full boot.
+    expect(screen.getByTestId('gpu-modal-small').textContent).toMatch(
+      /a full boot — \d+ sec of ~5–9 min/,
+    )
+  })
+
+  it('renders an asked-for boot with no container yet as waiting on Modal, with the time since the ask', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: {
+        large: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 0,
+          containerStartedAtMs: Date.now() - 90_000,
+          restoreEstimateMs: 157_000,
+        },
+        small: COLD_SMALL,
+      },
+    })
+    renderAdmin()
+    expect((await screen.findByTestId('gpu-modal-large')).textContent).toContain(
+      'waiting for Modal to start a container — 2 min so far',
+    )
+  })
+
+  it('does not offer stop now while the switch is ON — and says why', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      keepRunning: true,
+      switchedOnAt: Date.now() - 60_000,
+      modal: { large: UP_LARGE, small: COLD_SMALL },
+    })
+    renderAdmin()
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(within(large).queryByRole('button', { name: /stop now/i })).toBeNull()
+    const why = screen.getByTestId('gpu-stop-disabled-large')
+    expect(why.textContent).toContain('replacement')
+    expect(why.textContent).toContain('Switch it off first')
   })
 
   it('stop now asks for a confirmation, and only the confirmed call stops', async () => {

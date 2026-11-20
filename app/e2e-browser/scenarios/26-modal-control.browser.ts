@@ -15,9 +15,12 @@
  *   - the panel's per-box lines come from the CONTROL PLANE: cold when Modal
  *     reports no container, up — with the box's own `restored`/`gpu` from
  *     `/status` — when it reports one;
- *   - a per-box stop-now ends the containers behind a confirmation;
+ *   - a box Modal is booting (a container in its task list, not yet serving) is
+ *     named BOOTING with the elapsed time from Modal's own start, and stop-now
+ *     is not offered while the switch is ON;
  *   - off releases the autoscaler (`min_containers=0`), still with no model
- *     request on the wire.
+ *     request on the wire;
+ *   - a per-box stop-now ends the containers behind a confirmation.
  *
  * `MODAL_CONTROL_BASE` is pointed at the same fake as the model routes in
  * global setup, so every call here is hermetic: nothing reaches Modal, and
@@ -66,17 +69,45 @@ test('the switch boots both boxes with no request sent, and the lines read from 
   // no wake ping, no health poll, not one model call.
   expect(await backend.calls()).toEqual(before)
 
-  // ---- A container comes up: the line names it, restored, GPU ----
-  await backend.modalArm({ large: 1 })
+  // ---- The switch asked for a boot and Modal has created nothing yet ------
+  // Round 1 read `cold — no container` here, for as long as the boot failed:
+  // the switch's own boot never started the panel's boot clock.
+  await expect(page.getByTestId('gpu-modal-large')).toContainText(
+    'waiting for Modal to start a container',
+  )
+
+  // ---- A container is CREATED and boots: Modal's task list has it, the -----
+  // ---- serving registry does not — the whole 8-15 minute full boot --------
+  await backend.modalArm({ large: 1, small: 1 }, { ready: false, startedAgoMs: 6 * 60_000 })
+  await expect(page.getByTestId('gpu-modal-large')).toContainText(
+    /booting, a full boot — \d+ min of ~8–16 min/,
+  )
+  // The elapsed time is MODAL'S (the container's own start), and the restore
+  // estimate is stated beside the full-boot range.
+  await expect(page.getByTestId('gpu-modal-large')).toContainText('a snapshot restore takes')
+  // Stop now is not offered while the switch is ON — Modal would start a
+  // replacement at once — and the panel says why.
+  await expect(
+    page.getByTestId('gpu-modal-large').getByRole('button', { name: /stop now/i }),
+  ).toHaveCount(0)
+  await expect(page.getByTestId('gpu-stop-disabled-large')).toContainText('replacement')
+
+  // ---- It finishes booting: the line names it up — restored, GPU ----------
+  await backend.modalArm({ large: 1, small: 1 }, { ready: true, startedAgoMs: 6 * 60_000 })
   await expect(page.getByTestId('gpu-modal-large')).toContainText('restored from a snapshot')
   await expect(page.getByTestId('gpu-modal-large')).toContainText('NVIDIA L4')
-  // No `up for` assertion here by design: the fake's container list carries
-  // no start times (the real SDK's `_experimental_list_containers` does not
-  // either — `ServerContainerInfo` at the pinned 1.6.1), so the "up since"
-  // half of the line renders from the app's own observation clock. The
-  // container-start seed itself is pinned at the unit layer (M16).
+  await expect(page.getByTestId('gpu-modal-large')).toContainText('up for')
 
-  // ---- Stop now, behind a confirmation: only the confirmed stop stops -----
+  // ---- OFF releases the autoscaler, still with no request sent -----------
+  const modelCalls = await backend.calls()
+  await keepSwitch(page).press('Space')
+  await expect(keepSwitch(page)).not.toBeChecked()
+  const release = (await autoscalers(backend)).filter((call) => call.minContainers === 0)
+  expect(release).toContainEqual({ box: 'large', minContainers: 0 })
+  expect(release).toContainEqual({ box: 'small', minContainers: 0 })
+  expect(await backend.calls()).toEqual(modelCalls)
+
+  // ---- Stop now, with the switch OFF, behind a confirmation ---------------
   const confirm = page.waitForEvent('dialog')
   page.once('dialog', (dialog) => void dialog.dismiss())
   await page
@@ -101,13 +132,4 @@ test('the switch boots both boxes with no request sent, and the lines read from 
     .toBe(1)
   // The stop cleared the fake's armed container: the line observes it.
   await expect(page.getByTestId('gpu-modal-large')).toContainText('cold')
-
-  // ---- OFF releases the autoscaler, still with no request sent -----------
-  const modelCalls = await backend.calls()
-  await keepSwitch(page).press('Space')
-  await expect(keepSwitch(page)).not.toBeChecked()
-  const release = (await autoscalers(backend)).filter((call) => call.minContainers === 0)
-  expect(release).toContainEqual({ box: 'large', minContainers: 0 })
-  expect(release).toContainEqual({ box: 'small', minContainers: 0 })
-  expect(await backend.calls()).toEqual(modelCalls)
 })

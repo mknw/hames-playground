@@ -108,39 +108,86 @@ Run each smoke after a confirmed full boot and again after a confirmed snapshot 
 
 ## The control sidecar (#1057)
 
-The app's admin panel controls the GPU boxes through Modal's **control API** —
-`Server.update_autoscaler(min_containers=1|0)` to boot and release, and
-`Server._experimental_list_containers()` to ask "is it up?" without starting
-anything. Modal's JavaScript SDK does not cover either call (it has no
-`Server` class at all), so the app reaches them through this directory's
-Python: **`control_sidecar.py`**, a stdlib HTTP service that holds the Modal
-workspace token the app must never see and answers the app over
-`127.0.0.1:8124` (configurable) behind a shared bearer.
+The app's admin panel controls the GPU boxes through Modal's **control API**:
+`Server.update_autoscaler(min_containers=1|0)` to boot and release, Modal's
+**task list** (`modal container list --json`) to ask "has Modal created a
+container for this box, and since when?" without starting anything, and
+`modal container stop` to stop one. Modal's JavaScript SDK covers none of it
+(it has no `Server` class at all), so the app reaches them through this
+directory's Python: **`control_sidecar.py`**, a stdlib HTTP service that holds
+the Modal workspace token the app must never see and answers the app behind a
+shared bearer.
+
+**Which list answers which question.** `GET /state` lists each box's containers
+from the **task list**, which includes queued and booting containers with their
+start time. The SDK's `Server._experimental_list_containers()` is
+`FlashContainerList` — "the containers currently registered to serve requests"
+(`modal/_server.py:160-175` at the pinned 1.6.1): a `@modal.server` container
+registers only after its `@modal.enter` boot has finished
+(`_runtime/user_code_imports.py:364-379` runs the post-snapshot enter methods,
+*then* `flash_entry.enter()`, which sends `ContainerServerLifecycleReady`,
+`experimental/flash_server.py:20`), and both boxes boot inside `@modal.enter`.
+So for the whole 8–15 minute full boot that call lists nothing, although the
+container exists. It feeds `ready` (per container) and nothing else; a rule
+built on it would call every full boot "not starting". The sidecar tests pin
+the distinction with a fake whose booting box is in the task list and absent
+from the registry.
+
+### Running it
+
+The sidecar holds a token with **deploy and delete rights** that starts and
+stops billed GPUs, so it runs as its **own compose service** in the release
+project (`docker-compose.prod.yaml`, profile `modal-control`), not from a
+writable git checkout:
+
+- **No published port.** The service has no `ports:` entry; nothing is
+  reachable from the host's interfaces, public or loopback.
+- **Its own network**, `modal-control`, shared only with `app` (the sidecar needs
+  egress to Modal, so it cannot be `internal: true`; membership is the access
+  control). Inside its own container it binds `0.0.0.0`
+  (`MODAL_CONTROL_HOST`, set only there; the code default is `127.0.0.1`).
+- **A read-only image** (`Dockerfile.control`) with one read-only file, a
+  dedicated non-root uid and no capabilities, built from a pinned commit — not
+  a tree anything running as the operator's user can edit.
+- **The workspace token is the sidecar's own**: `deploy/modal/control.local.env`
+  (mode 600, gitignored as `*.local.*`) holds `MODAL_TOKEN_ID` and
+  `MODAL_TOKEN_SECRET` and is read by no other service. The root `.env` carries
+  only the shared bearer (`MODAL_CONTROL_TOKEN`, `openssl rand -hex 32`, **not**
+  the Modal token) and `MODAL_CONTROL_BASE=http://modal-control:8124`.
+
+Mint the token without leaving it in the operator's home: `modal token new`
+writes `~/.modal.toml` (`modal/config.py`), which every `modal` command run as
+that user then picks up and every process under that user can read.
 
 ```bash
-# once: a workspace token (deploy/delete rights — this is why it stays here)
-uv run modal token new
-# the sidecar's env file (gitignored): MODAL_TOKEN_ID, MODAL_TOKEN_SECRET,
-# MODAL_CONTROL_TOKEN (+ the HAMES_MODAL_* app names if not the defaults)
-cp control.env.example control.local.env   # fill in the two tokens
-uv run --env-file deploy.local.env --env-file control.local.env python control_sidecar.py
+umask 077; d=$(mktemp -d)
+MODAL_CONFIG_PATH=$d/modal.toml uv run modal token new --no-activate --expires-in 90d
+cat $d/modal.toml          # copy token_id / token_secret into control.local.env
+shred -u $d/modal.toml; rmdir $d
+cp control.env.example control.local.env; chmod 600 control.local.env   # fill in the two values
 ```
 
-Then the app side (its runtime env): `MODAL_CONTROL_BASE=http://127.0.0.1:8124`
-and `MODAL_CONTROL_TOKEN` (the shared bearer). Without either, the app falls
-back to today's behaviour — keep-warm pings and inferred state — and the admin
-panel says "Modal control unavailable (no token)". Nothing about the sidecar
-ever sends a request to a box: its three routes are `/state`, `/autoscaler`,
-`/stop`, all answered from Modal's control plane, so reading it never starts
-a container (`ops.py status`'s property, now the panel's too).
+Then, from a release checkout: `COMPOSE_PROFILES=app,modal-control docker compose
+up -d --build modal-control app`. Verify the exposure, not the intent:
+`docker compose config` shows no `ports:` for `modal-control`, `ss -ltn` lists
+nothing on 8124, and from outside the host `nc -z <public-ip> 8124` fails.
 
-`_experimental_list_containers` is marked experimental; the day Modal drops
-it, `control_sidecar.py` falls back to `modal container list --json` (which
-also carries each container's start time), and
-`python3 test_control_sidecar.py` — run in CI via the deploy Vitest suite —
-goes red naming it. Host steps for a production deployment (a systemd unit,
-the env files, the token) are in the lane's done file; none of it is required
-for the hermetic suites, which point `MODAL_CONTROL_BASE` at their fake.
+For a laptop only, the sidecar can run directly, loopback-bound:
+`uv run --env-file control.local.env python control_sidecar.py`. Do not run
+that on a shared host: the checkout it runs from is writable by every process
+running as the same user, and so is the token's env file.
+
+Without `MODAL_CONTROL_BASE` and `MODAL_CONTROL_TOKEN` the app falls back to
+today's behaviour — keep-warm pings and inferred state — and the admin panel
+says "Modal control unavailable (no token)". Nothing about the sidecar ever
+sends a request to a box: its routes are `/state`, `/autoscaler`, `/stop`, all
+answered from Modal's control plane, so reading it never starts a container
+(`ops.py status`'s property, now the panel's too). Two reads, nothing more, ever
+go to a box, and both come from the app: the wake's own polls, and the panel's
+`/status` read **once per container id** (a request through Modal's proxy resets
+the scaledown window, so an open panel must not poll a box).
+
+`python3 test_control_sidecar.py` runs in CI via the deploy Vitest suite.
 
 ## Operator commands
 

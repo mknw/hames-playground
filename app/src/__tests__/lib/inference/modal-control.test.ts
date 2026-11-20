@@ -29,6 +29,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
+  MODAL_CONTROL_STOP_TIMEOUT_MS,
   MODAL_CONTROL_TIMEOUT_MS,
   MODAL_PROBE_CACHE_TTL_MS,
   DEFAULT_MODAL_NOT_STARTING_AFTER_MS,
@@ -179,7 +180,7 @@ describe('the probe', () => {
     })
   })
 
-  it('treats a startless container list as live (count, no start) — the SDK call carries none', async () => {
+  it('treats a startless container list as live (count, no start) — Modal prints a queued task as Pending', async () => {
     configure()
     vi.stubGlobal(
       'fetch',
@@ -202,6 +203,57 @@ describe('the probe', () => {
     const probe = await probeModalBoxes()
     expect(probe.large.containerCount).toBe(2)
     expect(probe.large.oldestContainerStartedAtMs).toBeNull()
+  })
+
+  it('carries each container’s id, start and READINESS — booting (ready false) is a container', async () => {
+    configure()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify(
+              stateBody({
+                large: {
+                  containers: [
+                    { container_id: 'ct-boot', started_at_ms: 5_000, ready: false },
+                    { container_id: 'ct-up', started_at_ms: 9_000, ready: true },
+                    { container_id: 'ct-?', started_at_ms: null, ready: null },
+                  ],
+                },
+              }),
+            ),
+          ),
+      ),
+    )
+    const probe = await probeModalBoxes()
+    expect(probe.large.containers).toEqual([
+      { id: 'ct-boot', startedAtMs: 5_000, ready: false },
+      { id: 'ct-up', startedAtMs: 9_000, ready: true },
+      { id: 'ct-?', startedAtMs: null, ready: null },
+    ])
+    expect(probe.large.containerCount).toBe(3)
+    expect(probe.large.oldestContainerStartedAtMs).toBe(5_000)
+  })
+
+  it('a probe that finds a container ENDS the boot clock — the ask was answered', async () => {
+    configure()
+    noteModalBootRequested('large', 1)
+    noteModalBootRequested('small', 1)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify(
+              stateBody({ large: { containers: [{ container_id: 'ct-a', ready: false }] } }),
+            ),
+          ),
+      ),
+    )
+    await probeModalBoxes()
+    expect(modalBootPendingSince('large')).toBeNull() // Modal created one
+    expect(modalBootPendingSince('small')).toBe(1) // still unanswered
   })
 
   it('serves one probe to every caller within the TTL, then re-probes', async () => {
@@ -292,8 +344,39 @@ describe('the probe', () => {
     }
   })
 
-  it('bounds every fetch to MODAL_CONTROL_TIMEOUT_MS', () => {
-    expect(MODAL_CONTROL_TIMEOUT_MS).toBe(5_000)
+  it('bounds every read to MODAL_CONTROL_TIMEOUT_MS — sized for a CLI process, not a socket', () => {
+    // 15s: the sidecar's task list is a fresh `modal container list` process
+    // (12s bound on its side), so the Verda probe's 5s would fail every read.
+    expect(MODAL_CONTROL_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it('gives a STOP longer than a read — the sidecar runs one process per container', async () => {
+    // Round 1 gave /stop the 5s read bound; a stop that was still going through
+    // reported a failure. The bound must exceed the sidecar's worst case
+    // (12s list + 20s per container) — and the abort must actually use it.
+    expect(MODAL_CONTROL_STOP_TIMEOUT_MS).toBeGreaterThan(MODAL_CONTROL_TIMEOUT_MS)
+    expect(MODAL_CONTROL_STOP_TIMEOUT_MS).toBeGreaterThanOrEqual(12_000 + 2 * 20_000)
+    configure()
+    vi.useFakeTimers()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => {
+              const err = new Error('aborted')
+              err.name = 'AbortError'
+              reject(err)
+            })
+          }),
+      ),
+    )
+    let settled = false
+    const stop = stopModalBoxContainers('small').then((a) => ((settled = true), a))
+    await vi.advanceTimersByTimeAsync(MODAL_CONTROL_TIMEOUT_MS + 1_000)
+    expect(settled, 'a stop must not give up at the read bound').toBe(false)
+    await vi.advanceTimersByTimeAsync(MODAL_CONTROL_STOP_TIMEOUT_MS)
+    expect(await stop).toMatchObject({ ok: false })
   })
 })
 
@@ -307,7 +390,10 @@ describe('the control actions', () => {
         }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    await setModalBoxMinContainers('large', 1)
+    expect(await setModalBoxMinContainers('large', 1)).toMatchObject({
+      ok: true,
+      minContainers: 1, // Modal's own report — what a release is CONFIRMED against
+    })
     await setModalBoxMinContainers('small', 0)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [urlA, initA] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
@@ -330,6 +416,23 @@ describe('the control actions', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('http://127.0.0.1:8124/stop')
     expect(JSON.parse(String(init.body))).toEqual({ box: 'small' })
+  })
+
+  it('a stop the sidecar could not finish answers its reason — the panel shows it, never a dropped connection', async () => {
+    configure()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: false, error: 'modal container stop failed', stopped: [] }),
+          ),
+      ),
+    )
+    expect(await stopModalBoxContainers('large')).toMatchObject({
+      ok: false,
+      reason: 'modal container stop failed',
+    })
   })
 
   it('degrades — never throws — on a refused action, carrying the sidecar’s reason', async () => {

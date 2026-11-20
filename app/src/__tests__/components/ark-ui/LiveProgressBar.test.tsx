@@ -335,4 +335,107 @@ describe('LiveProgressBar — the cold-start notice', () => {
       .join(' ')
     expect(hint).toContain('3 most recent cold starts')
   })
+
+  // #1057 §3: the notice says what MODAL says about each box it waits on —
+  // booting, restoring, or not starting — with the elapsed time measured from
+  // Modal's own container start, set against the restore-vs-full-boot estimate.
+  describe('Modal’s word on each box', () => {
+    const states = (
+      ...list: {
+        box: 'large' | 'small'
+        phase: 'waiting' | 'booting' | 'not-starting'
+        elapsedMs: number | null
+      }[]
+    ) => ({
+      receivedAt: 1_000_000,
+      states: list.map((st) => ({ ...st, restoreEstimateMs: 157_000 })),
+    })
+
+    it('names a container that is booting in full, with elapsed time and the full-boot range', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice({ boxes: ['large', 'small'] }),
+            boxStates: states({ box: 'large', phase: 'booting', elapsedMs: 6 * 60_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      const line = container.querySelector('[data-testid="cold-start-box-large"]')!
+      expect(line.textContent).toBe(
+        'the 27B: booting, a full boot — 6 min of ~8–16 min (a snapshot restore takes ~3 min)',
+      )
+    })
+
+    it('says restoring while the boot is inside the snapshot-restore estimate', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice({ boxes: ['small'] }),
+            boxStates: states({ box: 'small', phase: 'booting', elapsedMs: 40_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      expect(
+        container.querySelector('[data-testid="cold-start-box-small"]')!.textContent,
+      ).toContain('booting, likely a snapshot restore — 40 sec of ~3 min')
+    })
+
+    it('keeps the elapsed figure counting between reads, on the browser’s own clock', async () => {
+      const [now, setNow] = createSignal(1_000_000)
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice(),
+            boxStates: states({ box: 'large', phase: 'booting', elapsedMs: 20_000 }),
+            now: now,
+          })}
+        />
+      ))
+      await pastDelay()
+      expect(
+        container.querySelector('[data-testid="cold-start-box-large"]')!.textContent,
+      ).toContain('20 sec of ~3 min')
+      setNow(1_000_000 + 100_000) // 100s after the reading arrived: 120s in
+      await wait(1100)
+      expect(
+        container.querySelector('[data-testid="cold-start-box-large"]')!.textContent,
+      ).toContain('2 min of ~3 min')
+    })
+
+    it('says NOT STARTING in the danger role, with what the user can do', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar
+          {...props({
+            warming: notice(),
+            boxStates: states({ box: 'large', phase: 'not-starting', elapsedMs: 7 * 60_000 }),
+            now: () => 1_000_000,
+          })}
+        />
+      ))
+      await pastDelay()
+      const line = container.querySelector<HTMLElement>('[data-testid="cold-start-box-large"]')!
+      expect(line.textContent).toContain(
+        'NOT STARTING — Modal has created no container after 7 min',
+      )
+      expect(line.textContent).toContain('stop this turn, wait, or send it again')
+      expect(line.getAttribute('text')).toContain('ui-danger')
+      // The phase — never the counting figure — is what a screen reader hears.
+      const announced = container.querySelector('[data-testid="cold-start-box-announcement"]')!
+      expect(announced.textContent).toContain('the 27B is not starting')
+      expect(announced.textContent).not.toMatch(/\d+ min/)
+    })
+
+    it('shows no box line while Modal control gives none — today’s notice, unchanged', async () => {
+      const { container } = render(() => (
+        <LiveProgressBar {...props({ warming: notice(), boxStates: null, now: () => 1_000_000 })} />
+      ))
+      await pastDelay()
+      expect(container.querySelector('[data-testid^="cold-start-box-large"]')).toBeNull()
+      expect(coldNotice(container)).toBeTruthy()
+    })
+  })
 })

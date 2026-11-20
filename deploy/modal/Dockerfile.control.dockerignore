@@ -1,0 +1,5 @@
+# Only the sidecar itself enters the build context. `deploy/modal/` holds the
+# operator's `*.local.*` env files (the Modal workspace token among them), and a
+# build context is uploaded whole.
+*
+!control_sidecar.py

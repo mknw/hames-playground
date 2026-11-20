@@ -213,10 +213,17 @@ const SMALL_KEY = Symbol.for('hames-app.small-cold-start')
 interface SmallState {
   lastCompletedAt: number | null
   history: number[]
+  /** When this process first observed the small box up in its current
+   *  up-period (#1047) — the small sibling of `large-activity.server.ts`'s
+   *  `upSince`, kept for the same reason: the keep-warm pings refresh
+   *  `lastCompletedAt`, so the admin meter cannot seed a reload from that
+   *  and must not. `null` while no up-period is open. */
+  upSince: number | null
 }
 const small = ((globalThis as typeof globalThis & { [SMALL_KEY]?: SmallState })[SMALL_KEY] ??= {
   lastCompletedAt: null,
   history: [],
+  upSince: null,
 })
 
 export function smallScaledownSeconds(): number {
@@ -226,6 +233,14 @@ export function smallScaledownSeconds(): number {
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS
 }
 export function noteSmallCallCompleted(at = Date.now()): void {
+  // The same rule as the 27B's (`noteLargeCallCompleted`): the up-period
+  // opened at this answer only if the box was cold before it — no previous
+  // answer, or one past the idle window. A later answer inside the window
+  // keeps the period it belongs to, so a keep-warm ping refreshing
+  // `lastCompletedAt` does not restart `upSince` with it.
+  const previous = small.lastCompletedAt
+  const warmBefore = previous !== null && at - previous < smallScaledownSeconds() * 1000
+  small.upSince = warmBefore ? small.upSince : at
   small.lastCompletedAt = at
 }
 /** When this process last saw the small box answer, or `null`. The small
@@ -239,8 +254,28 @@ export function smallProvenWarm(now = Date.now()): boolean {
     small.lastCompletedAt !== null && now - small.lastCompletedAt < smallScaledownSeconds() * 1000
   )
 }
+
+/**
+ * When this process first observed the small box up in its current up-period,
+ * or `null` — before any answer (also the state a RESTART leaves: the clock
+ * is process-local) and once the idle window has passed the last answer. The
+ * read clears it then, and a wake that fails leaves the box right there: no
+ * answer, so not provably up, so the next read clears — the admin meter's
+ * seed (`max(upSince, switch-on)`, `gpu-admin.server.ts`) never bills a
+ * period this process cannot prove is open. With `null` the meter starts
+ * from its own observation, which understates — the direction a floor may
+ * err in.
+ */
+export function smallUpSince(now = Date.now()): number | null {
+  if (!smallProvenWarm(now)) {
+    small.upSince = null
+    return null
+  }
+  return small.upSince
+}
 export function resetSmallActivity(): void {
   small.lastCompletedAt = null
+  small.upSince = null
 }
 export function resetSmallColdStartHistory(): void {
   small.history.length = 0

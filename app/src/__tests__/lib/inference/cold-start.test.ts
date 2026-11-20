@@ -52,6 +52,7 @@ import {
   runWithColdStartWatch,
   settleColdStart,
   smallColdStartStats,
+  smallUpSince,
   type ColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
@@ -518,5 +519,52 @@ describe('the dashboard stats', () => {
     noteColdStartMeasured(120_000)
     expect(largeColdStartStats().samples).toBe(1)
     expect(smallColdStartStats().samples).toBe(0)
+  })
+})
+
+// The 4B's up-since clock (#1047 round 4) — the small sibling of
+// `large-activity.server.ts`'s, kept for the same reason and pinned by the
+// same cases: it opens at the first answer after cold, does NOT move with the
+// keep-warm pings that refresh `lastCompletedAt`, and clears with the idle
+// window. The admin meter seeds the small half of its accrual from
+// max(upSince, switch-on) exactly as it seeds the 27B's from the large one.
+describe('the small box’s up-since', () => {
+  beforeEach(() => {
+    resetSmallActivity()
+  })
+  afterEach(() => {
+    resetSmallActivity()
+    delete process.env.SMALL_LLM_SCALEDOWN_SECONDS
+  })
+
+  it('is null before this process has seen an answer — the state a restart leaves', () => {
+    expect(smallUpSince(NOW)).toBeNull()
+  })
+
+  it('opens at the first answer after cold, and does not move with pings inside the window', () => {
+    // The 4B's own idle window is 300s by default and the keep-warm loop
+    // touches it at the same ~100s cadence as the 27B: the pings are inside
+    // the period the first answer opened, so `upSince` stays at its start.
+    // MUTATION: stamp `upSince` on every completion and this reddens.
+    noteSmallCallCompleted(NOW)
+    noteSmallCallCompleted(NOW + 100_000)
+    noteSmallCallCompleted(NOW + 200_000)
+    expect(smallUpSince(NOW + 240_000)).toBe(NOW)
+  })
+
+  it('re-opens at the first answer after the window passed — a new up-period', () => {
+    noteSmallCallCompleted(NOW)
+    noteSmallCallCompleted(NOW + 400_000)
+    expect(smallUpSince(NOW + 500_000)).toBe(NOW + 400_000)
+  })
+
+  it('clears once the idle window has passed the last answer — the read is what clears', () => {
+    // A 10s window, set for this case: answered 60s ago is past it.
+    process.env.SMALL_LLM_SCALEDOWN_SECONDS = '10'
+    noteSmallCallCompleted(NOW)
+    expect(smallUpSince(NOW + 5_000)).toBe(NOW)
+    expect(smallUpSince(NOW + 60_000)).toBeNull()
+    // The closed period's start is gone, not merely withheld.
+    expect(smallUpSince(NOW + 5_000)).toBeNull()
   })
 })

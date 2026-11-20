@@ -238,6 +238,19 @@ export function browserServerEnv(
     // one parked wake stays one parked wake. What the poll RETRIES is covered a
     // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `large-wake.test.ts`.
     LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
+    // ---- The admin panel (#1047) ----------------------------------------
+    // This suite's user is the admin: the panel is gated to ADMIN_EMAILS
+    // (the owner amendment), the dev-bypass address is dev@local, and the
+    // scenario that drives the switch needs it reachable. Any other address
+    // would leave the admin tab hidden and the panel 403 — the gate working,
+    // but untestable from this layer.
+    ADMIN_EMAILS: 'dev@local',
+    // The process-side keep-running loop's TICK: fast enough that a scenario
+    // can watch a flip land inside seconds. The pings themselves still ride
+    // the wake's own keep-warm cadence (a touch per fraction of a scale-down
+    // window), so this changes how often the SWITCH is re-read, not how
+    // often a box is touched.
+    GPU_KEEP_TICK_MS: '1000',
     // Keep-warm-while-open OFF. Its default is on, and with the 2s window above
     // every open page would wake the fake box on load and touch it every 5s, so
     // no scenario could see a cold box, a parked wake would be joined by the

@@ -52,6 +52,28 @@ export async function wipeUserRows(): Promise<void> {
   }
 }
 
+/**
+ * Reset the deployment-global GPU keep-running switch (#1047).
+ *
+ * Not part of `wipeUserRows` because the row is not the user's — it is
+ * deployment-global. A scenario that leaves it ON would leave the dev
+ * server's process-side loop pinging the fake for the REST OF THE RUN, which
+ * would move the wake counts scenarios 2 and 9 assert on; `cleanSlate` calls
+ * this beside the wipe so every scenario starts with today's default
+ * behaviour (nothing kept warm).
+ */
+export async function resetGpuSwitch(): Promise<void> {
+  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
+  await client.connect()
+  try {
+    await client.query('DELETE FROM gpu_state WHERE id = 1')
+  } catch (err) {
+    if ((err as { code?: string }).code !== UNDEFINED_TABLE) throw err
+  } finally {
+    await client.end().catch(() => {})
+  }
+}
+
 /** How many conversation rows the suite's user owns, and their status —
  *  what a scenario checks when its claim is about persistence rather than
  *  about pixels. Titles are encrypted at rest and deliberately not read here. */

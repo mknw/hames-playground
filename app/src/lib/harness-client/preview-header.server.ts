@@ -6,6 +6,13 @@
  * on. One action rather than three, because the strip refreshes on a timer and
  * three polls would be three connections for one row of numbers.
  *
+ * The per-box "up since" timestamps and the 4B summarizer box's live state
+ * are NOT here: every field of this payload is what a SIGNED-IN USER receives
+ * on every poll, and those serve only the admin panel's cost meter, so they
+ * ride the admin-only payload instead (`getGpuAdminState`,
+ * `harness-client/gpu-admin.server.ts`, behind `requireAdmin`). The 27B's
+ * warmth stays here because the strip renders it.
+ *
  * **It no longer CHANGES the tier.** That control moved beside the agent
  * selector and became per-conversation (`harness-client/actions.server.ts`'s
  * `setConversationTier`), because the thing people want is to start an

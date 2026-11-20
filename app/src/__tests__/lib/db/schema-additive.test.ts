@@ -11,6 +11,7 @@ const BOOT_DDL_SOURCES = [
   'auth/user-tokens.server.ts',
   'auth/users.server.ts',
   'db/client.server.ts',
+  'db/gpu-state.server.ts',
   'db/memories.server.ts',
   'db/routines.server.ts',
   'db/skills.server.ts',

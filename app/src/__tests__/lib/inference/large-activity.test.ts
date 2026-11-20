@@ -21,6 +21,7 @@ import {
   noteLargeCallCompleted,
   resetLargeActivity,
   largeScaledownSeconds,
+  largeUpSince,
   largeWarmth,
 } from '../../../lib/inference/large-activity.server'
 
@@ -198,5 +199,86 @@ describe('largeWarmth', () => {
     beginSelfDeployedTurn()
     endSelfDeployedTurn()
     expect(largeWarmth(NOW).state).toBe('unknown')
+  })
+})
+
+// The up-since clock (#1047 round 4): when this process first observed the
+// box UP in its current up-period. The admin meter seeds each box's accrual
+// from max(upSince, switch-on), so what must hold is that the value OPENS at
+// the first answer after cold, does NOT move with the keep-warm pings that
+// refresh `lastCompletedAt` (roughly every 100s — a meter seeded from THAT
+// re-billed a whole switch-on as ~zero on every reload, the round-3 defect),
+// and CLOSES with the idle window. Process-local: a restart loses it, and the
+// meter then starts from its own observation — under-stating, which is the
+// direction a floor may err in.
+describe('largeUpSince', () => {
+  it('is null before this process has seen an answer — the state a restart leaves', () => {
+    expect(largeUpSince(NOW)).toBeNull()
+  })
+
+  it('opens at the first answer after cold, and stays while the window holds', () => {
+    noteLargeCallCompleted(NOW)
+    expect(largeUpSince(NOW)).toBe(NOW)
+    // A later read inside the window sees the same period, not a new one.
+    expect(largeUpSince(NOW + 60_000)).toBe(NOW)
+  })
+
+  it('does NOT move with later answers inside the window — the keep-warm pings', () => {
+    // The pings answer roughly every 100s against a 300s window: each is
+    // inside the period the previous answer holds open. MUTATION: stamp
+    // `upSince` on every completion (i.e. seed the meter from
+    // `lastCompletedAt`) and this reddens — the ping wins and a reload
+    // re-bills from the last one.
+    noteLargeCallCompleted(NOW)
+    noteLargeCallCompleted(NOW + 100_000)
+    noteLargeCallCompleted(NOW + 200_000)
+    expect(largeUpSince(NOW + 240_000)).toBe(NOW)
+  })
+
+  it('re-opens at the first answer after the window passed — a new up-period', () => {
+    // 400s between answers against the 300s window: the box went cold in
+    // between, so the second answer is its OWN period's start, not a
+    // continuation of the first.
+    noteLargeCallCompleted(NOW)
+    noteLargeCallCompleted(NOW + 400_000)
+    expect(largeUpSince(NOW + 500_000)).toBe(NOW + 400_000)
+  })
+
+  it('clears once the window has passed the last answer — the read is what clears', () => {
+    noteLargeCallCompleted(NOW)
+    expect(largeUpSince(NOW + 299_000)).toBe(NOW)
+    // Exactly past the window: not provably up, so no up-period is open.
+    expect(largeUpSince(NOW + 300_000)).toBeNull()
+    // And the closed period's start is GONE, not merely withheld: a stale
+    // stored value must never come back as the start of a period this
+    // process cannot prove is open.
+    expect(largeUpSince(NOW + 299_000)).toBeNull()
+  })
+
+  it('reads through a running turn — the answering state the meter counts', () => {
+    // A turn in flight WITH warm evidence is `answering`, and the meter
+    // counts the 27B while it reads that, so the seed must be readable
+    // there too — the same warm evidence, not a different rule.
+    noteLargeCallCompleted(NOW)
+    beginSelfDeployedTurn()
+    try {
+      expect(largeWarmth(NOW + 60_000).state).toBe('running')
+      expect(largeUpSince(NOW + 60_000)).toBe(NOW)
+    } finally {
+      endSelfDeployedTurn()
+    }
+  })
+
+  it('stays null for a starting turn — no evidence the box is up', () => {
+    // A turn in flight WITHOUT warm evidence is `starting`: it claims
+    // nothing, and neither does the up-since — the cold start it may end in
+    // is not billed time.
+    beginSelfDeployedTurn()
+    try {
+      expect(largeWarmth(NOW).state).toBe('starting')
+      expect(largeUpSince(NOW)).toBeNull()
+    } finally {
+      endSelfDeployedTurn()
+    }
   })
 })

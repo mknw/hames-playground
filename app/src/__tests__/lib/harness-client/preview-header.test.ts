@@ -493,6 +493,76 @@ describe('a wake in flight (#1045)', () => {
   })
 })
 
+// The per-box fields the admin panel's cost meter meters with (#1047
+// rounds 3 and 4) are NOT in this payload: every field here is what a
+// signed-in user receives on every poll, while the per-box up-since
+// timestamps and the 4B's live state serve only that panel — so they ride the
+// admin-only payload instead (`gpu-admin.server.ts`, behind `requireAdmin`).
+//
+// Pinned by an EXPLICIT ALLOW-LIST of the keys this payload may carry, walked
+// recursively, rather than a refusal list: the failure it guards against is a
+// field moving back in, and a refusal list only catches the names someone has
+// already thought of — the round-5 review's own mutant (a per-box field under
+// a name the list did not refuse) survived exactly that way. ANY key that is
+// not on the list reddens, whatever it is called and however deep it sits.
+// MUTATION: add any per-box admin field (`largeUpSince`, `smallUpSince`,
+// `smallState`, `upSince`, `lastAnsweredAt`, …) back into
+// `getPreviewHeaderState` and this reddens.
+describe('the admin-only per-box fields are not in this payload', () => {
+  beforeEach(configureSelfDeployed)
+
+  it('carries only its own fields, at any depth — no per-box admin field, while the 27B warmth it renders stays', async () => {
+    // Both boxes answered, so every per-box field has a value it could leak:
+    // the scan is against populated fields, not empty ones.
+    noteLargeCallCompleted()
+    noteSmallCallCompleted()
+    const state = await getPreviewHeaderState()
+
+    // Every key `PreviewHeaderState` may carry, at any depth: the strip's own
+    // fields and nothing else. Adding a field to the payload means adding it
+    // HERE, in review, by name — which is the review the allow-list exists
+    // to force.
+    const ALLOWED = new Set([
+      'tier',
+      'selfDeployedAvailable',
+      'activeUsers',
+      'activeWindowMinutes',
+      'generatedAt',
+      'warmth',
+      'state',
+      'secondsUntilScaledown',
+      'scaledownSeconds',
+      'coldStartEstimateMs',
+      'coldStartBasis',
+      'coldStartSamples',
+      'waking',
+      'usage',
+      'totalTokens',
+      'llmCalls',
+      'turns',
+      'selfDeployedCallShare',
+      'latency',
+      'p50Ms',
+      'samples',
+    ])
+    const strangers = (value: object, path: string): string[] => {
+      const found: string[] = []
+      for (const [key, v] of Object.entries(value)) {
+        if (!ALLOWED.has(key)) found.push(`${path}${key}`)
+        if (v !== null && typeof v === 'object') {
+          found.push(...strangers(v as object, `${path}${key}.`))
+        }
+      }
+      return found
+    }
+    expect(strangers(state, '')).toEqual([])
+    // The 27B's warmth — the half the strip renders — still rides here,
+    // state and countdown, which is what keeps the two surfaces honest.
+    expect(state.warmth.state).toBe('ready')
+    expect(state.warmth.secondsUntilScaledown).toBeGreaterThan(0)
+  })
+})
+
 // The SETTER moved with the switch: it is `setConversationTier` in
 // `harness-client/actions.server.ts` now, and its tests moved with it (the
 // owner-from-session rule, the unknown-tier refusal, the unconfigured-self_deployed

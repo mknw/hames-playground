@@ -25,6 +25,19 @@
  * not of warmth — which is why a running turn with no recent completed call
  * reads as `starting` rather than `running` (see {@link LargeWarmth}).
  *
+ * ## The up-since clock (#1047)
+ *
+ * `upSince` is when this process first observed the box UP in its current
+ * up-period: set on an answer that arrives with no previous one, or with the
+ * previous one older than the scale-down window (so the box was cold before
+ * it), and kept unchanged by every later answer inside the window. That is
+ * what distinguishes it from `lastCompletedAt`, which every keep-warm ping
+ * refreshes: the admin meter used to seed a reload from it, and re-read the
+ * whole switch-on span as ~zero — the one error a cost meter must not make
+ * in the understating direction's opposite. Cleared when the window passes,
+ * and a wake that fails leaves the box exactly there: a period the process
+ * cannot prove is open is not billed.
+ *
  * ## MULTI-INSTANCE CAVEAT (deliberate, and a preview-only compromise)
  *
  * Both numbers are **process-local**. Two app instances behind a load balancer
@@ -110,11 +123,15 @@ const STATE_KEY = Symbol.for('hames-app.large-activity')
 interface LargeState {
   lastCompletedAt: number | null
   inFlight: number
+  /** When this process first observed the box up in its current up-period
+   *  (#1047) — see the module docstring. `null` while no up-period is open. */
+  upSince: number | null
 }
 type LargeGlobal = typeof globalThis & { [STATE_KEY]?: LargeState }
 const state: LargeState = ((globalThis as LargeGlobal)[STATE_KEY] ??= {
   lastCompletedAt: null,
   inFlight: 0,
+  upSince: null,
 })
 
 /** Record that a call to the self-hosted box just finished. Two callers, both
@@ -125,6 +142,15 @@ const state: LargeState = ((globalThis as LargeGlobal)[STATE_KEY] ??= {
  *  ping stamps only on success, and `wake.server.ts` says why that is not the
  *  same rule rather than an inconsistency. */
 export function noteLargeCallCompleted(at: number = Date.now()): void {
+  // The up-period opened at this answer only if the box was cold before it:
+  // no previous answer, or one past the scale-down window. A later answer
+  // inside the window keeps the period it belongs to — a keep-warm ping
+  // refreshing `lastCompletedAt` must not also restart `upSince`, or the
+  // meter's seed moves with every ping and a reload re-bills from the last
+  // one, which is the exact defect this clock exists to close.
+  const previous = state.lastCompletedAt
+  const warmBefore = previous !== null && at - previous < largeScaledownSeconds() * 1000
+  state.upSince = warmBefore ? state.upSince : at
   state.lastCompletedAt = at
 }
 
@@ -148,6 +174,7 @@ export function endSelfDeployedTurn(): void {
 export function resetLargeActivity(): void {
   state.lastCompletedAt = null
   state.inFlight = 0
+  state.upSince = null
 }
 
 /** What the header renders. */
@@ -226,4 +253,34 @@ export function largeWarmth(now: number = Date.now()): LargeWarmth {
  */
 export function largeLastCallCompletedAt(): number | null {
   return state.lastCompletedAt
+}
+
+/**
+ * When this process first observed the box up in its current up-period, or
+ * `null` — before any answer (also the state a RESTART leaves: the clock is
+ * process-local), and once the scale-down window has passed the last answer
+ * (the read clears it then, so the value can never be read as the start of a
+ * period that is over). A wake that fails ends in the same place: it leaves
+ * no answer, so the box is not provably up and the next read clears.
+ *
+ * The admin meter seeds each box's accrual from `max(upSince, switch-on)`:
+ * a reload then re-bills the up-time the box has actually been up through
+ * this switch-on — not the cold start before it first came up, and not
+ * ~zero because a keep-warm ping refreshed `lastCompletedAt`. With `null`
+ * the meter starts from its own observation, which understates — the
+ * direction a floor may err in.
+ */
+export function largeUpSince(now: number = Date.now()): number | null {
+  // The same warm evidence `largeWarmth` calls `warm`/`running` on: an answer
+  // inside the scale-down window. Inlined rather than shared with
+  // `largeProvenWarm` (`inference/cold-start.server.ts`) because that module
+  // imports this one; the two must not drift, which
+  // `large-activity.test.ts`'s up-since cases pin against.
+  const last = state.lastCompletedAt
+  const up = last !== null && last + largeScaledownSeconds() * 1000 > now
+  if (!up) {
+    state.upSince = null
+    return null
+  }
+  return state.upSince
 }

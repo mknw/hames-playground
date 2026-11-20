@@ -50,6 +50,11 @@ started_at_ms, ready}`: the LIST is Modal's task list (booting and pending
 containers included, with their start time), `ready` is whether the container
 is registered to serve (the SDK's experimental call, which lists a container
 only once its `@modal.enter` boot has finished — see `_cli_container_rows`).
+
+`POST /autoscaler` is applied per box in ARRIVAL order, one at a time
+(`_Ordered`): a request the app abandoned on its own timeout is still applied by
+this process, so a later request waits for it instead of racing it. The `modal`
+CLI children get a minimal env (`CLI_ENV_NAMES`), never this process's whole one.
 """
 
 from __future__ import annotations
@@ -60,6 +65,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -97,6 +103,62 @@ CLI_STOP_TIMEOUT_S = 20
 CONTAINER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+# The environment the `modal` CLI children get: what the SDK needs to find its
+# interpreter, its home and its workspace, and nothing else. The sidecar's own
+# env also holds MODAL_CONTROL_TOKEN (the app's bearer), which no child needs.
+CLI_ENV_NAMES = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+    "MODAL_ENVIRONMENT",
+)
+
+
+def _cli_env() -> dict[str, str]:
+    return {name: os.environ[name] for name in CLI_ENV_NAMES if name in os.environ}
+
+
+class _Ordered:
+    """One-at-a-time, first-come-first-served execution, per key.
+
+    `/autoscaler` is the one route whose ORDER is the answer: the app gives up on
+    a request after 15 s, but the handler thread that was serving it is still
+    inside the SDK (hydration plus its own transient retries) and applies its
+    value whenever it finishes. With one thread per request, an abandoned
+    `min_containers=1` could land AFTER a later, confirmed `0` — a billed box under
+    an OFF switch (#1060 review round 2). So each box takes a ticket on arrival and
+    its `update_autoscaler` runs only when every earlier ticket has finished: the
+    sidecar applies them in arrival order, whatever the client did meanwhile. A
+    `threading.Lock` would be one-at-a-time but not in order, so tickets.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._next_ticket: dict[str, int] = {}
+        self._now_serving: dict[str, int] = {}
+
+    def run(self, key: str, fn: Any) -> Any:
+        with self._cond:
+            ticket = self._next_ticket.get(key, 0)
+            self._next_ticket[key] = ticket + 1
+            while self._now_serving.get(key, 0) != ticket:
+                self._cond.wait()
+        try:
+            return fn()
+        finally:
+            with self._cond:
+                self._now_serving[key] = ticket + 1
+                self._cond.notify_all()
+
+
+AUTOSCALER_ORDER = _Ordered()
+
+
 def _server_for(box: str) -> "modal.Server":
     app_name, server_name = BOXES[box]
     return modal.Server.from_name(app_name, server_name)
@@ -129,6 +191,7 @@ def _cli_container_rows() -> list[dict[str, Any]]:
         capture_output=True,
         text=True,
         timeout=CLI_LIST_TIMEOUT_S,
+        env=_cli_env(),
     ).stdout
     rows = json.loads(out)
     if not isinstance(rows, list):
@@ -226,7 +289,9 @@ def _set_min_containers(box: str, min_containers: int) -> dict[str, Any]:
     if not (os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET")):
         return {"ok": False, "error": "missing-modal-token"}
     try:
-        settings = _server_for(box).update_autoscaler(min_containers=min_containers)
+        settings = AUTOSCALER_ORDER.run(
+            box, lambda: _server_for(box).update_autoscaler(min_containers=min_containers)
+        )
         return {"ok": True, "min_containers": settings.min_containers}
     except Exception as err:
         return {"ok": False, "error": f"modal control plane: {err}"}
@@ -257,6 +322,7 @@ def _stop_containers(box: str) -> dict[str, Any]:
                 capture_output=True,
                 text=True,
                 timeout=CLI_STOP_TIMEOUT_S,
+                env=_cli_env(),
             )
         except subprocess.TimeoutExpired:
             return {

@@ -11,12 +11,19 @@
 #
 #   docker compose build modal-control      # from a release checkout (compose: docker-compose.prod.yaml)
 #
-# The base tag is pinned to a minor and the SDK to the version `uv.lock` pins
-# (a source-scan test holds the two equal); the digest pin belongs to the
-# operator who builds it (docs: deploy/modal/README.md, "The control sidecar").
+# The base tag is pinned to a minor; the digest pin belongs to the operator who
+# builds it (docs: deploy/modal/README.md, "The control sidecar"). Every Python
+# dependency is pinned BY HASH: `requirements.control.txt` is `uv export --frozen`
+# of `uv.lock`, installed with `--require-hashes` (which also refuses anything not
+# listed), so what the token-holding image runs is what the lock reviewed, not
+# whatever grpclib/protobuf/rich resolve to on build day. A source-scan test holds
+# the file equal to the lock. Regenerate after touching `uv.lock`:
+#   uv export --frozen --no-dev --no-emit-project --no-header -o requirements.control.txt
 FROM python:3.13-slim-bookworm
 
-RUN pip install --no-cache-dir modal==1.6.1 \
+COPY requirements.control.txt /tmp/requirements.control.txt
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /tmp/requirements.control.txt \
+ && rm /tmp/requirements.control.txt \
  && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin modalctl
 
 WORKDIR /opt/control

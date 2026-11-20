@@ -140,8 +140,13 @@ stops billed GPUs, so it runs as its **own compose service** in the release
 project (`docker-compose.prod.yaml`, profile `modal-control`), not from a
 writable git checkout:
 
-- **No published port.** The service has no `ports:` entry; nothing is
-  reachable from the host's interfaces, public or loopback.
+- **No published port.** The service has no `ports:` entry, so nothing is
+  mapped onto the host's public or loopback interfaces. That is not the same as
+  "unreachable from the host": the container still has an address on the
+  `modal-control` bridge, and any process on the release host can connect to
+  it. For a host-local caller **the bearer is the control** — keep the root
+  `.env` (which holds it) and `control.local.env` unreadable to every user and
+  agent that should not drive the GPUs, and treat the bearer like a password.
 - **Its own network**, `modal-control`, shared only with `app` (the sidecar needs
   egress to Modal, so it cannot be `internal: true`; membership is the access
   control). Inside its own container it binds `0.0.0.0`
@@ -155,22 +160,49 @@ writable git checkout:
   only the shared bearer (`MODAL_CONTROL_TOKEN`, `openssl rand -hex 32`, **not**
   the Modal token) and `MODAL_CONTROL_BASE=http://modal-control:8124`.
 
-Mint the token without leaving it in the operator's home: `modal token new`
-writes `~/.modal.toml` (`modal/config.py`), which every `modal` command run as
-that user then picks up and every process under that user can read.
+Mint the token without leaving it in the operator's home or on the screen:
+`modal token new` writes `~/.modal.toml` (`modal/config.py`), which every
+`modal` command run as that user then picks up and every process under that user
+can read. The block below mints into a private directory, copies the two values
+straight into `control.local.env` (printing nothing but the profile name) and
+shreds the toml. Do not `cat` the toml: the secret would sit in the terminal's
+scrollback.
 
 ```bash
 umask 077; d=$(mktemp -d)
 MODAL_CONFIG_PATH=$d/modal.toml uv run modal token new --no-activate --expires-in 90d
-cat $d/modal.toml          # copy token_id / token_secret into control.local.env
+cp control.env.example control.local.env; chmod 600 control.local.env
+python3 - "$d/modal.toml" control.local.env <<'PY'
+import sys, tomllib
+cfg = tomllib.load(open(sys.argv[1], "rb"))
+name, prof = next((n, p) for n, p in cfg.items() if isinstance(p, dict) and "token_id" in p)
+text = open(sys.argv[2]).read()
+for key in ("token_id", "token_secret"):
+    text = text.replace(f"MODAL_{key.upper()}=''", f"MODAL_{key.upper()}='{prof[key]}'")
+open(sys.argv[2], "w").write(text)
+print(f"wrote the token of profile {name!r} into {sys.argv[2]}")
+PY
 shred -u $d/modal.toml; rmdir $d
-cp control.env.example control.local.env; chmod 600 control.local.env   # fill in the two values
 ```
 
 Then, from a release checkout: `COMPOSE_PROFILES=app,modal-control docker compose
 up -d --build modal-control app`. Verify the exposure, not the intent:
 `docker compose config` shows no `ports:` for `modal-control`, `ss -ltn` lists
-nothing on 8124, and from outside the host `nc -z <public-ip> 8124` fails.
+nothing on 8124, and from outside the host `nc -z <public-ip> 8124` fails. None
+of those tests the bridge: `docker inspect hames-modal-control` lists the
+container's address on the `modal-control` network, and from the host
+`curl http://<that address>:8124/state` must answer `401` (the bearer refuses
+it), never `200`.
+
+The image's Python dependencies are pinned by hash:
+`requirements.control.txt` is `uv export --frozen --no-dev --no-emit-project
+--no-header -o requirements.control.txt` of `uv.lock`, installed with
+`pip install --require-hashes --no-deps`. Regenerate it whenever `uv.lock`
+changes; a test fails when the two disagree. The sidecar also orders its
+`/autoscaler` calls per box in arrival order and gives the `modal` CLI children
+a minimal environment (`CLI_ENV_NAMES`: `PATH`, `HOME`, the Modal token, locale
+and CA variables), so neither the app's bearer nor any other variable reaches
+them.
 
 For a laptop only, the sidecar can run directly, loopback-bound:
 `uv run --env-file control.local.env python control_sidecar.py`. Do not run

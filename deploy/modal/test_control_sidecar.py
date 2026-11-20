@@ -33,6 +33,8 @@ import io
 import json
 import os
 import sys
+import threading
+import time
 import types
 import unittest
 import urllib.error
@@ -180,11 +182,13 @@ class FakeCli:
         self.hang_stop = hang_stop
         self.argvs: list[list[str]] = []
         self.timeouts: list[float | None] = []
+        self.envs: list[dict | None] = []
 
     def __call__(self, argv, **kwargs):
         import subprocess
         self.argvs.append(list(argv))
         self.timeouts.append(kwargs.get("timeout"))
+        self.envs.append(kwargs.get("env"))
         if argv[3:5] == ["container", "list"]:
             if isinstance(self.rows, Exception):
                 raise self.rows
@@ -420,6 +424,129 @@ class ControlContract(SidecarTestCase):
         self.assertFalse(body["ok"])
         self.assertIn("refusing", body["error"])
         self.assertEqual(cli.stops(), [], "nothing is stopped past a refused id")
+
+
+class BlockingServer(FakeServer):
+    """A box whose FIRST `update_autoscaler(1)` stays inside the SDK until
+    released — the sidecar thread serving a request the app already gave up on
+    (hydration plus the SDK's own retries). `applied` is the order in which
+    values reached Modal; `current` is what Modal ends up holding."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.applied: list[int] = []
+        self.current: int | None = None
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._slow_first_on = True
+
+    def update_autoscaler(self, **kwargs):
+        value = kwargs["min_containers"]
+        if value == 1 and self._slow_first_on:
+            self._slow_first_on = False
+            self.entered.set()
+            assert self.release.wait(10), "the held ON was never released"
+        self.applied.append(value)
+        self.current = value
+        return types.SimpleNamespace(min_containers=value)
+
+
+class OrderContract(SidecarTestCase):
+    """An abandoned ON must not land after a later OFF (#1060 round 2)."""
+
+    def test_a_slow_ON_followed_by_OFF_ends_at_zero(self):
+        large = BlockingServer("hames-private-27b", "Qwen27B")
+        module = self.sidecar([FakeServer("hames-small-models", "SmallModels"), large])
+        httpd = self.serve(module)  # one server: both requests share the sidecar
+        port = httpd.server_address[1]
+        results: dict = {}
+
+        def post(value):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/autoscaler", method="POST",
+                data=json.dumps({"box": "large", "min_containers": value}).encode(),
+                headers={"Authorization": f"Bearer {TOKEN}"})
+            with urllib.request.urlopen(req, timeout=15) as res:
+                results[value] = json.loads(res.read())
+
+        on = threading.Thread(target=post, args=(1,), daemon=True)
+        on.start()
+        self.assertTrue(large.entered.wait(5), "the ON never reached the SDK")
+        off = threading.Thread(target=post, args=(0,), daemon=True)
+        off.start()
+        time.sleep(0.3)  # the OFF has arrived; the ON is still inside the SDK
+        self.assertEqual(large.applied, [], "the OFF must wait behind the in-flight ON")
+        large.release.set()
+        on.join(10)
+        off.join(10)
+        self.assertEqual(large.applied, [1, 0], "applied in ARRIVAL order")
+        self.assertEqual(large.current, 0, "Modal ends at 0 under an OFF")
+        self.assertEqual(results[0], {"ok": True, "min_containers": 0})
+
+    def test_boxes_do_not_wait_on_each_other(self):
+        small = FakeServer("hames-small-models", "SmallModels")
+        large = BlockingServer("hames-private-27b", "Qwen27B")
+        module = self.sidecar([small, large])
+        results: dict = {}
+        on = threading.Thread(
+            target=lambda: results.update(large=self.request(
+                module, "POST", "/autoscaler", {"box": "large", "min_containers": 1})),
+            daemon=True)
+        on.start()
+        self.assertTrue(large.entered.wait(5))
+        status, body = self.request(module, "POST", "/autoscaler", {"box": "small", "min_containers": 1})
+        self.assertEqual((status, body["min_containers"]), (200, 1))  # not queued behind the 27B
+        large.release.set()
+        on.join(10)
+
+    def test_a_failed_call_does_not_wedge_the_queue(self):
+        small = FakeServer("hames-small-models", "SmallModels", settings=RuntimeError("boom"))
+        module = self.sidecar([small])
+        status, body = self.request(module, "POST", "/autoscaler", {"box": "small", "min_containers": 1})
+        self.assertFalse(body["ok"])
+        small.settings = {}
+        status, body = self.request(module, "POST", "/autoscaler", {"box": "small", "min_containers": 0})
+        self.assertEqual(body, {"ok": True, "min_containers": 0})
+
+
+class ChildEnvContract(SidecarTestCase):
+    """The `modal` CLI children get a minimal env, never the sidecar's own."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, {
+            "MODAL_ENVIRONMENT": "main", "PATH": "/usr/bin",
+            "SOME_OTHER_SECRET": "x", "MODAL_CONTROL_HOST": "0.0.0.0",
+        }, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assert_minimal(self, env):
+        self.assertIsNotNone(env, "the child must be given an explicit env")
+        self.assertEqual(env["MODAL_TOKEN_ID"], "ak-test")
+        self.assertEqual(env["MODAL_TOKEN_SECRET"], "secret-test")
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertNotIn("MODAL_CONTROL_TOKEN", env, "the app's bearer must not reach a child")
+        self.assertNotIn("SOME_OTHER_SECRET", env)
+        self.assertNotIn("MODAL_CONTROL_HOST", env)
+        self.assertLessEqual(set(env), set(self.module.CLI_ENV_NAMES))
+
+    def test_the_listing_child_gets_a_minimal_env(self):
+        self.module = self.sidecar([])
+        cli = FakeCli([])
+        with mock.patch.object(self.module.subprocess, "run", cli):
+            self.request(self.module, "GET", "/state")
+        self.assertEqual(len(cli.envs), 1)
+        self.assert_minimal(cli.envs[0])
+
+    def test_the_stop_child_gets_a_minimal_env(self):
+        self.module = self.sidecar([FakeServer("hames-small-models", "SmallModels")])
+        cli = FakeCli([cli_row("ta-a", "hames-small-models")])
+        with mock.patch.object(self.module.subprocess, "run", cli):
+            self.request(self.module, "POST", "/stop", {"box": "small"})
+        self.assertEqual(len(cli.envs), 2)  # the listing, then the stop
+        for env in cli.envs:
+            self.assert_minimal(env)
 
 
 class HardeningContract(SidecarTestCase):

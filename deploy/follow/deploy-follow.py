@@ -333,7 +333,8 @@ class Host:
         if result.returncode != 0:
             # Quiet commands (including Compose) show no stderr. Only git shows
             # full stderr; other non-quiet commands show the last line, capped
-            # at 500 characters. Journal flattens records without losing lines.
+            # at 500 characters because their errors can echo interpolated values.
+            # Journal flattens records without losing lines.
             detail = stderr_detail(result.stderr, quiet=quiet, full=argv[0] == "git")
             raise Refusal("%s exited %d%s" % (argv[0] if argv[0] != "sudo" else argv[1], result.returncode, detail))
         return result.stdout
@@ -341,10 +342,10 @@ class Host:
     def _git(self, *args, repo=None):
         return self._run(["git", "-C", repo or self.config["FOLLOW_CHECKOUT"], *args]).strip()
 
-    def check_checkout_writable(self, repo=None):
+    def check_checkout_writable(self):
         # Resolve both directories: linked worktrees keep their objects and
         # shared refs in the common directory, outside their .git pointer file.
-        roots = self._git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", repo=repo).splitlines()
+        roots = self._git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir").splitlines()
         blocked = []
         for root in dict.fromkeys(roots):
             pending = [Path(root)]
@@ -365,6 +366,10 @@ class Host:
                               and info.st_uid == os.geteuid()
                               and os.access(path, os.R_OK, effective_ids=True))
                 if not os.access(path, mode, effective_ids=True) and not own_object:
+                    try:
+                        path.stat()  # Auto-gc can prune after the first stat succeeded.
+                    except FileNotFoundError:
+                        continue
                     try:
                         owner = pwd.getpwuid(info.st_uid).pw_name
                     except KeyError:

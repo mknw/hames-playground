@@ -1309,6 +1309,67 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
     ).toBeTruthy()
   })
 
+  it.each(['resolve', 'reject'] as const)(
+    'Stop before a pending tier write settles (%s) leaves the message unsent',
+    async (settlement) => {
+      vi.useFakeTimers()
+      getConversationTurnState.mockResolvedValue(null)
+      let resolveWrite!: (value: { tier: string; selfDeployedAvailable: boolean }) => void
+      let rejectWrite!: (error: Error) => void
+      setConversationTier.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveWrite = resolve
+            rejectWrite = reject
+          }),
+      )
+      const runTurn = vi.spyOn(await import('~/lib/turn-stream'), 'runTurn')
+      // Unlike the default stream double, fetch honours an already-aborted
+      // signal, so the old path paints its misleading stopped-watching notice.
+      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+        init.signal?.throwIfAborted()
+        return sseResponse([doneFrame()])
+      })
+      const host = makeHost()
+      const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+      try {
+        await vi.advanceTimersByTimeAsync(60)
+        fireEvent.click(container.querySelector('input[value="self_deployed"]')!)
+        expect(setConversationTier).toHaveBeenCalledWith('s1', 'self_deployed')
+
+        send(container, 'cancel before sending')
+        await vi.advanceTimersByTimeAsync(20)
+        expect(host.registry.runState('s1').isProcessing).toBe(true)
+        expect(runTurn).not.toHaveBeenCalled()
+        fireEvent.click(container.querySelector('button[aria-label="Stop generating"]')!)
+
+        if (settlement === 'resolve') {
+          resolveWrite({ tier: 'self_deployed', selfDeployedAvailable: true })
+        } else {
+          rejectWrite(new Error('tier write failed'))
+        }
+        await vi.advanceTimersByTimeAsync(100)
+
+        expect(transcript(container)).toContain('Message not sent.')
+        expect(transcript(container)).not.toContain('Stopped watching this response.')
+        expect(transcript(container)).not.toContain('The agent finishes server-side')
+        expect(runTurn).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(host.registry.runState('s1').isProcessing).toBe(false)
+
+        // The cancelled run releases its local claim and Stop marker. A fresh
+        // send starts normally, rather than inheriting either of them.
+        send(container, 'send the next message')
+        await vi.advanceTimersByTimeAsync(100)
+        expect(runTurn).toHaveBeenCalledTimes(1)
+        expect(transcript(container)).toContain('Here is your answer.')
+        expect(transcript(container)).not.toContain('Stopped watching this response.')
+      } finally {
+        runTurn.mockRestore()
+      }
+    },
+  )
+
   // #1045 review, LOW: the tier-write window. `runSend` awaits a pending tier
   // write before its first state lands, so a turn-state read resolving inside
   // that window used to find `isProcessing` false and adopt over the send —

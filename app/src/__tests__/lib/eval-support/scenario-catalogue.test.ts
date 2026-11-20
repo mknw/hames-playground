@@ -151,6 +151,7 @@ type Item = Json & {
   says?: unknown
   tools?: string[]
   tool?: string
+  before?: string
   routes?: string[]
   facts?: string[]
   needles?: string[]
@@ -195,6 +196,10 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
     case 'oneOfTools':
     case 'forbiddenTools':
       return nonEmpty(item.tools) ? [] : bad('needs tools')
+    case 'toolsNotBefore':
+      return nonEmpty(item.tools) && reasoned(item.before)
+        ? []
+        : bad('needs tools and the before anchor')
     case 'noToolsOnTurn':
       if (!nonEmpty(item.tools)) return bad('needs tools')
       return Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns
@@ -1042,9 +1047,9 @@ describe('general-next scenario catalogue', () => {
     expect(validate(catalogue(), scenariosMd, moduleIds)).toEqual([])
   })
 
-  it('reads the 52 implemented scenarios from SCENARIOS.md, not zero', () => {
+  it('reads the 55 implemented scenarios from SCENARIOS.md, not zero', () => {
     // Guards the parser: an empty heading match would make the cross-check vacuous.
-    expect(existingIds(scenariosMd)).toHaveLength(52)
+    expect(existingIds(scenariosMd)).toHaveLength(55)
     expect(existingIds(scenariosMd)).toContain('tn58-other-owner-memory')
     expect(moduleIds.length).toBeGreaterThanOrEqual(34)
   })

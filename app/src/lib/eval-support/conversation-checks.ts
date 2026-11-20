@@ -255,6 +255,7 @@ export function grade(
       )
     }
   }
+  if (s.toolsNotBefore) checks.push(toolsNotBeforeCheck(trace.tools, s.toolsNotBefore))
   for (const tool of s.forbiddenTools)
     checks.push(check(`no ${tool}`, !trace.tools.some((t) => t.name === tool), 'all calls checked'))
   if (s.forbiddenTools.length)
@@ -455,6 +456,27 @@ export function answerNotMatchesCheck(answer: string, pattern: string, turn?: nu
   }
   const hit = re.exec(answer)
   return check(name, hit === null, hit ? `matched ${JSON.stringify(hit[0])}` : answer.slice(0, 200))
+}
+
+/** `toolsNotBefore` (#1058 r2): none of `tools` is called before `before` first
+ *  succeeds — the office source must be reached before the public web, a rule
+ *  `forbiddenTools` cannot grade (it demands read-only refusal wording). A missing
+ *  anchor fails any listed call: a run that only searched the web never looked in
+ *  the office source, which is the failure this exists for; a run with neither is
+ *  `orderedTools`' failure, not a vacuous pass here. */
+export function toolsNotBeforeCheck(
+  tools: ReadonlyArray<{ name: string; success: boolean }>,
+  spec: { says: string; tools: readonly string[]; before: string },
+): Check {
+  const at = tools.findIndex((t) => t.name === spec.before && t.success)
+  const offender = tools.find((t, i) => spec.tools.includes(t.name) && (at < 0 || i < at))
+  return check(
+    spec.says,
+    offender === undefined,
+    offender
+      ? `call index ${tools.indexOf(offender)} (${offender.name}) before the first successful ${spec.before} at call index ${at}`
+      : `no listed call before the first successful ${spec.before} at call index ${at}`,
+  )
 }
 
 /** `answerExcludes`: the final answer contains none of the facts, each read as a

@@ -126,6 +126,10 @@
       "exists": true,
       "says": "listed tools succeed in this order across the conversation"
     },
+    "toolsNotBefore": {
+      "exists": true,
+      "says": "none of the listed tools is called before the `before` tool first succeeds (#1058 r2: no web tool before the office files search — a rule forbiddenTools cannot grade, because a non-empty forbiddenTools list also demands the read-only refusal wording)"
+    },
     "validArgs": {
       "exists": true,
       "says": "a successful call of the tool meets the scenario argument predicate; with ifCalled true (proposed) it also passes when the tool was never called"
@@ -3164,6 +3168,12 @@
           "tools": ["read_neo4j_cypher", "graph_files_search"]
         },
         {
+          "check": "toolsNotBefore",
+          "says": "no web tool (search, fetch, fetch_content, web_search_exa, web_fetch_exa) runs before the office files search",
+          "tools": ["search", "fetch", "fetch_content", "web_search_exa", "web_fetch_exa"],
+          "before": "graph_files_search"
+        },
+        {
           "check": "validArgs",
           "says": "module expectedArgs predicate: the graph query targets Project nodes",
           "tool": "read_neo4j_cypher"
@@ -3186,11 +3196,16 @@
         {
           "check": "answerNotMatches",
           "says": "no deferral to internal documentation or colleagues while the tools read those sources",
-          "pattern": "consult (?:the |your )?internal documentation|ask (?:your )?colleagues|contact the organisation",
+          "pattern": "consult\\w*[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "I could not find a dedicated Project node; please consult internal documentation for the organisation's projects.",
-              "There is no project information here; you may want to ask your colleagues."
+              "There is no project information here; you may want to ask your colleagues.",
+              "No dedicated Project node was found; please consult internal DTSC documentation.",
+              "I found nothing in the graph; please consult internal Lantern documentation.",
+              "Try consulting your internal documentation for the projects.",
+              "Please contact the organization for its projects.",
+              "Please contact the organisation."
             ],
             "noMatch": [
               "I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.",
@@ -3212,7 +3227,7 @@
         ["lookup-fact", "knowledge-graph"],
         ["lookup-fact", "m365-files"]
       ],
-      "notes": "Red on the release behaviour (#1058): the info route alone answered 'no dedicated Project node' and the answer deferred the user to internal documentation while office-data's files hold the projects. Hermetic: the routes are scripted, so a pass proves the wiring — the graph read happens first, the office files search runs after it, and its results reach the answer writer (answerFromPrompt). A live pass proves the model's own route order and the no-deferral answer. The web is never a graded source here; a live run that reaches it fails answerContains, which only the files search's facts satisfy."
+      "notes": "Red on the release behaviour (#1058): the info route alone answered 'no dedicated Project node' and the answer deferred the user to internal documentation while office-data's files hold the projects. Hermetic: the routes are scripted, so a pass proves the wiring — the graph read happens first, the office files search runs after it, and its results reach the answer writer (answerFromPrompt). A live pass proves the model's own route order — graded: orderedTools (the graph before the files search) and toolsNotBefore (no web tool call before it) — and the no-deflection answer. The web is not a graded source here: its results carry none of the answerContains facts, but a live run may still reach it AFTER the office search without failing this row."
     },
     {
       "id": "50-org-projects-in-graph",
@@ -3259,11 +3274,13 @@
         {
           "check": "answerNotMatches",
           "says": "no 'no Project node' deflection and no deferral to internal documentation while the graph rows name three",
-          "pattern": "no (?:dedicated )?Project node|consult (?:the |your )?internal documentation",
+          "pattern": "no (?:dedicated )?Project node|consult\\w*[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "There is no dedicated Project node in the knowledge graph; consult internal documentation.",
-              "The graph holds no Project node, so I cannot say."
+              "The graph holds no Project node, so I cannot say.",
+              "No dedicated Project node was found; consult internal DTSC documentation.",
+              "Please contact the organisation for its projects."
             ],
             "noMatch": [
               "The active projects are Lantern Portal, Lantern Field Ops and Lantern Beacon.",
@@ -3282,6 +3299,65 @@
         "hermetic only: the scripted controller's query (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
       ],
       "notes": "The graph half of #1058. Hermetic: a pass proves the graph rows reach the answer writer (answerFromPrompt). A live pass proves the model answers from the graph instead of the release turn's 'no dedicated Project node… consult internal documentation'."
+    },
+    {
+      "id": "51-org-projects-public-org",
+      "title": "Another organisation’s projects are a web question",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval"],
+        "sources": ["web"],
+        "intents": ["research-public"],
+        "turnShape": "single",
+        "toolShape": "one",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": ["What projects does Mozilla run?"],
+      "expected": "The question is about a public organisation, not the user’s own: it goes to info-retrieval and the public web — never to the office route’s files first — and the answer names the organisation’s projects from the web (#1058 r2).",
+      "grader": [
+        {
+          "check": "p4Gated",
+          "says": "module sets p4: true"
+        },
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools",
+          "tools": ["search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the search carries the organisation’s name",
+          "tool": "search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes",
+          "facts": ["Firefox"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes",
+          "routes": ["info-retrieval"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "live only: the public web’s own results for the organisation’s projects — no fixture is scripted, the row never runs hermetically"
+      ],
+      "dependsOn": ["a coordinated live run"],
+      "cells": [["research-public", "web"]],
+      "notes": "#1058 r2 (review): the decide question and the info controller scope the projects rule to the user’s OWN organisation, so a public organisation’s projects are a web question — this row is the live proof. It rides the P4 gate like 15/16 (the catalogue’s one listed-but-never-run mechanism) because its graded facts are live web content: reported GATED, never as passing, until a coordinated live run flips it."
     },
     {
       "id": "p01-calendar-today",

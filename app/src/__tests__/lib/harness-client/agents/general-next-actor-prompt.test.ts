@@ -373,11 +373,15 @@ it.each(['anthropic', 'self_deployed'])(
       expect(prompts[0]).toContain(
         'When you Return, include the URLs of the sources you used as Markdown links',
       )
-      // #1058: an organisation question is answered from the organisation's own
-      // sources, graph first — and the loop never defers the user to internal
+      // #1058: a question about the user's OWN organisation is answered from that
+      // organisation's own sources, graph first — another organisation's projects are
+      // a web question (r2), and the loop never defers the user to internal
       // documentation its own tools read.
       expect(prompts[0]).toContain(
-        'A question about the organisation’s own work — its projects, people, plans — is answered from the organisation’s own sources: query the graph first.',
+        'A question about the user’s own organisation’s work — its projects, people, plans — is answered from that organisation’s own sources: query the graph first.',
+      )
+      expect(prompts[0]).toContain(
+        'Another organisation’s projects are a web question, not an office-data one.',
       )
       expect(prompts[0]).toContain(
         'Never send the user to consult internal documentation: your tools read the organisation’s own sources, and the reply reports what they found.',

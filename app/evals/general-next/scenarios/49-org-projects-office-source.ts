@@ -11,10 +11,11 @@ import type { ConversationScenario } from '../types'
 //
 // The scenario grades the decision path the fix teaches: the graph is queried first
 // and holds no Project node; the office route then searches the organisation's own
-// files and finds the project folders; the public web is never reached (no web tool
-// is scripted or allowed as a graded surface, and a live run that fetches has no
-// graded web fact to carry), and the answer names the projects the files search
-// returned instead of deferring the user to "internal documentation".
+// files and finds the project folders; no web tool runs before that files search
+// (the catalogue row's toolsNotBefore, r2: a live run that goes graph → web → files
+// fails it, and hermetically no web tool is scripted at all), and the answer names
+// the projects the files search returned instead of deferring the user to
+// "internal documentation".
 //
 // Invented fixtures only; the graph rows are the release shape's emptiness (no
 // Project nodes), the file hits are the real graph_files_search result shape.

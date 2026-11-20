@@ -294,9 +294,10 @@ async function createPatterns(
         simpleLoop<AgentData>(
           createLoopControllerAdapter(
             NEO4J_READ_ONLY_CONTEXT +
-              '\n\nA question about the organisation’s own work — its projects, people, plans — ' +
-              'is answered from the organisation’s own sources: query the graph first. If the ' +
-              'graph holds nothing for it, Return plainly what you looked for and that the ' +
+              '\n\nA question about the user’s own organisation’s work — its projects, people, ' +
+              'plans — is answered from that organisation’s own sources: query the graph ' +
+              'first. Another organisation’s projects are a web question, not an ' +
+              'office-data one. If the graph holds nothing for it, Return plainly what you looked for and that the ' +
               'graph held none; the organisation’s own files, sites and mail are another ' +
               'step’s tools (office-data), and the public web is the last resort for such a ' +
               'question. Never send the user to consult internal documentation: your tools ' +
@@ -435,12 +436,19 @@ async function createPatterns(
             pattern: doc,
             withBudget: (budget) => withInjectionGuard(docGuard)(officeWithBudget(budget)),
             description:
-              'Read mail, calendar and the organisation’s files and sites — its projects live there; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+              'Read mail, calendar date ranges and the organisation’s files and sites — its projects live there; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+              // r2 (review): "calendar date ranges" is back from the 450 squeeze. The
+              // two labels that squeeze also dropped (graph_mail_attachments,
+              // graph_files_recent) ride the CAPABILITY below — which the planner's
+              // agent map and the office route scope both read — because the #880
+              // bound leaves the criterion no room for them. "run code" left the
+              // sandbox group for the same room: line 1 already says compute.
               (deps.graphFileIngest === true
-                ? 'Tools: mail/calendar (graph_mail_recent, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).'
-                : 'Tools: mail/calendar (graph_mail_recent, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_shared; file copying unavailable), sandbox (run code, save deliverables), profile (graph_me).'),
+                ? 'Tools: mail/calendar (graph_mail_recent, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_shared, graph_file_ingest copies in), sandbox (save deliverables), profile (graph_me).'
+                : 'Tools: mail/calendar (graph_mail_recent, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_shared; file copying unavailable), sandbox (save deliverables), profile (graph_me).'),
             capability:
-              'Read Microsoft 365 mail and file metadata; ' +
+              'Read Microsoft 365 mail and file metadata, including mail attachments ' +
+              '(graph_mail_attachments) and recent files (graph_files_recent); ' +
               'the organisation’s own project material — project sites, folders and files in ' +
               'SharePoint and OneDrive, project mail and meetings — is read here, searched ' +
               'with plain words (a project’s name, or “project” for the project folders); ' +
@@ -454,14 +462,16 @@ async function createPatterns(
             pattern: info,
             withBudget: infoWithBudget,
             description:
-              'Look things up in the knowledge graph, on the public web and in library docs; ' +
-              // The PM archive rides the Tools line only (#1058 kept the criterion inside
-              // the #880 bound): its product-management archive entry names it for the
-              // decider, and the capability below carries the full wording.
-              'cannot open this conversation’s uploads. The graph identifies people (a name ' +
-              'to an email) and, when recorded, the organisation’s projects; a projects ' +
+              // r2 (review): the #1031 cross-route hint and the library-docs tool names
+              // are back (the 450 squeeze dropped both), so the uploads clause moved out
+              // — the decide question already says read-documents searches only this
+              // conversation's uploads. 446/400 of the #880 bound. The PM archive still
+              // rides the Tools line only; the capability below carries its full wording.
+              'Look things up in the knowledge graph, on the public web and in library docs. ' +
+              'Its graph identifies people in the organisation (a name to an email) before ' +
+              'office-data searches mail or files. It may hold its projects; a projects ' +
               'question it cannot answer goes to office-data, the web last.\n' +
-              'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (context7)' +
+              'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs)' +
               (pmTools.length ? ', product-management archive (lennys_* tools)' : '') +
               '.',
             capability:
@@ -502,7 +512,10 @@ async function createPatterns(
             // release defect was a projects question going to the public web (or being
             // deferred to "internal documentation") while office-data's files and sites
             // hold the answer. One shared instruction, not one criterion's wording.
-            'The organisation’s own projects are found in its own sources, in order: the knowledge graph, then its Microsoft 365 files and sites (office-data); the public web is the last resort for them. ' +
+            // r2 (review): "the user's own organisation", so a public organisation's
+            // projects ("What projects does Mozilla run?") stay a web question instead of
+            // reading as an organisation-own one.
+            'The user’s own organisation’s projects are found in its own sources, in order: the knowledge graph, then its Microsoft 365 files and sites (office-data); the public web is the last resort for them, and another organisation’s projects are a web question. ' +
             'When a request needs routes working together (one route’s result is another’s input), choose think first.',
           answer:
             "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",

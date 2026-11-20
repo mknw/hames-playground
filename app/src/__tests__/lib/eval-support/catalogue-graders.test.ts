@@ -10,6 +10,7 @@
  * - drop the `noProposalRaised` case → "every org negative" goes red.
  * - drop the `graphEntryCount` case → "the org positives" goes red.
  * - `resolveShared`: stop substituting → "shared patterns are substituted" goes red.
+ * - drop the `toolsNotBefore` case (r2) → "the #1058 web-last grader" goes red.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -22,7 +23,10 @@ import {
 } from '../../../lib/eval-support/catalogue-graders'
 // conversation-checks reads a server-only extractor; the repo's usual mock.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
-import { answerNotMatchesCheck } from '../../../lib/eval-support/conversation-checks'
+import {
+  answerNotMatchesCheck,
+  toolsNotBeforeCheck,
+} from '../../../lib/eval-support/conversation-checks'
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const catalogue = JSON.parse(
@@ -110,30 +114,76 @@ describe('catalogue graders', () => {
 
   // #1058: the two projects rows' answerNotMatches graders exist for the release
   // turn's actual deflections ("no dedicated Project node… consult internal
-  // documentation"). MUTATION (red): reword either pattern so those phrasings
-  // slip through, or drop its negate.
+  // documentation"). r2 (review): the release reply is "consult internal DTSC
+  // documentation" — the org name between the words — so the pattern tolerates a
+  // few words there and spells organi[sz]ation both ways. MUTATION (red): reword
+  // either pattern so any phrasing below slips through, or drop its negate.
   it('the #1058 deflection graders fail the release answers they exist for', () => {
     const replies = [
       'There is no dedicated Project node; please consult internal documentation for the organisation’s projects.',
       'No dedicated Project node was found, so I cannot answer; please consult internal documentation.',
+      // The release reply verbatim, org name included.
+      'I could not find a dedicated Project node; please consult internal DTSC documentation.',
+      'I found nothing in the graph; please consult internal Lantern documentation.',
+      'Try consulting your internal documentation for the projects.',
+      'Please contact the organization for its projects.',
+      'Please contact the organisation.',
+      'There is no project information here; you may want to ask your colleagues.',
+    ]
+    const correct = [
+      'I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.',
+      'The active projects are Lantern Portal, Lantern Field Ops and Lantern Beacon.',
     ]
     for (const id of ['49-org-projects-office-source', '50-org-projects-in-graph']) {
       const negated = (catalogueGraders(catalogue, id).answerPatterns ?? []).filter((p) => p.negate)
       expect(negated.length, id).toBeGreaterThan(0)
-      for (const p of negated)
-        for (const reply of replies)
-          expect(answerNotMatchesCheck(reply, p.pattern).pass, `${id}: ${p.says}`).toBe(false)
-      // The answers the rows grade as correct still pass.
       for (const p of negated) {
-        expect(
-          answerNotMatchesCheck(
-            'I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.',
-            p.pattern,
-          ).pass,
-          `${id}: ${p.says}`,
-        ).toBe(true)
+        for (const reply of replies)
+          expect(answerNotMatchesCheck(reply, p.pattern).pass, `${id}: ${p.says}: ${reply}`).toBe(
+            false,
+          )
+        // The answers the rows grade as correct still pass.
+        for (const reply of correct)
+          expect(answerNotMatchesCheck(reply, p.pattern).pass, `${id}: ${p.says}`).toBe(true)
       }
     }
+  })
+
+  // #1058 r2 (review): "web last" is graded, not only claimed. orderedTools checks
+  // the tools as a SUBSEQUENCE and forbiddenTools is empty (its read-only refusal
+  // wording does not fit this row), so a live run that goes graph → web → files
+  // passed both before. The row's toolsNotBefore grader fails it. MUTATION (red):
+  // drop the `toolsNotBefore` case from catalogueGraders, or the check from grade().
+  it('the #1058 web-last grader fails a web-before-office trace and passes the office-first one', () => {
+    const spec = catalogueGraders(catalogue, '49-org-projects-office-source').toolsNotBefore
+    expect(spec).toMatchObject({
+      says: expect.any(String),
+      tools: ['search', 'fetch', 'fetch_content', 'web_search_exa', 'web_fetch_exa'],
+      before: 'graph_files_search',
+    })
+    const call = (name: string) => ({ name, success: true })
+    // graph → web → files: the exact trace the review caught passing.
+    expect(
+      toolsNotBeforeCheck(
+        [call('read_neo4j_cypher'), call('search'), call('graph_files_search')],
+        spec!,
+      ).pass,
+    ).toBe(false)
+    // graph → files: the row's own order.
+    expect(
+      toolsNotBeforeCheck([call('read_neo4j_cypher'), call('graph_files_search')], spec!).pass,
+    ).toBe(true)
+    // graph → files → web: the web after the office search is not this check's failure.
+    expect(
+      toolsNotBeforeCheck(
+        [call('read_neo4j_cypher'), call('graph_files_search'), call('fetch')],
+        spec!,
+      ).pass,
+    ).toBe(true)
+    // web only: the office source was never reached, so every web call fails it.
+    expect(toolsNotBeforeCheck([call('search')], spec!).pass).toBe(false)
+    // nothing ran: orderedTools' failure, never a vacuous pass here.
+    expect(toolsNotBeforeCheck([], spec!).pass).toBe(true)
   })
 
   it('an unknown row throws at module load', () => {

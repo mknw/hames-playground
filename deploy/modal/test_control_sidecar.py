@@ -32,8 +32,11 @@ import contextlib
 import io
 import json
 import os
+import pathlib
+import subprocess
 import sys
 import threading
+import tempfile
 import time
 import types
 import unittest
@@ -485,6 +488,8 @@ class OrderContract(SidecarTestCase):
             time.sleep(0.15)  # beyond every scaled queue deadline
             self.assertLessEqual(threading.active_count() - base, 2,
                                  "only the hung SDK call may retain a handler")
+            self.assertEqual(len(module.AUTOSCALER_ORDER._queues["large"]), 1,
+                             "expired tickets must not accumulate behind the hung call")
             self.assertEqual(large.applied, [])
             self.assertEqual(post(0, 1), {"ok": False, "error":
                              "modal control plane: autoscaler queue wait timed out"})
@@ -500,11 +505,31 @@ class OrderContract(SidecarTestCase):
         self.assertEqual(large.applied, [1])
         self.assertEqual(post(0, 1), {"ok": True, "min_containers": 0})
         self.assertEqual(large.applied, [1, 0])
+        self.assertEqual(module.AUTOSCALER_ORDER._queues, {})
 
     def test_queue_wait_is_shorter_than_the_app_timeout(self):
         module = self.sidecar([])
         self.assertGreater(module.AUTOSCALER_WAIT_TIMEOUT_S, 0)
         self.assertLess(module.AUTOSCALER_WAIT_TIMEOUT_S, 15)
+
+    def test_main_runs_and_stops_the_watchdog(self):
+        module = self.sidecar([])
+        running = threading.Event()
+        stops = []
+
+        def watch(stop):
+            stops.append(stop)
+            running.set()
+            stop.wait(2)
+
+        server = mock.Mock()
+        server.serve_forever.side_effect = lambda: self.assertTrue(running.wait(1))
+        with mock.patch.object(module, "ThreadingHTTPServer", return_value=server), \
+             mock.patch.object(module.AUTOSCALER_ORDER, "watchdog", watch), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(module.main(), 0)
+        self.assertTrue(stops[0].is_set())
+        server.server_close.assert_called_once()
 
     def test_watchdog_exits_on_a_hung_call_using_a_monotonic_clock(self):
         module = self.sidecar([])
@@ -521,7 +546,9 @@ class OrderContract(SidecarTestCase):
             order.check_watchdog()
             self.assertEqual(exits, [])
             now[0] = 90.1
-            order.check_watchdog()
+            stop = mock.Mock()
+            stop.wait.side_effect = [False, True]
+            order.watchdog(stop)
             self.assertEqual(exits, [1])
         finally:
             release.set()
@@ -736,6 +763,41 @@ class HardeningContract(SidecarTestCase):
         self.assertEqual(status, 400)
         status, _ = self.request(module, "GET", "/nope")
         self.assertEqual(status, 400)
+
+
+class TokenMintContract(unittest.TestCase):
+    def test_the_documented_block_refuses_existing_env_unless_explicitly_replaced(self):
+        readme = pathlib.Path(HERE, "README.md").read_text()
+        block = readme.split('```bash\n(\nset -eu\n', 1)[1].split('```', 1)[0]
+        block = '(\nset -eu\n' + block
+        with tempfile.TemporaryDirectory() as root:
+            root = pathlib.Path(root)
+            (root / "bin").mkdir()
+            uv = root / "bin" / "uv"
+            uv.write_text('#!/bin/sh\ncat > "$MODAL_CONFIG_PATH" <<EOF\n'
+                          '[test]\ntoken_id="synthetic-id"\ntoken_secret="synthetic-secret"\nEOF\n')
+            uv.chmod(0o700)
+            example = "MODAL_TOKEN_ID=''\nMODAL_TOKEN_SECRET=''\n"
+            (root / "control.env.example").write_text(example)
+            target = root / "control.local.env"
+            original = "HAMES_MODAL_APP_NAME='custom'\nMODAL_TOKEN_ID='existing'\n"
+            target.write_text(original)
+            env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
+                   "TMPDIR": str(root), "REPLACE_MODAL_CONTROL_ENV": "0"}
+            refused = subprocess.run(["bash", "-c", block], cwd=root, env=env,
+                                     capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("control.local.env exists", refused.stderr)
+            self.assertEqual(target.read_text(), original)
+            env["REPLACE_MODAL_CONTROL_ENV"] = "1"
+            replaced = subprocess.run(["bash", "-c", block], cwd=root, env=env,
+                                      capture_output=True, text=True, timeout=5)
+            self.assertEqual(replaced.returncode, 0, replaced.stderr)
+            self.assertIn("MODAL_TOKEN_ID='synthetic-id'", target.read_text())
+            self.assertIn("MODAL_TOKEN_SECRET='synthetic-secret'", target.read_text())
+            self.assertNotIn("synthetic-secret", replaced.stdout + replaced.stderr)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(root.glob("mint.*")), [])
 
 
 if __name__ == "__main__":

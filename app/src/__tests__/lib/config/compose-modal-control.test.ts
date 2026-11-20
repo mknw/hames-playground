@@ -203,8 +203,12 @@ describe('5. a read-only image, a dedicated uid, no capabilities', () => {
       .split(/\n(?=[A-Za-z0-9][A-Za-z0-9._-]*==)/)
       .filter((b) => /^[A-Za-z0-9][A-Za-z0-9._-]*==/.test(b))
     const lock = read('deploy/modal/uv.lock')
-    const lockedVersion = (name: string) =>
-      new RegExp(`\\[\\[package\\]\\]\\nname = "${name}"\\nversion = "([^"]+)"`).exec(lock)?.[1]
+    const lockedPackages = lock
+      .split('[[package]]')
+      .slice(1)
+      .filter((block) => /^source = \{ registry = /m.test(block))
+    const lockedPackage = (name: string) =>
+      lockedPackages.find((block) => /^name = "([^"]+)"/m.exec(block)?.[1] === name)
 
     it('installs the hash-pinned file with --require-hashes, and nothing unpinned', () => {
       expect(dockerfile).toMatch(
@@ -225,10 +229,18 @@ describe('5. a read-only image, a dedicated uid, no capabilities', () => {
       }
     })
 
-    it('is uv.lock: every pinned version equals the lock’s', () => {
+    it('is uv.lock: every runtime package, version and artifact hash equals the lock’s', () => {
+      expect(blocks.map((block) => /^([^=]+)==/.exec(block)![1]).sort()).toEqual(
+        lockedPackages.map((block) => /^name = "([^"]+)"/m.exec(block)![1]).sort(),
+      )
       for (const block of blocks) {
         const [, name, version] = /^([^=]+)==(\S+)/.exec(block)!
-        expect(version, name).toBe(lockedVersion(name))
+        const locked = lockedPackage(name)!
+        expect(version, name).toBe(/^version = "([^"]+)"/m.exec(locked)?.[1])
+        expect(
+          [...block.matchAll(/--hash=sha256:([0-9a-f]{64})/g)].map((m) => m[1]).sort(),
+          name,
+        ).toEqual([...locked.matchAll(/hash = "sha256:([0-9a-f]{64})"/g)].map((m) => m[1]).sort())
       }
     })
 

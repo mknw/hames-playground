@@ -149,6 +149,9 @@ const ARMED_KEY = Symbol.for('hames-app.gpu-keep-running')
 
 interface ArmedLoop {
   timer: ReturnType<typeof setInterval>
+  /** A failed DB read still owes a previously observed OFF its re-assertion.
+   *  Unknown or last-ON never starts a control call during an outage. */
+  lastKnownOn: boolean | null
   /** The failure string last logged, so a persistently failing tick logs once
    *  per CAUSE rather than once per tick. */
   lastFailure: string | null
@@ -169,6 +172,7 @@ export function startGpuKeepRunningLoop(intervalMs: number = gpuKeepTickMs()): v
   if (g[ARMED_KEY]) return
   const loop: ArmedLoop = {
     timer: undefined as unknown as ReturnType<typeof setInterval>,
+    lastKnownOn: null,
     lastFailure: null,
   }
   loop.timer = setInterval(() => {
@@ -383,9 +387,11 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
   let on: boolean
   try {
     on = (await getGpuState()).keepRunning
+    loop.lastKnownOn = on
   } catch (err) {
     logFailure(loop, 'reading the switch', err)
-    return
+    if (loop.lastKnownOn !== false) return
+    on = false
   }
   if (!on) {
     // OFF: the switch may have just flipped, so the "one log per cause" latch
@@ -416,6 +422,7 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
   let still: boolean
   try {
     still = (await getGpuState()).keepRunning
+    loop.lastKnownOn = still
   } catch {
     still = true // unreadable: the next tick re-reads; never act on a guess
   }

@@ -167,9 +167,21 @@ can read. The block below mints into a private directory, copies the two values
 straight into `control.local.env` (printing nothing but the profile name) and
 shreds the toml. Do not `cat` the toml: the secret would sit in the terminal's
 scrollback.
+The block refuses to mint over an existing `control.local.env`. For an
+intentional replacement, set `REPLACE_MODAL_CONTROL_ENV=1` for this run; that
+resets the file from the example, so restore any custom app names afterwards.
 
 ```bash
-umask 077; d=$(mktemp -d)
+(
+set -eu
+if [ -e control.local.env ] && [ "${REPLACE_MODAL_CONTROL_ENV:-0}" != 1 ]; then
+  echo 'control.local.env exists; set REPLACE_MODAL_CONTROL_ENV=1 to replace it' >&2
+  exit 1
+fi
+umask 077
+mkdir -p "${TMPDIR:-$HOME/scratch/modal-control-token}"
+d=$(mktemp -d "${TMPDIR:-$HOME/scratch/modal-control-token}/mint.XXXXXXXX")
+trap 'test ! -f "$d/modal.toml" || shred -u "$d/modal.toml"; rmdir "$d"' EXIT
 MODAL_CONFIG_PATH=$d/modal.toml uv run modal token new --no-activate --expires-in 90d
 cp control.env.example control.local.env; chmod 600 control.local.env
 python3 - "$d/modal.toml" control.local.env <<'PY'
@@ -182,7 +194,7 @@ for key in ("token_id", "token_secret"):
 open(sys.argv[2], "w").write(text)
 print(f"wrote the token of profile {name!r} into {sys.argv[2]}")
 PY
-shred -u $d/modal.toml; rmdir $d
+)
 ```
 
 Then, from a release checkout: `COMPOSE_PROFILES=app,modal-control docker compose
@@ -203,6 +215,11 @@ changes; a test fails when the two disagree. The sidecar also orders its
 a minimal environment (`CLI_ENV_NAMES`: `PATH`, `HOME`, the Modal token, locale
 and CA variables), so neither the app's bearer nor any other variable reaches
 them.
+Queued autoscaler requests expire after 10 seconds with `ok:false`, applying
+nothing. An in-flight SDK call has a 90-second watchdog: the sidecar exits
+with status 1 and compose's `restart: unless-stopped` restarts it. The app's
+keep-running tick then re-asserts the switch state, including the last known
+OFF during a database outage.
 
 For a laptop only, the sidecar can run directly, loopback-bound:
 `uv run --env-file control.local.env python control_sidecar.py`. Do not run

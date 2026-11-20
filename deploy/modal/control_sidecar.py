@@ -52,8 +52,9 @@ is registered to serve (the SDK's experimental call, which lists a container
 only once its `@modal.enter` boot has finished — see `_cli_container_rows`).
 
 `POST /autoscaler` is applied per box in ARRIVAL order, one at a time
-(`_Ordered`): a request the app abandoned on its own timeout is still applied by
-this process, so a later request waits for it instead of racing it. The `modal`
+(`_Ordered`): a call already inside Modal finishes before any later call; a
+queued request expires before the app's timeout and applies nothing. A watchdog
+exits on an SDK call stuck for 90 s so compose restarts the sidecar. The `modal`
 CLI children get a minimal env (`CLI_ENV_NAMES`), never this process's whole one.
 """
 
@@ -66,6 +67,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -96,6 +98,12 @@ MAX_BODY_BYTES = 64 * 1024
 # process per container.
 CLI_LIST_TIMEOUT_S = 12
 CLI_STOP_TIMEOUT_S = 20
+
+# Queueing must end before the app abandons the request at 15 s. Once inside
+# the SDK, cancelling a thread is unsafe: exit the process and let compose's
+# restart policy recover, then the app's tick re-asserts its switch state.
+AUTOSCALER_WAIT_TIMEOUT_S = 10
+AUTOSCALER_CALL_TIMEOUT_S = 90
 
 # What Modal's own task ids look like (`ta-01…`). Validated before the id
 # reaches `modal container stop` as an argv word: argv-only means no shell
@@ -132,27 +140,56 @@ class _Ordered:
     value whenever it finishes. With one thread per request, an abandoned
     `min_containers=1` could land AFTER a later, confirmed `0` — a billed box under
     an OFF switch (#1060 review round 2). So each box takes a ticket on arrival and
-    its `update_autoscaler` runs only when every earlier ticket has finished: the
-    sidecar applies them in arrival order, whatever the client did meanwhile. A
+    its `update_autoscaler` runs only when every earlier live ticket has finished.
+    Expired waiters remove their tickets and apply nothing, including after the
+    head eventually returns. A
     `threading.Lock` would be one-at-a-time but not in order, so tickets.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Any = time.monotonic, exit_process: Any = os._exit) -> None:
         self._cond = threading.Condition()
-        self._next_ticket: dict[str, int] = {}
-        self._now_serving: dict[str, int] = {}
+        self._queues: dict[str, list[object]] = {}
+        self._active: dict[str, float] = {}
+        self._clock = clock
+        self._exit_process = exit_process
+
+    def check_watchdog(self) -> None:
+        with self._cond:
+            overdue = any(self._clock() - started >= AUTOSCALER_CALL_TIMEOUT_S
+                          for started in self._active.values())
+        if overdue:
+            # SystemExit would terminate only the watchdog thread. _exit stops
+            # the wedged SDK thread too and produces a failing container exit.
+            self._exit_process(1)
+
+    def watchdog(self, stop: threading.Event) -> None:
+        while not stop.wait(1):
+            self.check_watchdog()
 
     def run(self, key: str, fn: Any) -> Any:
         with self._cond:
-            ticket = self._next_ticket.get(key, 0)
-            self._next_ticket[key] = ticket + 1
-            while self._now_serving.get(key, 0) != ticket:
-                self._cond.wait()
+            ticket = object()
+            queue = self._queues.setdefault(key, [])
+            queue.append(ticket)
+            deadline = self._clock() + AUTOSCALER_WAIT_TIMEOUT_S
+            while True:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    queue.remove(ticket)
+                    self._cond.notify_all()
+                    raise TimeoutError("autoscaler queue wait timed out")
+                if queue[0] is ticket:
+                    break
+                self._cond.wait(remaining)
+            self._active[key] = self._clock()
         try:
             return fn()
         finally:
             with self._cond:
-                self._now_serving[key] = ticket + 1
+                queue.pop(0)
+                if not queue:
+                    del self._queues[key]
+                del self._active[key]
                 self._cond.notify_all()
 
 
@@ -423,6 +460,9 @@ def main() -> int:
         )
         return 2
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    stop = threading.Event()
+    watchdog = threading.Thread(target=AUTOSCALER_ORDER.watchdog, args=(stop,), daemon=True)
+    watchdog.start()
     print(
         f"control_sidecar: serving Modal control for boxes {sorted(BOXES)} "
         f"on http://{HOST}:{PORT} (token auth)",
@@ -432,6 +472,10 @@ def main() -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        stop.set()
+        watchdog.join()
+        httpd.server_close()
     return 0
 
 

@@ -771,14 +771,15 @@ export default function Admin() {
                                   that box. */}
                               <Show when={line().state === 'up' || line().state === 'booting'}>
                                 <Show
-                                  when={!s().keepRunning}
+                                  when={!s().keepRunning && !s().releasePending.includes(box)}
                                   fallback={
                                     <span
                                       text="xs ui-text-tertiary"
                                       data-testid={`gpu-stop-disabled-${box}`}
                                     >
-                                      stop now is off while the switch is on — Modal would start a
-                                      replacement at once. Switch it off first.
+                                      {s().keepRunning
+                                        ? 'stop now is off while the switch is on — Modal would start a replacement at once. Switch it off first.'
+                                        : 'stop now is off until Modal confirms the release (min_containers 0) — it may still hold a container up and would start a replacement at once. The server keeps retrying.'}
                                     </span>
                                   }
                                 >

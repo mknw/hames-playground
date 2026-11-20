@@ -59,6 +59,7 @@ import {
   resetModalControlCache,
 } from '../../../lib/inference/modal-control.server'
 import {
+  driveModalSwitch,
   pendingReleaseBoxes,
   resetPendingReleases,
 } from '../../../lib/inference/gpu-keep-running.server'
@@ -259,6 +260,7 @@ describe('the panel state', () => {
       // #1057: the Modal control half — null here, the control route being
       // unconfigured, which is the panel's fallback marker.
       modal: null,
+      releasePending: [],
     })
   })
 
@@ -984,6 +986,47 @@ describe('#1057: stopGpuBoxNow', () => {
     expect((thrown as Error).message).toContain('switch is ON')
     expect((thrown as Error).message).toContain('replacement')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('is refused while a release is still UNCONFIRMED — Modal may still hold min_containers=1', async () => {
+    configureModal()
+    // The owner's OFF: the sidecar does not confirm it for the 27B.
+    fetchMock.mockImplementation(((url: string) => {
+      if (url === `${MODAL_BASE}/autoscaler`) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: false, error: 'sidecar restarting' })),
+        )
+      }
+      if (url === `${MODAL_BASE}/stop`) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, stopped: [] })))
+      }
+      return Promise.resolve(new Response('{}'))
+    }) as never)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await driveModalSwitch(false, ['large'])
+    expect(pendingReleaseBoxes()).toEqual(['large'])
+    fetchMock.mockClear()
+
+    let thrown: unknown
+    try {
+      await stopGpuBoxNow('large')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('has not confirmed the release')
+    expect((thrown as Error).message).toContain('replacement')
+    expect(fetchMock).not.toHaveBeenCalled()
+    // The refusal is per box: the 4B's release is not pending, so it stops.
+    await stopGpuBoxNow('small')
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain(`${MODAL_BASE}/stop`)
+    // And the payload says why, for the panel.
+    expect((await getGpuAdminState()).releasePending).toEqual(['large'])
+    // Once Modal confirms, the stop is allowed again.
+    resetPendingReleases()
+    fetchMock.mockClear()
+    await stopGpuBoxNow('large')
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain(`${MODAL_BASE}/stop`)
   })
 
   it('refuses an unconfigured control route with the panel’s own words', async () => {

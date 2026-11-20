@@ -482,8 +482,15 @@ export function modalNotStartingAfterMs(): number {
  * disagree about when a failing start began.
  */
 const BOOT_KEY = Symbol.for('hames-app.modal-boot-pending')
+
+/** Who stamped a boot clock. The stamp is one clock per box on the panel, but
+ *  two independent askers write it: a turn's wake poll and the switch. An end
+ *  from one must not erase the other's ask. */
+export type BootClockOwner = 'wake' | 'switch'
+const BOOT_OWNERS: readonly BootClockOwner[] = ['wake', 'switch']
+
 interface BootState {
-  pendingSince: Partial<Record<ModalBox, number>>
+  pendingSince: Partial<Record<ModalBox, Partial<Record<BootClockOwner, number>>>>
 }
 const boot: BootState = ((globalThis as typeof globalThis & { [BOOT_KEY]?: BootState })[
   BOOT_KEY
@@ -496,23 +503,36 @@ export function resetModalBootPending(): void {
   boot.pendingSince = {}
 }
 
-/** The wake poll calls this when it starts asking a box to boot. Idempotent:
- *  a later poll for the same box keeps the ORIGINAL stamp, which is the one
- *  honest "asked since" — restamping per poll would reset the not-starting
+/** An asker calls this when it starts asking a box to boot. Idempotent per
+ *  owner: a later ask by the same owner keeps the ORIGINAL stamp, which is the
+ *  one honest "asked since" — restamping per poll would reset the not-starting
  *  threshold with every turn and name a five-minute failure a fresh start. */
-export function noteModalBootRequested(box: ModalBox, at: number = Date.now()): void {
-  boot.pendingSince[box] ??= at
+export function noteModalBootRequested(
+  box: ModalBox,
+  at: number = Date.now(),
+  owner: BootClockOwner = 'wake',
+): void {
+  const stamps = (boot.pendingSince[box] ??= {})
+  stamps[owner] ??= at
 }
 
-/** The wake poll calls this when its poll for a box ends (answered, failed or
- *  aborted): no boot is pending from THIS process any more. */
-export function noteModalBootEnded(box: ModalBox): void {
-  delete boot.pendingSince[box]
+/** An asker calls this when ITS ask ends (a wake poll answered, failed or
+ *  aborted; the switch turned OFF): that owner no longer has a boot pending,
+ *  and the other's ask stands. Called with no owner it ends them all — what a
+ *  probe that finds a container means, because the boot request WAS answered
+ *  whoever made it. */
+export function noteModalBootEnded(box: ModalBox, owner?: BootClockOwner): void {
+  const stamps = boot.pendingSince[box]
+  if (!stamps) return
+  for (const o of owner ? [owner] : BOOT_OWNERS) delete stamps[o]
+  if (Object.keys(stamps).length === 0) delete boot.pendingSince[box]
 }
 
-/** When the current unanswered boot request for this box began, epoch ms, or
- *  `null` while none is pending. No `now` parameter: nothing here clears by
- *  age — the poll that stamped the clock clears it when it ends. */
+/** When the current unanswered boot request for this box began (the earliest
+ *  of its askers), epoch ms, or `null` while none is pending. No `now`
+ *  parameter: nothing here clears by age — the asker that stamped the clock
+ *  clears it when its ask ends. */
 export function modalBootPendingSince(box: ModalBox): number | null {
-  return boot.pendingSince[box] ?? null
+  const stamps = Object.values(boot.pendingSince[box] ?? {})
+  return stamps.length > 0 ? Math.min(...stamps) : null
 }

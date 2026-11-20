@@ -59,7 +59,7 @@ import {
 import { ensurePrivateTierAwake, smallWakeInFlight } from '../inference/wake.server'
 import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
-import { driveModalSwitch } from '../inference/gpu-keep-running.server'
+import { driveModalSwitch, pendingReleaseBoxes } from '../inference/gpu-keep-running.server'
 import {
   modalBoxProbe,
   modalControlConfigured,
@@ -311,6 +311,10 @@ export interface GpuAdminState {
    *  the boxes through keep-warm pings — today's behaviour, labelled as the
    *  fallback — and every other field falls back to its own inference. */
   modal: ModalAdminState | null
+  /** Boxes whose release (`min_containers=0`) Modal has not confirmed — the
+   *  switch reads OFF but Modal may still hold `1` there. The panel refuses
+   *  "stop now" for them and says why: Modal would start a replacement. */
+  releasePending: ('large' | 'small')[]
 }
 
 /** Is THIS caller an admin? Never throws: a signed-out visitor is simply not
@@ -353,6 +357,7 @@ export async function getGpuAdminState(): Promise<GpuAdminState> {
     smallState: smallProvenWarm() ? 'ready' : smallWakeInFlight() ? 'starting' : 'cold',
     smallUpSince: smallUpSince(),
     modal,
+    releasePending: pendingReleaseBoxes(),
   }
 }
 
@@ -445,6 +450,10 @@ export async function setGpuKeepRunning(on: boolean): Promise<GpuAdminState> {
  * here. A turn in flight against the stopped box fails exactly as a scaled
  * box does — visibly, with the message naming the box.
  *
+ * **Refused while a release is unconfirmed** (the switch reads OFF but Modal has
+ * not reported `min_containers=0` for the box, `pendingReleaseBoxes()`): Modal may
+ * still hold `1` there, so the same replacement follows. The panel says so.
+ *
  * **Refused while the switch is ON**: with `min_containers=1` Modal starts a
  * replacement the moment a container stops, so a stop would be a billed restart
  * rather than a stop. Release the switch first (the panel says so beside the
@@ -476,6 +485,15 @@ export async function stopGpuBoxNow(box: 'large' | 'small'): Promise<GpuAdminSta
       'The keep-running switch is ON, so Modal would start a replacement container at once ' +
         '(min_containers=1): stopping now would be a billed restart, not a stop. Switch it off ' +
         'first, then stop the box.',
+    )
+  }
+  if (pendingReleaseBoxes().includes(box)) {
+    throw new Error(
+      `Modal has not confirmed the release (min_containers 0) for the ${
+        box === 'large' ? '27B' : '4B'
+      } box yet, so it may still hold one container up and would start a replacement at once: ` +
+        'stopping now would be a billed restart, not a stop. The server keeps retrying the ' +
+        'release; stop the box once it is confirmed.',
     )
   }
   const answer = await stopModalBoxContainers(box)

@@ -59,6 +59,7 @@ import {
 } from '../../../lib/inference/wake.server'
 import {
   modalBootPendingSince,
+  noteModalBootRequested,
   resetModalBootPending,
   resetModalControlCache,
 } from '../../../lib/inference/modal-control.server'
@@ -987,6 +988,23 @@ describe('#1057: the not-starting check', () => {
     // Settled: no boot is pending from this process any more, so the panel
     // cannot keep naming a box as not-starting after its poll ended.
     expect(modalBootPendingSince('large')).toBeNull()
+  })
+
+  it('a poll ending leaves the SWITCH’s boot clock standing', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState()))
+    // The admin switch asked for this boot before the turn did.
+    const t0 = Date.now()
+    noteModalBootRequested('large', t0, 'switch')
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(modalBootPendingSince('large')).toBe(t0)
+    await vi.advanceTimersByTimeAsync(100_000)
+    await wake
+    // The poll's own ask is gone; the switch's, unanswered, is not.
+    expect(modalBootPendingSince('large')).toBe(t0)
   })
 
   it('keeps polling to the budget when the control plane itself is unreachable', async () => {

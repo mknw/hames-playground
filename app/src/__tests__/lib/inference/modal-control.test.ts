@@ -475,6 +475,29 @@ describe('the boot-request clock', () => {
     expect(modalBootPendingSince('large')).toBeNull()
     expect(modalBootPendingSince('small')).toBe(2)
   })
+
+  it('a wake poll ending does not clear the SWITCH’s ask, and an OFF does not clear a poll’s', () => {
+    // Two askers, one clock per box (#1060 round 2, display only): the clock is
+    // what the panel counts NOT STARTING from, so an end from one asker must not
+    // erase the other's ask while its boot is still unanswered.
+    noteModalBootRequested('large', 100, 'switch')
+    noteModalBootRequested('large', 200, 'wake')
+    expect(modalBootPendingSince('large')).toBe(100) // the earliest ask
+    noteModalBootEnded('large', 'wake')
+    expect(modalBootPendingSince('large')).toBe(100) // the switch's stands
+    noteModalBootRequested('large', 300, 'wake')
+    noteModalBootEnded('large', 'switch')
+    expect(modalBootPendingSince('large')).toBe(300) // the poll's stands
+    noteModalBootEnded('large', 'wake')
+    expect(modalBootPendingSince('large')).toBeNull()
+  })
+
+  it('an end with no owner (a container exists) ends every asker’s clock', () => {
+    noteModalBootRequested('large', 1, 'switch')
+    noteModalBootRequested('large', 2, 'wake')
+    noteModalBootEnded('large')
+    expect(modalBootPendingSince('large')).toBeNull()
+  })
 })
 
 describe('the not-starting threshold', () => {

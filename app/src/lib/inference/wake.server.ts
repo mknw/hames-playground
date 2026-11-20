@@ -780,7 +780,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
         `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,
     )
   } finally {
-    noteModalBootEnded(target.box)
+    noteModalBootEnded(target.box, 'wake')
   }
 }
 

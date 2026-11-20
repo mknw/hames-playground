@@ -49,6 +49,7 @@ const ADMIN_STATE = {
   // #1057: the Modal control half — null is the unconfigured route, the
   // default every test here starts from.
   modal: null,
+  releasePending: [],
 } as const
 
 /** A header payload with the 27B up — one the server can actually send: an
@@ -999,6 +1000,24 @@ describe('#1057: the Modal control lines', () => {
     const why = screen.getByTestId('gpu-stop-disabled-large')
     expect(why.textContent).toContain('replacement')
     expect(why.textContent).toContain('Switch it off first')
+  })
+
+  it('does not offer stop now while a release is unconfirmed — and says why, for that box only', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      releasePending: ['large'],
+      modal: { large: UP_LARGE, small: { ...UP_LARGE } },
+    })
+    renderAdmin()
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(within(large).queryByRole('button', { name: /stop now/i })).toBeNull()
+    const why = screen.getByTestId('gpu-stop-disabled-large')
+    expect(why.textContent).toContain('until Modal confirms the release')
+    expect(why.textContent).toContain('replacement')
+    // The other box's release is not pending: its button stays.
+    expect(
+      within(screen.getByTestId('gpu-modal-small')).getByRole('button', { name: /stop now/i }),
+    ).toBeTruthy()
   })
 
   it('stop now asks for a confirmation, and only the confirmed call stops', async () => {

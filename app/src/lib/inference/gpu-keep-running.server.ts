@@ -80,6 +80,20 @@
  * between a failed release and its retry forgets it; the next panel OFF (or a
  * `ops.py release`) is the recovery for that.
  *
+ * ## A confirmed OFF is re-asserted (#1060 round 2)
+ *
+ * The app gives up on a sidecar call at 15 s; the sidecar's SDK call may not.
+ * An ON the app abandoned can therefore land at Modal AFTER the owner's OFF was
+ * confirmed — `min_containers=1` under a switch that reads OFF, a billed box
+ * with nothing retrying (and "stop now" cannot recover it: Modal restarts the
+ * container). So a tick that reads OFF also re-sends `0` per kept box every
+ * {@link OFF_REASSERT_MS} (the release backoff's cap) and CONFIRMS Modal's
+ * reported value; a failure is registered as a pending release like any other.
+ * The sidecar orders its own `/autoscaler` calls per box too (`control_sidecar.py`),
+ * so the two layers cover the same race from both ends. Cost: one idempotent
+ * control call per box per five minutes while OFF — and an `ops.py prewarm` run
+ * by hand under an OFF switch is released within that window.
+ *
  * ## What a failed tick does
  *
  * A tick whose wake fails (box down, endpoint misconfigured, database
@@ -220,9 +234,27 @@ export function pendingReleaseBoxes(): ModalBox[] {
   return Object.keys(pendingReleases()) as ModalBox[]
 }
 
+const OFF_ASSERT_KEY = Symbol.for('hames-app.gpu-off-asserted')
+type OffAssertGlobal = typeof globalThis & { [OFF_ASSERT_KEY]?: Partial<Record<ModalBox, number>> }
+function offAsserted(): Partial<Record<ModalBox, number>> {
+  const g = globalThis as OffAssertGlobal
+  return (g[OFF_ASSERT_KEY] ??= {})
+}
+/** Record that Modal just CONFIRMED `0` for a box: the next re-assertion under
+ *  an OFF switch is due {@link OFF_REASSERT_MS} from now. */
+function noteOffAsserted(box: ModalBox): void {
+  offAsserted()[box] = Date.now()
+}
+
+/** How often a tick that reads the switch OFF re-sends `min_containers=0` per
+ *  box even when nothing is pending — the release backoff's own cap, so an OFF
+ *  switch costs one idempotent control call per box per five minutes. */
+export const OFF_REASSERT_MS = RELEASE_BACKOFF_MAX_MS
+
 /** Test-only reset of the pending ledger. */
 export function resetPendingReleases(): void {
   delete (globalThis as PendingGlobal)[PENDING_KEY]
+  delete (globalThis as OffAssertGlobal)[OFF_ASSERT_KEY]
 }
 
 /** Assert `min_containers=0` on one box and CONFIRM it: an answer that is not
@@ -262,14 +294,16 @@ export function driveModalSwitch(
     for (const box of boxes) {
       if (on) {
         delete pendingReleases()[box]
-        noteModalBootRequested(box)
+        noteModalBootRequested(box, Date.now(), 'switch')
         const answer = await setModalBoxMinContainers(box, 1)
         if (!answer.ok && !failure) failure = { box, reason: answer.reason, doing: 'boot' }
       } else {
-        noteModalBootEnded(box)
+        noteModalBootEnded(box, 'switch')
         const reason = await releaseConfirmed(box)
-        if (reason === null) delete pendingReleases()[box]
-        else {
+        if (reason === null) {
+          delete pendingReleases()[box]
+          noteOffAsserted(box)
+        } else {
           registerPendingRelease(box, reason)
           failure ??= { box, reason, doing: 'release' }
         }
@@ -289,6 +323,7 @@ async function retryPendingReleases(loop: ArmedLoop): Promise<void> {
     const reason = await releaseConfirmed(box)
     if (reason === null) {
       delete pending[box]
+      noteOffAsserted(box)
       console.log(`[gpu-keep] Modal confirmed min_containers=0 for the ${box} box`)
       continue
     }
@@ -296,6 +331,28 @@ async function retryPendingReleases(loop: ArmedLoop): Promise<void> {
     entry.nextAt = Date.now() + releaseBackoffMs(entry.attempts)
     entry.lastReason = reason
     logFailure(loop, `releasing the ${box} box`, new Error(reason))
+  }
+}
+
+/** Under an OFF switch, re-send `min_containers=0` per kept box at
+ *  {@link OFF_REASSERT_MS} and CONFIRM Modal's reported value, whether or not a
+ *  release is pending. A confirmed OFF is not final on its own: an ON the app
+ *  gave up on (its 15 s bound) can still be running inside the sidecar and land
+ *  AFTER the `0` (#1060 review round 2) — a billed box under a switch that reads
+ *  OFF, with nothing retrying. The same call also covers a restart that forgot
+ *  a pending release. A box with a release already pending is the retry's. */
+async function reassertOff(loop: ArmedLoop): Promise<void> {
+  for (const box of keptBoxes()) {
+    if (pendingReleases()[box]) continue
+    const last = offAsserted()[box]
+    if (last !== undefined && Date.now() - last < OFF_REASSERT_MS) continue
+    const reason = await releaseConfirmed(box)
+    if (reason === null) {
+      noteOffAsserted(box)
+      continue
+    }
+    registerPendingRelease(box, reason)
+    logFailure(loop, `re-asserting OFF on the ${box} box`, new Error(reason))
   }
 }
 
@@ -336,6 +393,7 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
     // Modal never confirmed is still owed, though.
     if (loop.lastFailure !== null && pendingReleaseBoxes().length === 0) loop.lastFailure = null
     await retryPendingReleases(loop)
+    await reassertOff(loop)
     return
   }
   // The autoscaler route: assert min_containers=1 per kept box, sending no
@@ -348,7 +406,7 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
     // No container yet: THIS is a boot asked for and not answered — the clock
     // the panel's NOT STARTING reads. (Unreadable counts for nothing.)
     const seen = modalBoxProbe(probe, box)
-    if (seen.ok && seen.containerCount === 0) noteModalBootRequested(box)
+    if (seen.ok && seen.containerCount === 0) noteModalBootRequested(box, Date.now(), 'switch')
     const answer = await setModalBoxMinContainers(box, 1)
     if (!answer.ok) throw new Error(answer.reason ?? 'the control sidecar refused')
   }
@@ -363,9 +421,10 @@ async function tickUnderLock(loop: ArmedLoop): Promise<void> {
   }
   if (!still) {
     for (const box of keptBoxes()) {
-      noteModalBootEnded(box)
+      noteModalBootEnded(box, 'switch')
       const reason = await releaseConfirmed(box)
       if (reason !== null) registerPendingRelease(box, reason)
+      else noteOffAsserted(box)
     }
     return
   }

@@ -249,7 +249,8 @@ function displayWarmth(
  * The control-plane probe rides the same `Promise.all` and is cached
  * process-side for 12s, so a settled poll pays it at most once per interval —
  * and when it cannot be answered, it degrades to `unknown` inside its own
- * 5s-per-fetch bound instead of hanging a poll that is supposed to be safe
+ * 15s-per-fetch bound (`MODAL_CONTROL_TIMEOUT_MS`) instead of hanging a poll
+ * that is supposed to be safe
  * beside a live chat. Skipped entirely when there is no endpoint: the whole
  * indicator is hidden for that deployment, so a probe would be noise. */
 /** The 27B's control-plane probe — the ONE question the strip asks a control

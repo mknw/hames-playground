@@ -165,6 +165,22 @@ describe('4. it binds 0.0.0.0 only inside its own container', () => {
   })
 })
 
+describe('the token-mint step and the exposure statement (sidecar hardening)', () => {
+  const readme = read('deploy/modal/README.md')
+
+  it('never prints the minted secret', () => {
+    expect(readme).not.toMatch(/^\s*cat\s+\S*modal\.toml/m)
+    expect(readme).toContain('MODAL_CONFIG_PATH=$d/modal.toml')
+    expect(readme).toContain('open(sys.argv[2], "w").write(text)') // straight into the env file
+  })
+
+  it('does not claim the sidecar is unreachable from the host', () => {
+    expect(readme).not.toMatch(/nothing is\s+reachable from the host/)
+    expect(readme).toMatch(/any process on the release host can connect/)
+    expect(readme).toMatch(/the bearer is the control/)
+  })
+})
+
 describe('5. a read-only image, a dedicated uid, no capabilities', () => {
   const dockerfile = read('deploy/modal/Dockerfile.control')
 
@@ -180,16 +196,50 @@ describe('5. a read-only image, a dedicated uid, no capabilities', () => {
     expect(dockerfile).not.toMatch(/^COPY \.\s/m) // never the whole directory
   })
 
-  it('pins the SDK to the version uv.lock pins', () => {
+  describe('every Python dependency is pinned by hash, from uv.lock', () => {
+    const requirements = read('deploy/modal/requirements.control.txt')
+    // One logical requirement per `name==version \` block, its hashes below it.
+    const blocks = requirements
+      .split(/\n(?=[A-Za-z0-9][A-Za-z0-9._-]*==)/)
+      .filter((b) => /^[A-Za-z0-9][A-Za-z0-9._-]*==/.test(b))
     const lock = read('deploy/modal/uv.lock')
-    const version = /name = "modal"\nversion = "([^"]+)"/.exec(lock)?.[1]
-    expect(version).toBeDefined()
-    expect(dockerfile).toContain(`pip install --no-cache-dir modal==${version}`)
+    const lockedVersion = (name: string) =>
+      new RegExp(`\\[\\[package\\]\\]\\nname = "${name}"\\nversion = "([^"]+)"`).exec(lock)?.[1]
+
+    it('installs the hash-pinned file with --require-hashes, and nothing unpinned', () => {
+      expect(dockerfile).toMatch(
+        /pip install [^\n]*--require-hashes[^\n]* -r \/tmp\/requirements\.control\.txt/,
+      )
+      expect(dockerfile).toMatch(/pip install [^\n]*--no-deps/)
+      expect(dockerfile).not.toMatch(/pip install [^\n]*modal==/) // the old top-level-only pin
+    })
+
+    it('lists the SDK and its transitive dependencies, each with at least one hash', () => {
+      const names = blocks.map((b) => /^([^=]+)==/.exec(b)![1])
+      expect(names).toContain('modal')
+      expect(names).toEqual(
+        expect.arrayContaining(['grpclib', 'protobuf', 'synchronicity', 'rich']),
+      )
+      for (const block of blocks) {
+        expect(block, block.split('\n')[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/)
+      }
+    })
+
+    it('is uv.lock: every pinned version equals the lock’s', () => {
+      for (const block of blocks) {
+        const [, name, version] = /^([^=]+)==(\S+)/.exec(block)!
+        expect(version, name).toBe(lockedVersion(name))
+      }
+    })
+
+    it('is copied into the build context by the allow-list', () => {
+      expect(dockerfile).toMatch(/^COPY requirements\.control\.txt /m)
+    })
   })
 
   it('cannot upload the operator’s env files in its build context', () => {
     const ignore = read('deploy/modal/Dockerfile.control.dockerignore')
     const rules = ignore.split('\n').filter((l) => l && !l.startsWith('#'))
-    expect(rules).toEqual(['*', '!control_sidecar.py'])
+    expect(rules).toEqual(['*', '!control_sidecar.py', '!requirements.control.txt'])
   })
 })

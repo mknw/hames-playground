@@ -413,7 +413,7 @@ class Host:
         return self.is_ancestor(sha, "refs/remotes/origin/main")
 
     def changed_paths(self, old, new):
-        return self._git("diff", "--name-only", old, new).splitlines()
+        return self._git("diff", "--name-only", "--no-renames", old, new).splitlines()
 
     def show(self, sha, path):
         result = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "show", "%s:%s" % (sha, path)],

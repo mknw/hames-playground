@@ -906,6 +906,30 @@ class Switch(unittest.TestCase):
         self.assertEqual(list(self.keep.glob("managed-*")), [])
 
 
+class ChangedPaths(unittest.TestCase):
+    def test_renaming_infra_to_markdown_keeps_the_old_infra_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            git(repo, "init", "-q")
+            git(repo, "config", "user.email", "t@example.invalid")
+            git(repo, "config", "user.name", "t")
+            git(repo, "config", "diff.renames", "true")
+            old_path = "docker/neo4j/Dockerfile"
+            new_path = old_path + ".md"
+            (repo / old_path).parent.mkdir(parents=True)
+            (repo / old_path).write_text("FROM scratch\n# same content before and after\n")
+            git(repo, "add", old_path)
+            git(repo, "commit", "-qm", "infra")
+            old = git(repo, "rev-parse", "HEAD")
+            git(repo, "mv", old_path, new_path)
+            git(repo, "commit", "-qm", "rename")
+            new = git(repo, "rev-parse", "HEAD")
+            host = follow.Host(config(FOLLOW_CHECKOUT=str(repo)))
+            changed = host.changed_paths(old, new)
+            self.assertEqual(set(changed), {old_path, new_path})
+            self.assertEqual(follow.infra_paths(changed), [old_path])
+
+
 class Promotion(unittest.TestCase):
     REPORT = "# Release check\n\n- **Verdict:** GO — every hermetic layer passed\n- **Commit:** %s\n" % A
 
@@ -1021,6 +1045,7 @@ MUTATIONS = [
     ("secret-default", "FOLLOW_SCRIPT", 'if SECRET_SHAPED.search(parts[1]):', 'if False:'),
     ("print-env-values", "FOLLOW_SCRIPT", 'self.log("notice", "ENV", "%s; UNDO: restore the backup" % "; ".join(env_reasons))', 'self.log("notice", "ENV", host.read(runtime_env))'),
     # infra
+    ("infra-rename-hidden", "FOLLOW_SCRIPT", '"diff", "--name-only", "--no-renames", old, new', '"diff", "--name-only", old, new'),
     ("release-infra-deploys", "FOLLOW_SCRIPT", '"release": {"env": "ask", "infra": "ask"}', '"release": {"env": "ask", "infra": "warn"}'),
     ("no-caddy-infra", "FOLLOW_SCRIPT", '    "configs/Caddyfile*",\n', ''),
     ("no-hash-drift", "FOLLOW_SCRIPT", '    names = (set(before) | set(after)) - {service}', '    names = set()'),

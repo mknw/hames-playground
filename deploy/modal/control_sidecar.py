@@ -18,11 +18,12 @@ Why a sidecar and not shelling out to `ops.py` from the app container:
     `modal container stop` through `sys.executable`) — vending it per request
     would be an unauthenticated CLI wrapper, not a service.
 
-Run on the host (a systemd unit is the intended shape — `README.md`, "The
-control sidecar"):
+Where it runs (`README.md`, "The control sidecar"): as its own compose service
+in the release project, on a network shared only with the app, with NO published
+port (`docker-compose.prod.yaml`, `Dockerfile.control`). For a dev host it runs
+directly, loopback-bound:
 
-    uv run --env-file deploy.local.env --env-file control.local.env \
-        python control_sidecar.py
+    uv run --env-file control.local.env python control_sidecar.py
 
 Env (the `control.local.env` file; both gitignored at the repo root):
 
@@ -40,9 +41,15 @@ The app's side (`app/src/lib/inference/modal-control.server.ts`) reads only
 falls back to today's behaviour and the admin panel says so.
 
 NEVER wakes a scaled-to-zero box: every handler here speaks to Modal's control
-plane (`modal.Server.from_name(...)`), never to the box's own endpoint — that
-property is the whole reason this service exists (`ops.py status` is today the
-only check that does not start a container).
+plane (`modal container list`, `modal.Server.from_name(...)`), never to the
+box's own endpoint — that property is the whole reason this service exists
+(`ops.py status` is today the only check that does not start a container).
+
+`GET /state` answers per box a list of containers, each `{container_id,
+started_at_ms, ready}`: the LIST is Modal's task list (booting and pending
+containers included, with their start time), `ready` is whether the container
+is registered to serve (the SDK's experimental call, which lists a container
+only once its `@modal.enter` boot has finished — see `_cli_container_rows`).
 """
 
 from __future__ import annotations
@@ -50,8 +57,10 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -75,79 +84,118 @@ BOXES: dict[str, tuple[str, str]] = {
 
 MAX_BODY_BYTES = 64 * 1024
 
+# The CLI is a fresh Python process (it imports the SDK and opens a channel),
+# so one listing takes seconds, not milliseconds; the app's read timeout
+# (`MODAL_CONTROL_READ_TIMEOUT_MS`) is sized above this. A stop is one more
+# process per container.
+CLI_LIST_TIMEOUT_S = 12
+CLI_STOP_TIMEOUT_S = 20
+
+# What Modal's own task ids look like (`ta-01…`). Validated before the id
+# reaches `modal container stop` as an argv word: argv-only means no shell
+# injection, but click would parse a value starting with `-` as an OPTION.
+CONTAINER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
 
 def _server_for(box: str) -> "modal.Server":
     app_name, server_name = BOXES[box]
     return modal.Server.from_name(app_name, server_name)
 
 
-def _list_containers(box: str) -> list[dict[str, Any]]:
-    """The box's containers, from the SDK's experimental call.
+def _cli_container_rows() -> list[dict[str, Any]]:
+    """EVERY container in the environment that Modal has created or queued, from
+    `modal container list --json` — the SOURCE of "has Modal created a container
+    for this box?".
 
-    Primary: `server._experimental_list_containers()` — the one call that
-    answers "is it up?" without starting anything (issue #1057's table, and
-    `ops.py status`). Modal marks it experimental: if it ever disappears from
-    the SDK, the fallback is the documented CLI equivalent,
-    `modal container list --json`, which also carries each container's start
-    time (the SDK's container objects do not — `container_id`/`host`/`port` at
-    the pinned 1.6.1). `test_control_sidecar.py` fails loudly the day the
-    experimental call stops being the path this takes.
+    Why this and not the SDK's `Server._experimental_list_containers()`: at the
+    pinned 1.6.1 that call is `FlashContainerList`, documented as "the containers
+    currently registered to serve requests" (`modal/_server.py:160-175`). A
+    `@modal.server` container registers only once its lifecycle enter methods
+    have finished (`_runtime/user_code_imports.py:364-379` runs the post-snapshot
+    enter methods, THEN `flash_entry.enter()`, which sends
+    `ContainerServerLifecycleReady` — `experimental/flash_server.py:20`), and both
+    of this deployment's boxes do their whole boot inside `@modal.enter`. So for
+    the entire boot — 8–15 minutes for the 27B, 305–577 s for the 4B on a full
+    boot — that call lists ZERO containers although the container exists. The
+    CLI's list is `TaskList` (`modal/cli/container.py:40-70`): booting and pending
+    tasks are in it, each with `started_at` (printed `Pending` while it has none).
+
+    One row per container: `container_id`, `app_id`, `app_name`, `start_time`
+    (an ISO timestamp with offset, or the word `Pending`).
     """
-    app_name = BOXES[box][0]
-    server = _server_for(box)
-    experimental = getattr(server, "_experimental_list_containers", None)
-    if experimental is None:
-        return _cli_list_containers(app_name)
-    return [{"container_id": c.container_id, "started_at_ms": None} for c in experimental()]
-
-
-def _cli_list_containers(app_name: str) -> list[dict[str, Any]]:
-    """The fallback when the experimental call disappears: the CLI's list.
-
-    `modal container list --json` prints one object per container with
-    `container_id`, `app_name` and `start_time` (a localized ISO timestamp);
-    rows for other apps are filtered out. Started times are converted to epoch
-    ms here so the wire carries one unambiguous number.
-    """
-    from datetime import datetime
-
     out = subprocess.run(
         [sys.executable, "-m", "modal", "container", "list", "--json"],
         check=True,
         capture_output=True,
         text=True,
+        timeout=CLI_LIST_TIMEOUT_S,
     ).stdout
     rows = json.loads(out)
+    if not isinstance(rows, list):
+        raise ValueError("modal container list --json did not answer a list")
+    return rows
+
+
+def _started_at_ms(raw: Any) -> int | None:
+    """Epoch ms of a `start_time` cell, or None for `Pending` / anything else."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(raw).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _ready_ids(box: str) -> set[str] | None:
+    """The containers REGISTERED TO SERVE — the SDK's experimental call. Used for
+    "ready" only, never for "does a container exist". `None` when the call is
+    gone or fails: readiness is then unknown (the container list is unaffected).
+    """
+    try:
+        experimental = getattr(_server_for(box), "_experimental_list_containers", None)
+        if experimental is None:
+            return None
+        return {str(c.container_id) for c in experimental()}
+    except Exception:
+        return None
+
+
+def _box_containers(box: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    app_name = BOXES[box][0]
+    ready = _ready_ids(box)
     containers: list[dict[str, Any]] = []
     for row in rows:
         if row.get("app_name") != app_name:
             continue
-        started_at_ms = None
-        raw = row.get("start_time")
-        if isinstance(raw, str):
-            try:
-                started_at_ms = int(datetime.fromisoformat(raw).timestamp() * 1000)
-            except ValueError:
-                started_at_ms = None
+        container_id = row.get("container_id")
         containers.append(
-            {"container_id": row.get("container_id"), "started_at_ms": started_at_ms}
+            {
+                "container_id": container_id,
+                "started_at_ms": _started_at_ms(row.get("start_time")),
+                "ready": None if ready is None else str(container_id) in ready,
+            }
         )
     return containers
 
 
-def _box_state(box: str) -> dict[str, Any]:
+def _box_state(box: str, rows: list[dict[str, Any]] | None = None, rows_error: str | None = None) -> dict[str, Any]:
     """One box's answer for `GET /state`: never raises — a broken box is a
     degraded field (`ok: false`), not a broken response, so the OTHER box on
-    the same request still answers."""
+    the same request still answers. `rows` is the shared CLI listing (one
+    process per request, not one per box)."""
     app_name, server_name = BOXES[box]
     if not (os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET")):
         return {"ok": False, "error": "missing-modal-token", "app": app_name, "server": server_name}
     try:
+        if rows is None:
+            if rows_error is not None:
+                raise RuntimeError(rows_error)
+            rows = _cli_container_rows()
         return {
             "ok": True,
             "app": app_name,
             "server": server_name,
-            "containers": _list_containers(box),
+            "containers": _box_containers(box, rows),
         }
     except Exception as err:  # modal SDK errors, CLI failures, shape surprises
         return {
@@ -158,11 +206,23 @@ def _box_state(box: str) -> dict[str, Any]:
         }
 
 
+def _all_box_states() -> dict[str, dict[str, Any]]:
+    rows: list[dict[str, Any]] | None = None
+    rows_error: str | None = None
+    if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
+        try:
+            rows = _cli_container_rows()
+        except Exception as err:
+            rows_error = str(err)
+    return {box: _box_state(box, rows, rows_error) for box in BOXES}
+
+
 def _set_min_containers(box: str, min_containers: int) -> dict[str, Any]:
     """Boot or release a box through its autoscaler — the switch's mechanism.
     `min_containers=1` boots WITHOUT any request being sent; `0` returns the
     box to scale-to-zero. Only `min_containers` is ever passed: every other
-    parameter keeps the value it already had."""
+    parameter keeps the value it already had. The answer carries the value
+    Modal reports back, which is what the app's release retry confirms."""
     if not (os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET")):
         return {"ok": False, "error": "missing-modal-token"}
     try:
@@ -174,27 +234,46 @@ def _set_min_containers(box: str, min_containers: int) -> dict[str, Any]:
 
 def _stop_containers(box: str) -> dict[str, Any]:
     """Stop the box's containers now, instead of waiting out the billed
-    scaledown window — `ops.py stop`'s call, per container."""
+    scaledown window — `ops.py stop`'s call, per container. Booting containers
+    are stopped too (the list is the CLI's). Never raises: a failing CLI is
+    `{ok: false}` with what it stopped before failing, never a dropped
+    connection."""
     state = _box_state(box)
     if not state.get("ok"):
-        return {"ok": False, "error": state.get("error", "unknown")}
+        return {"ok": False, "error": state.get("error", "unknown"), "stopped": []}
     stopped: list[str] = []
     for container in state.get("containers", []):
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "modal",
-                "container",
-                "stop",
-                str(container["container_id"]),
-                "--yes",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        stopped.append(str(container["container_id"]))
+        container_id = str(container["container_id"])
+        if not CONTAINER_ID.match(container_id):
+            return {
+                "ok": False,
+                "error": "refusing a container id that is not a Modal task id",
+                "stopped": stopped,
+            }
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "modal", "container", "stop", container_id, "--yes"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=CLI_STOP_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "error": f"modal container stop timed out after {CLI_STOP_TIMEOUT_S}s",
+                "stopped": stopped,
+            }
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or "").strip().splitlines()[-1:] or [str(err)]
+            return {
+                "ok": False,
+                "error": f"modal container stop failed (exit {err.returncode}): {detail[0][:200]}",
+                "stopped": stopped,
+            }
+        except OSError as err:
+            return {"ok": False, "error": f"modal container stop could not run: {err}", "stopped": stopped}
+        stopped.append(container_id)
     return {"ok": True, "stopped": stopped}
 
 
@@ -204,11 +283,18 @@ class Handler(BaseHTTPRequestHandler):
     own fault (401 no/wrong bearer, 400 an unknown route or body)."""
 
     server_version = "hames-modal-control/1.0"
+    # A client that connects and sends nothing would otherwise pin one thread
+    # for ever (`ThreadingHTTPServer`, no per-connection timeout by default).
+    timeout = 10
 
     def _authorized(self) -> bool:
-        expected = f"Bearer {CONTROL_TOKEN}"
-        # compare_digest: the token is the only secret on this wire.
-        return hmac.compare_digest(self.headers.get("Authorization", ""), expected)
+        expected = f"Bearer {CONTROL_TOKEN}".encode()
+        # compare_digest: the token is the only secret on this wire. BYTES, not
+        # str: http.server decodes header values as latin-1, and `compare_digest`
+        # on a str with a non-ASCII character raises TypeError — a handler that
+        # dies with no response on a hostile header instead of answering 401.
+        presented = self.headers.get("Authorization", "").encode("latin-1", "replace")
+        return hmac.compare_digest(presented, expected)
 
     def _send(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body).encode()
@@ -237,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?")[0] != "/state":
             self._send(400, {"ok": False, "error": f"no such route: GET {self.path}"})
             return
-        self._send(200, {"ok": True, "boxes": {box: _box_state(box) for box in BOXES}})
+        self._send(200, {"ok": True, "boxes": _all_box_states()})
 
     def do_POST(self) -> None:  # noqa: N802 - http.server's naming
         if not self._authorized():

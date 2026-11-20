@@ -21,8 +21,9 @@
  * survives until the Modal app is redeployed, and a redeploy resets it to the
  * app's own static value, so the demo's box would otherwise silently scale
  * down on the next deploy. `switch off` asserts `0` from the panel action
- * (`gpu-admin.server.ts`), not from here — this loop only ever re-asserts the
- * switch's ON.
+ * (`gpu-admin.server.ts`) through {@link driveModalSwitch}; if Modal does not
+ * CONFIRM `min_containers=0` the loop retries the release (see "OFF is a promise
+ * the loop keeps" below).
  *
  * **Without it** every tick calls `ensurePrivateTierAwake({ keepWarm: true })`
  * — the SAME entry point a turn, the header button and the open-page keep-warm
@@ -60,6 +61,25 @@
  * everything else to avoid. When off, every instance stops within one tick,
  * and the boxes scale down after their own windows: today's behaviour.
  *
+ * ## OFF is a promise the loop keeps, and ON/OFF never race (#1057 review)
+ *
+ * Two defects the first cut had, both silent. (1) `setGpuState(false)` was
+ * written and THEN the autoscaler call was made once; if the sidecar was down or
+ * slow, `min_containers` stayed 1 while the panel read OFF — a billed box with
+ * a switch claiming otherwise, and nothing retried. (2) A tick that had read ON
+ * could land its `1` after the panel's `0`. So: the panel's flip and every tick
+ * run under ONE per-process lock ({@link withSwitchLock}), a flip writes the
+ * switch and asserts the autoscaler inside it, and a tick reads the switch
+ * INSIDE it — so a tick either sees the flip or has finished before it. Across
+ * two app instances a lock cannot help, so a tick that asserted `1` re-reads the
+ * switch and, if it went OFF meanwhile, takes its own `1` back. A release Modal
+ * does not CONFIRM (`min_containers` reported as 0) is registered as pending
+ * and retried every tick, with a bounded exponential backoff
+ * ({@link releaseBackoffMs}: 30s doubling to a 5 min cap), until it is — a
+ * pending release is per process, like every clock on this route, so a restart
+ * between a failed release and its retry forgets it; the next panel OFF (or a
+ * `ops.py release`) is the recovery for that.
+ *
  * ## What a failed tick does
  *
  * A tick whose wake fails (box down, endpoint misconfigured, database
@@ -71,9 +91,13 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
-import { getGpuState } from '../db/gpu-state.server'
+import { getGpuState, setGpuState } from '../db/gpu-state.server'
 import {
+  modalBoxProbe,
   modalControlConfigured,
+  noteModalBootEnded,
+  noteModalBootRequested,
+  probeModalBoxes,
   setModalBoxMinContainers,
   type ModalBox,
 } from './modal-control.server'
@@ -150,6 +174,131 @@ export function startGpuKeepRunningLoop(intervalMs: number = gpuKeepTickMs()): v
   void tick(loop)
 }
 
+// ============================================================================
+// The switch lock, and the release that must be confirmed
+// ============================================================================
+
+const LOCK_KEY = Symbol.for('hames-app.gpu-switch-lock')
+type LockGlobal = typeof globalThis & { [LOCK_KEY]?: Promise<unknown> }
+
+/** Run `fn` after every earlier holder has finished — the per-process mutex a
+ *  panel flip and a loop tick share. A rejection releases it like a result. */
+export function withSwitchLock<T>(fn: () => Promise<T>): Promise<T> {
+  const g = globalThis as LockGlobal
+  const run = (g[LOCK_KEY] ?? Promise.resolve()).then(fn, fn)
+  g[LOCK_KEY] = run.catch(() => undefined)
+  return run
+}
+
+/** First retry of an unconfirmed release, and the cap the backoff doubles to. */
+export const RELEASE_BACKOFF_BASE_MS = 30_000
+export const RELEASE_BACKOFF_MAX_MS = 300_000
+
+/** How long to wait before the `attempts`-th retry (1-based): 30s, 60s, 120s,
+ *  240s, then 300s for ever — bounded, so a long outage is retried at a steady
+ *  low rate rather than at an ever-growing gap nobody would wait out. */
+export function releaseBackoffMs(attempts: number): number {
+  return Math.min(RELEASE_BACKOFF_MAX_MS, RELEASE_BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1))
+}
+
+const PENDING_KEY = Symbol.for('hames-app.gpu-pending-release')
+interface PendingRelease {
+  attempts: number
+  nextAt: number
+  lastReason: string | null
+}
+type PendingGlobal = typeof globalThis & {
+  [PENDING_KEY]?: Partial<Record<ModalBox, PendingRelease>>
+}
+function pendingReleases(): Partial<Record<ModalBox, PendingRelease>> {
+  const g = globalThis as PendingGlobal
+  return (g[PENDING_KEY] ??= {})
+}
+
+/** The boxes whose release (`min_containers=0`) Modal has not confirmed. */
+export function pendingReleaseBoxes(): ModalBox[] {
+  return Object.keys(pendingReleases()) as ModalBox[]
+}
+
+/** Test-only reset of the pending ledger. */
+export function resetPendingReleases(): void {
+  delete (globalThis as PendingGlobal)[PENDING_KEY]
+}
+
+/** Assert `min_containers=0` on one box and CONFIRM it: an answer that is not
+ *  `ok` with Modal reporting 0 is a failure. Never throws. */
+async function releaseConfirmed(box: ModalBox): Promise<string | null> {
+  const answer = await setModalBoxMinContainers(box, 0)
+  if (!answer.ok) return answer.reason ?? 'the control sidecar refused'
+  if (answer.minContainers !== 0) {
+    return `Modal answered min_containers=${String(answer.minContainers)}, not 0`
+  }
+  return null
+}
+
+/** Record a release that did not confirm, to be retried by the loop. */
+function registerPendingRelease(box: ModalBox, reason: string): void {
+  const pending = pendingReleases()
+  const attempts = (pending[box]?.attempts ?? 0) + 1
+  pending[box] = { attempts, nextAt: Date.now() + releaseBackoffMs(attempts), lastReason: reason }
+}
+
+/**
+ * The panel's flip through Modal's autoscaler — the whole of it under the
+ * switch lock: the switch is written, then each kept box is driven. `on` stamps
+ * the boot clock (so a boot that never gets a container is named NOT STARTING)
+ * and asserts `min_containers=1`; `off` ends the clock and asserts `0`
+ * CONFIRMED — a box whose release
+ * is not confirmed is left pending for the loop. Returns the first box that
+ * failed (the panel throws it), or `null`.
+ */
+export function driveModalSwitch(
+  on: boolean,
+  boxes: ModalBox[],
+): Promise<{ box: ModalBox; reason: string | null; doing: 'boot' | 'release' } | null> {
+  return withSwitchLock(async () => {
+    await setGpuState(on)
+    let failure: { box: ModalBox; reason: string | null; doing: 'boot' | 'release' } | null = null
+    for (const box of boxes) {
+      if (on) {
+        delete pendingReleases()[box]
+        noteModalBootRequested(box)
+        const answer = await setModalBoxMinContainers(box, 1)
+        if (!answer.ok && !failure) failure = { box, reason: answer.reason, doing: 'boot' }
+      } else {
+        noteModalBootEnded(box)
+        const reason = await releaseConfirmed(box)
+        if (reason === null) delete pendingReleases()[box]
+        else {
+          registerPendingRelease(box, reason)
+          failure ??= { box, reason, doing: 'release' }
+        }
+      }
+    }
+    return failure
+  })
+}
+
+/** Retry the releases that are due. Called by a tick that read the switch OFF,
+ *  under the lock. */
+async function retryPendingReleases(loop: ArmedLoop): Promise<void> {
+  const pending = pendingReleases()
+  for (const box of pendingReleaseBoxes()) {
+    const entry = pending[box]
+    if (!entry || Date.now() < entry.nextAt) continue
+    const reason = await releaseConfirmed(box)
+    if (reason === null) {
+      delete pending[box]
+      console.log(`[gpu-keep] Modal confirmed min_containers=0 for the ${box} box`)
+      continue
+    }
+    entry.attempts += 1
+    entry.nextAt = Date.now() + releaseBackoffMs(entry.attempts)
+    entry.lastReason = reason
+    logFailure(loop, `releasing the ${box} box`, new Error(reason))
+  }
+}
+
 /** The boxes this loop keeps up: the 4B always, the 27B only while it is one
  *  of ours (`LARGE_LLM_ROUTE=openrouter` puts it on a public per-token API,
  *  which the wake skips for the same reason). */
@@ -160,8 +309,20 @@ function keptBoxes(): ModalBox[] {
 /** One wake-up: re-read the switch, and if it is on, hold the boxes up —
  *  through Modal's autoscaler where the control route exists, through the one
  *  shared wake otherwise. Never throws — a timer callback that rejects is an
- *  unhandled rejection away from taking the process down. */
+ *  unhandled rejection away from taking the process down. The Modal route runs
+ *  under the switch lock (read the switch INSIDE it), so a flip and a tick never
+ *  interleave; the pings fallback has no such race to close (a ping cannot undo
+ *  an OFF). */
 async function tick(loop: ArmedLoop): Promise<void> {
+  if (!modalControlConfigured()) return tickPings(loop)
+  try {
+    await withSwitchLock(() => tickUnderLock(loop))
+  } catch (err) {
+    logFailure(loop, 'keeping the boxes up', err)
+  }
+}
+
+async function tickUnderLock(loop: ArmedLoop): Promise<void> {
   let on: boolean
   try {
     on = (await getGpuState()).keepRunning
@@ -171,24 +332,64 @@ async function tick(loop: ArmedLoop): Promise<void> {
   }
   if (!on) {
     // OFF: the switch may have just flipped, so the "one log per cause" latch
-    // resets — the next failure, whenever it comes, is a new cause.
+    // resets — the next failure, whenever it comes, is a new cause. A release
+    // Modal never confirmed is still owed, though.
+    if (loop.lastFailure !== null && pendingReleaseBoxes().length === 0) loop.lastFailure = null
+    await retryPendingReleases(loop)
+    return
+  }
+  // The autoscaler route: assert min_containers=1 per kept box, sending no
+  // request to either. Not idempotence for its own sake — a Modal redeploy
+  // resets the override to the app's static value, and the next tick is what
+  // brings the demo's box back before anyone notices.
+  const probe = await probeModalBoxes()
+  for (const box of keptBoxes()) {
+    delete pendingReleases()[box]
+    // No container yet: THIS is a boot asked for and not answered — the clock
+    // the panel's NOT STARTING reads. (Unreadable counts for nothing.)
+    const seen = modalBoxProbe(probe, box)
+    if (seen.ok && seen.containerCount === 0) noteModalBootRequested(box)
+    const answer = await setModalBoxMinContainers(box, 1)
+    if (!answer.ok) throw new Error(answer.reason ?? 'the control sidecar refused')
+  }
+  // Across two app instances the lock cannot serialise a flip on the OTHER one
+  // against this tick, so take the `1` back if the switch went OFF while it
+  // was in flight.
+  let still: boolean
+  try {
+    still = (await getGpuState()).keepRunning
+  } catch {
+    still = true // unreadable: the next tick re-reads; never act on a guess
+  }
+  if (!still) {
+    for (const box of keptBoxes()) {
+      noteModalBootEnded(box)
+      const reason = await releaseConfirmed(box)
+      if (reason !== null) registerPendingRelease(box, reason)
+    }
+    return
+  }
+  if (loop.lastFailure !== null) {
+    loop.lastFailure = null
+    console.log('[gpu-keep] the boxes are held up again; keep-running resumes quietly')
+  }
+}
+
+/** The fallback tick: keep-warm pings through the one shared wake. */
+async function tickPings(loop: ArmedLoop): Promise<void> {
+  let on: boolean
+  try {
+    on = (await getGpuState()).keepRunning
+  } catch (err) {
+    logFailure(loop, 'reading the switch', err)
+    return
+  }
+  if (!on) {
     if (loop.lastFailure !== null) loop.lastFailure = null
     return
   }
   try {
-    if (modalControlConfigured()) {
-      // The autoscaler route: assert min_containers=1 per kept box, sending
-      // no request to either. Not idempotence for its own sake — a Modal
-      // redeploy resets the override to the app's static value, and the next
-      // tick is what brings the demo's box back before anyone notices.
-      for (const box of keptBoxes()) {
-        const answer = await setModalBoxMinContainers(box, 1)
-        if (!answer.ok) throw new Error(answer.reason ?? 'the control sidecar refused')
-      }
-    } else {
-      // The fallback: keep-warm pings through the one shared wake.
-      await ensurePrivateTierAwake({ keepWarm: true })
-    }
+    await ensurePrivateTierAwake({ keepWarm: true })
     if (loop.lastFailure !== null) {
       loop.lastFailure = null
       console.log('[gpu-keep] the boxes are held up again; keep-running resumes quietly')

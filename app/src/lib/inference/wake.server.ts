@@ -731,6 +731,9 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
     // budget, so the loop below runs at least once and this initializer cannot
     // reach the message. It is here because TypeScript needs one, not as a case.
     let lastReason = 'it was never asked'
+    // The `at` of each distinct control-plane reading that listed NO container
+    // for this box since the not-starting threshold (see `notStartingFailure`).
+    const zeroReadings = new Set<number>()
 
     while (remaining() > 0) {
       signal.throwIfAborted()
@@ -758,7 +761,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
       // The control plane's verdict on the boot, past the not-starting
       // threshold: a box Modal cannot give a container is named as failing here,
       // well before the wake budget runs out (see `notStartingFailure`).
-      const notStarting = await notStartingFailure(target, started, attempts)
+      const notStarting = await notStartingFailure(target, started, attempts, zeroReadings)
       if (notStarting) throw notStarting
       // Do not sleep out the tail of the budget: a gap that ends after the budget
       // does is time the user waits for nothing.
@@ -787,39 +790,50 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
  * A box that cannot start does not answer its endpoint with progress: it
  * answers the same bare 503 as one that is merely slow (237 attempts over
  * 1200 s that morning), so the app cannot tell them apart from the wire. The
- * CONTROL plane can: Modal reports how many containers the box has, and a
+ * CONTROL plane can: it reports whether Modal has CREATED a container for the
+ * box — from Modal's TASK list, which includes queued and booting containers
+ * with their start time (`deploy/modal/control_sidecar.py`), never from the
+ * serving registry, which lists a container only once its `@modal.enter`
+ * boot has finished and so is empty for the whole 8–15 minute full boot. A
  * container is created within seconds of the scale-up the poll's own first
- * request triggers — a full boot happens INSIDE a container. So after
+ * request triggers; the full boot then happens INSIDE it. So after
  * `modalNotStartingAfterMs()` (default 300 s, deliberately well under the
- * 1200 s wake budget) of asking, no container means the SCALE-UP is failing
- * — quota, payment, misconfiguration — and every later attempt is the same
- * rejection. The poll then ends EARLY, visibly, with the message that names
- * it and the user's options, instead of hammering 503s until the budget
- * expires (#1057: "a real failure is named as one before the 20-minute wake
- * timeout").
+ * 1200 s wake budget) of asking, TWO distinct readings of "no container at
+ * all" (one reading can be a blip; the probe is cached 12 s, so the second is
+ * a fresh one) mean the SCALE-UP is failing — quota, payment, misconfiguration
+ * — and every later attempt is the same rejection. The poll then ends EARLY,
+ * visibly, with the message that names it and the user's options, instead of
+ * hammering 503s until the budget expires (#1057: "a real failure is named as
+ * one before the 20-minute wake timeout"). A box that has a container, however
+ * long it has been booting, is slow and never failing here.
  *
  * Every degraded answer is `null` — keep polling — because this check must
  * never be the reason a turn fails: an unreachable sidecar, a probe error or
  * an unexpected shape falls back to today's budget-bound behaviour exactly,
- * and a box with containers up is slow, not failing.
+ * and a box with a container is slow, not failing.
  */
 async function notStartingFailure(
   target: WakeTarget,
   started: number,
   attempts: number,
+  zeroReadings: Set<number>,
 ): Promise<WakeFailure | null> {
   if (!modalControlConfigured()) return null
   if (Date.now() - started < modalNotStartingAfterMs()) return null
-  const box = modalBoxProbe(await probeModalBoxes(), target.box)
+  const probe = await probeModalBoxes()
+  const box = modalBoxProbe(probe, target.box)
   if (!box.ok || box.containerCount === null) return null // degraded — keep polling
-  if (box.containerCount > 0) return null // a container is up: booting, not failing
+  if (box.containerCount > 0) return null // a container exists: booting, not failing
+  zeroReadings.add(probe.at)
+  if (zeroReadings.size < 2) return null // one reading is a blip; wait for a fresh one
   const waitedS = Math.round((Date.now() - started) / 1000)
   return new WakeFailure(
     target.box,
     `${target.failed}: Modal's control plane reports NO container for this box after ` +
       `${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s — the start is ` +
-      `failing, not slow. You can wait and retry (send again), or stop the box from the ` +
-      `admin panel and switch it back on. ${NO_FALLBACK}`,
+      `failing, not slow: Modal never created a container (check the Modal app's quota and ` +
+      `billing). You can wait and retry (send again), or switch the keep-running off and on in ` +
+      `the admin panel. ${NO_FALLBACK}`,
   )
 }
 

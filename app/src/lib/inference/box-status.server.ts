@@ -9,22 +9,28 @@
  * send to a box, and only under the control plane's say-so: a request to a
  * scaled-to-zero box STARTS a GPU container (`small-gpu.server.ts` states the
  * rule), so this module never decides for itself whether to ask —
- * `gpu-admin.server.ts` calls it only when Modal reports a container.
+ * `gpu-admin.server.ts` calls it only for a container Modal reports ready.
  *
- * ## The cache
+ * ## Once per container, never on a timer
  *
- * One sample per box, cached process-side for the probe's own TTL (12 s), so
- * the panel's 3 s poll rides it rather than re-asking a live box; a failed
- * read caches `null` for the same window so a booting box's 503s cost one
- * request per window, not one per poll. Process-local like every clock on
- * this route, for the same reasons.
+ * Every request to a box goes through Modal's proxy, and a request resets the
+ * box's scaledown window (the same reason a keep-warm ping keeps a box up) —
+ * so a panel that re-read `/status` on its poll while a container was up would
+ * HOLD THE BOX UP for as long as the page was open, and a read that lands just
+ * after a scale-to-zero starts a fresh container (#1057 review: 100 reads in
+ * 600 s from one open panel, switch OFF). What `/status` reports —
+ * `restored`, `gpu` — is a property of the container, fixed for its life, so
+ * it is read ONCE per container id and the result, a failure included, is
+ * remembered for that id. A different id (a new container) is a new read; the
+ * same id is never asked again, by anyone, however many panels poll. Process
+ * -local like every clock on this route.
  *
  * No user id, no conversation id, no prompt, no content (SD-10): the read
  * carries a box key and its own Authorization header.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
-import { MODAL_PROBE_CACHE_TTL_MS, type ModalBox } from './modal-control.server'
+import type { ModalBox } from './modal-control.server'
 
 assertServerOnImport()
 
@@ -40,9 +46,16 @@ export interface BoxStatusSample {
   at: number
 }
 
-const cache: Partial<Record<ModalBox, BoxStatusSample | null>> = {}
+interface Remembered {
+  containerId: string
+  /** The one read for this container: pending while in flight, so a second
+   *  caller shares it instead of sending a second request. */
+  read: Promise<BoxStatusSample | null>
+}
 
-/** Test-only reset: drop both cached samples. */
+const cache: Partial<Record<ModalBox, Remembered>> = {}
+
+/** Test-only reset: forget both boxes' reads. */
 export function resetBoxStatusCacheForTests(): void {
   delete cache.large
   delete cache.small
@@ -58,21 +71,26 @@ function boxStatusUrl(box: ModalBox): { url: string; key: string | null } {
 }
 
 /**
- * Read one box's `/status`, from the cache when fresh. NEVER THROWS and
- * never decides whether the box may be asked — the caller owns that gate
- * (`gpu-admin.server.ts` opens it only on the control plane's container
- * count). `null` when unreadable (unconfigured box, a 503 while the weights
- * load, a timeout, a body that is not the expected JSON).
+ * Read one box's `/status` for one container — ONCE per container id. NEVER
+ * THROWS and never decides whether the box may be asked — the caller owns that
+ * gate (`gpu-admin.server.ts` opens it only for a container the control plane
+ * lists as READY, i.e. registered to serve). `null` when unreadable
+ * (unconfigured box, a non-200, a timeout, a body that is not the expected
+ * JSON) — and that `null` is remembered too, so a failing read is not retried
+ * on the poll.
  */
-export async function readBoxStatus(box: ModalBox): Promise<BoxStatusSample | null> {
-  const cached = cache[box]
-  if (
-    cached !== undefined &&
-    cached !== null &&
-    Date.now() - cached.at < MODAL_PROBE_CACHE_TTL_MS
-  ) {
-    return cached
-  }
+export function readBoxStatus(
+  box: ModalBox,
+  containerId: string,
+): Promise<BoxStatusSample | null> {
+  const remembered = cache[box]
+  if (remembered && remembered.containerId === containerId) return remembered.read
+  const read = fetchBoxStatus(box)
+  cache[box] = { containerId, read }
+  return read
+}
+
+async function fetchBoxStatus(box: ModalBox): Promise<BoxStatusSample | null> {
   const { url, key } = boxStatusUrl(box)
   if (!/^https?:\/\//.test(url)) return null // unconfigured box — nothing to ask
   const controller = new AbortController()
@@ -91,13 +109,11 @@ export async function readBoxStatus(box: ModalBox): Promise<BoxStatusSample | nu
       gpu?: unknown
     } | null
     if (body === null) return null
-    const sample: BoxStatusSample = {
+    return {
       restored: typeof body.restored === 'boolean' ? body.restored : null,
       gpu: typeof body.gpu === 'string' && body.gpu !== '' ? body.gpu : null,
       at: Date.now(),
     }
-    cache[box] = sample
-    return sample
   } catch {
     return null
   } finally {

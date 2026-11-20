@@ -454,6 +454,151 @@ class BlockingServer(FakeServer):
 class OrderContract(SidecarTestCase):
     """An abandoned ON must not land after a later OFF (#1060 round 2)."""
 
+    def test_stuck_head_does_not_park_abandoned_requests_or_apply_them_later(self):
+        """Adopted from review-1060-r3-stuck-queue-probe.py: one hung SDK
+        call, 40 abandoned HTTP requests, and an independent small box."""
+        large = BlockingServer("hames-private-27b", "Qwen27B")
+        small = FakeServer("hames-small-models", "SmallModels")
+        module = self.sidecar([small, large])
+        module.AUTOSCALER_WAIT_TIMEOUT_S = 0.08
+        httpd = self.serve(module)
+        httpd.handle_error = lambda *args: None  # clients intentionally abandon
+        port = httpd.server_address[1]
+
+        def post(value, timeout):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/autoscaler", method="POST",
+                data=json.dumps({"box": "large", "min_containers": value}).encode(),
+                headers={"Authorization": f"Bearer {TOKEN}"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as res:
+                    return json.loads(res.read())
+            except (TimeoutError, OSError):
+                return None
+
+        base = threading.active_count()
+        try:
+            self.assertIsNone(post(1, 0.02))
+            self.assertTrue(large.entered.wait(1))
+            for i in range(40):
+                post(i % 2, 0.01)
+            time.sleep(0.15)  # beyond every scaled queue deadline
+            self.assertLessEqual(threading.active_count() - base, 2,
+                                 "only the hung SDK call may retain a handler")
+            self.assertEqual(large.applied, [])
+            self.assertEqual(post(0, 1), {"ok": False, "error":
+                             "modal control plane: autoscaler queue wait timed out"})
+            self.assertEqual(self.request(module, "POST", "/autoscaler",
+                                         {"box": "small", "min_containers": 0})[1],
+                             {"ok": True, "min_containers": 0})
+        finally:
+            large.release.set()
+        # Let the original SDK call finish; expired tickets must never apply.
+        deadline = time.monotonic() + 2
+        while threading.active_count() > base and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(large.applied, [1])
+        self.assertEqual(post(0, 1), {"ok": True, "min_containers": 0})
+        self.assertEqual(large.applied, [1, 0])
+
+    def test_queue_wait_is_shorter_than_the_app_timeout(self):
+        module = self.sidecar([])
+        self.assertGreater(module.AUTOSCALER_WAIT_TIMEOUT_S, 0)
+        self.assertLess(module.AUTOSCALER_WAIT_TIMEOUT_S, 15)
+
+    def test_watchdog_exits_on_a_hung_call_using_a_monotonic_clock(self):
+        module = self.sidecar([])
+        now = [0.0]
+        exits = []
+        order = module._Ordered(clock=lambda: now[0], exit_process=exits.append)
+        entered, release = threading.Event(), threading.Event()
+        worker = threading.Thread(target=lambda: order.run(
+            "large", lambda: (entered.set(), release.wait(2))), daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            now[0] = 89.9
+            order.check_watchdog()
+            self.assertEqual(exits, [])
+            now[0] = 90.1
+            order.check_watchdog()
+            self.assertEqual(exits, [1])
+        finally:
+            release.set()
+            worker.join(1)
+        now[0] = 200
+        exits.clear()
+        order.check_watchdog()
+        self.assertEqual(exits, [], "completed calls disarm their deadline")
+
+    def test_three_arrivals_remain_FIFO_even_if_a_mutex_prefers_the_latest_waiter(self):
+        module = self.sidecar([])
+        # Python promises no fairness for Lock. This legal LIFO lock makes
+        # the plain-Lock mutation deterministically fail instead of relying on
+        # the OS to happen to schedule an unfair acquisition during this run.
+        class UnfairLock:
+            def __init__(self):
+                self.cond = threading.Condition()
+                self.busy = False
+                self.waiters = []
+
+            def __enter__(self):
+                with self.cond:
+                    ticket = object()
+                    self.waiters.append(ticket)
+                    while self.busy or self.waiters[-1] is not ticket:
+                        self.cond.wait()
+                    self.waiters.pop()
+                    self.busy = True
+
+            def __exit__(self, *args):
+                with self.cond:
+                    self.busy = False
+                    self.cond.notify_all()
+
+        module.threading = types.SimpleNamespace(Condition=threading.Condition, Lock=UnfairLock)
+        order = module._Ordered()
+        entered, release = threading.Event(), threading.Event()
+        applied = []
+
+        def apply(value):
+            if value == 1:
+                entered.set()
+                release.wait(2)
+            applied.append(value)
+
+        workers = []
+        try:
+            for value in (1, 2, 3):
+                worker = threading.Thread(target=lambda v=value: order.run("large", lambda: apply(v)),
+                                          daemon=True)
+                workers.append(worker)
+                worker.start()
+                if value == 1:
+                    self.assertTrue(entered.wait(1))
+                else:
+                    # Observe the request actually parked, not just started.
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline:
+                        if any(frame.f_code.co_name == "wait" for frame in
+                               self._frames(worker.ident)):
+                            break
+                        time.sleep(0.001)
+                    else:
+                        self.fail("request never entered the queue")
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(2)
+        self.assertEqual(applied, [1, 2, 3], "the request arriving behind two others must run last")
+
+    @staticmethod
+    def _frames(ident):
+        frame = sys._current_frames().get(ident)
+        while frame:
+            yield frame
+            frame = frame.f_back
+
     def test_a_slow_ON_followed_by_OFF_ends_at_zero(self):
         large = BlockingServer("hames-private-27b", "Qwen27B")
         module = self.sidecar([FakeServer("hames-small-models", "SmallModels"), large])

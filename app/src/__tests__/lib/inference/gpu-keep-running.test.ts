@@ -586,6 +586,40 @@ describe('#1057 review: the release is confirmed, retried, and never raced', () 
       { box: 'small', min_containers: 0 },
     ])
   })
+
+  it('re-asserts the last known OFF during a database outage, including pending releases', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(10) // last successful read is OFF
+    expect(posted).toHaveLength(2)
+    getGpuState.mockRejectedValue(new Error('database down'))
+    // Model an ON from a different instance landing during this outage.
+    answer = () => new Response(JSON.stringify({ ok: true, min_containers: 1 }))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS + TICK)
+    expect(posted.slice(2)).toEqual([
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+    expect(pendingReleaseBoxes().sort()).toEqual(['large', 'small'])
+    answer = okAnswer
+    await vi.advanceTimersByTimeAsync(RELEASE_BACKOFF_BASE_MS)
+    expect(pendingReleaseBoxes()).toEqual([])
+    expect(posted).toHaveLength(6)
+  })
+
+  it('does not guess OFF when the database has never answered or was last ON', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    getGpuState.mockRejectedValue(new Error('database down'))
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(TICK)
+    expect(posted).toEqual([])
+    getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+    await vi.advanceTimersByTimeAsync(TICK)
+    expect(posted.map((p) => p.min_containers)).toEqual([1, 1])
+    getGpuState.mockRejectedValue(new Error('database down'))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS + TICK)
+    expect(posted.map((p) => p.min_containers)).toEqual([1, 1])
+  })
 })
 
 describe('#1060 round 2: an ON request the app abandoned (timeout) still lands at Modal after a confirmed OFF', () => {

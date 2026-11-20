@@ -123,8 +123,8 @@ describe('catalogue graders', () => {
   // turn's actual deflections ("no dedicated Project node… consult internal
   // documentation"). r2 (review): the release reply is "consult internal DTSC
   // documentation" — the org name between the words — so the pattern tolerates a
-  // few words there and spells organi[sz]ation both ways. r3 (review): the prefix
-  // is consult(?:ing)?\b, not consult\w* — \w* also matched "consulted", so a
+  // few words there and spells organi[sz]ation both ways. #1061 adds "consults"
+  // and "consultation" with explicit suffixes. r3 (review): consult\w* also matched "consulted", so a
   // CORRECT answer reporting what it did failed the row on the pattern alone
   // ("I consulted your internal SharePoint documentation: …", a wording the
   // prompt itself invites), and it was quadratic on a consult-repeat. MUTATION

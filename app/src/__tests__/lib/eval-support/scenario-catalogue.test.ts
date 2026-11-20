@@ -80,6 +80,7 @@ const RESTRAINT = new Set([
 /** Graders a module takes from its own row (`evals/general-next/catalogue-checks.ts`)
  * rather than restating them, so a row carrying one needs a module that reads it. */
 const FROM_CATALOGUE = new Set([
+  'toolsNotBefore',
   'answerMatches',
   'answerNotMatches',
   'answerExcludes',

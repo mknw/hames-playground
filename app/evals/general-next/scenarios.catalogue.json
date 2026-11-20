@@ -3196,7 +3196,7 @@
         {
           "check": "answerNotMatches",
           "says": "no deferral to internal documentation or colleagues while the tools read those sources",
-          "pattern": "consult(?:ing)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
+          "pattern": "consult(?:s|ing|ation)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "I could not find a dedicated Project node; please consult internal documentation for the organisation's projects.",
@@ -3204,6 +3204,8 @@
               "No dedicated Project node was found; please consult internal DTSC documentation.",
               "I found nothing in the graph; please consult internal Lantern documentation.",
               "Try consulting your internal documentation for the projects.",
+              "The answer requires someone who consults internal documentation.",
+              "Please arrange a consultation of internal documentation for the projects.",
               "I cannot find your company's projects; please consult your company's internal project documentation.",
               "Please contact the organization for its projects.",
               "Please contact the organisation."
@@ -3276,12 +3278,14 @@
         {
           "check": "answerNotMatches",
           "says": "no 'no Project node' deflection and no deferral to internal documentation while the graph rows name three",
-          "pattern": "no (?:dedicated )?Project node|consult(?:ing)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
+          "pattern": "no (?:dedicated )?Project node|consult(?:s|ing|ation)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "There is no dedicated Project node in the knowledge graph; consult internal documentation.",
               "The graph holds no Project node, so I cannot say.",
               "No dedicated Project node was found; consult internal DTSC documentation.",
+              "The answer requires someone who consults internal documentation.",
+              "Please arrange a consultation of internal documentation for the projects.",
               "Please contact the organisation for its projects."
             ],
             "noMatch": [
@@ -3336,8 +3340,13 @@
         },
         {
           "check": "toolsNotBefore",
-          "says": "no office files tool (graph_files_search, graph_files_list, graph_files_recent) runs before the public web search",
-          "tools": ["graph_files_search", "graph_files_list", "graph_files_recent"],
+          "says": "no office files tool (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared) runs before the public web search",
+          "tools": [
+            "graph_files_search",
+            "graph_files_list",
+            "graph_files_recent",
+            "graph_files_shared"
+          ],
           "before": "search"
         },
         {

@@ -253,20 +253,43 @@ describe('resolveTestDatabase: CI with no database skips', () => {
  * access has the same meaning. This checks the suite's direct Vitest idiom,
  * not arbitrary JavaScript control flow or aliases.
  */
-function databaseSkipPolicyViolations(source: string): string[] {
-  const tree = ts.createSourceFile('database.test.ts', source, ts.ScriptTarget.Latest, true)
+function databaseSkipPolicyViolations(source: string, filename = 'database.test.ts'): string[] {
+  const tree = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true)
   const violations: string[] = []
   let guarded = false
   const named = (node: ts.Node | undefined, name: string): boolean =>
     !!node && ts.isIdentifier(node) && node.text === name
+  const unwrap = (node: ts.Expression): ts.Expression => {
+    while (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node)
+    ) {
+      node = node.expression
+    }
+    return node
+  }
   const member = (node: ts.Node): string | undefined => {
     if (ts.isPropertyAccessExpression(node)) return node.name.text
-    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
-      return node.argumentExpression.text
+    if (ts.isElementAccessExpression(node)) {
+      const key = unwrap(node.argumentExpression)
+      if (ts.isStringLiteralLike(key)) return key.text
     }
   }
-  const callback = (call: ts.CallExpression) =>
-    call.arguments.find((arg) => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))
+  const finalName = (node: ts.Expression): string | undefined => {
+    node = unwrap(node)
+    return ts.isIdentifier(node) ? node.text : member(node)
+  }
+  function callback(node: ts.Expression): ts.ArrowFunction | ts.FunctionExpression | undefined {
+    node = unwrap(node)
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node
+    if (ts.isCallExpression(node)) {
+      for (const arg of node.arguments) {
+        const fn = callback(arg)
+        if (fn) return fn
+      }
+    }
+  }
   const isGuardCall = (node: ts.Node, context: ts.BindingName): boolean =>
     ts.isCallExpression(node) &&
     named(node.expression, 'skipWithoutDatabase') &&
@@ -275,13 +298,20 @@ function databaseSkipPolicyViolations(source: string): string[] {
     named(node.arguments[1], 'dbAvailable') &&
     node.arguments.length === 2
 
-  function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node) && named(node.expression, 'beforeEach')) {
-      const fn = callback(node)
-      if (fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && fn.parameters[0]) {
+  function inspectHooks(statements: ts.NodeArray<ts.Statement>): void {
+    for (const statement of statements) {
+      if (!ts.isExpressionStatement(statement)) continue
+      const call = unwrap(statement.expression)
+      if (!ts.isCallExpression(call)) continue
+      const fn = callback(call)
+      if (!fn) continue
+      if (finalName(call.expression) === 'describe' && ts.isBlock(fn.body)) {
+        inspectHooks(fn.body.statements)
+      }
+      if (named(call.expression, 'beforeEach') && fn.parameters[0]) {
         const body = fn.body
-        // A top-level call in the hook runs for every test; a nested function,
-        // conditional or quoted example does not establish that contract.
+        // Require a direct helper call in a registered hook. Coverage remains
+        // file-global: this does not prove a hook for each describe block.
         const statements = ts.isBlock(body) ? body.statements : [body]
         for (const statement of statements) {
           // Setup calls may precede the guard, but an earlier return or
@@ -292,37 +322,53 @@ function databaseSkipPolicyViolations(source: string): string[] {
         }
       }
     }
+  }
+  function contextBypass(node: ts.Node, context?: string): boolean {
+    if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return false
+    const owner = finalName(node.expression)
+    return (
+      !!owner &&
+      (owner.endsWith('ctx') || owner === context) &&
+      (member(node) === 'skip' ||
+        (ts.isElementAccessExpression(node) && member(node) === undefined))
+    )
+  }
+  function inspectTest(node: ts.Node, context?: string): void {
+    if (contextBypass(node, context)) violations.push('database test bypasses the guard')
+    if (
+      ts.isIfStatement(node) &&
+      ts.isPrefixUnaryExpression(node.expression) &&
+      node.expression.operator === ts.SyntaxKind.ExclamationToken &&
+      named(node.expression.operand, 'dbAvailable') &&
+      (ts.isReturnStatement(node.thenStatement) ||
+        (ts.isBlock(node.thenStatement) &&
+          node.thenStatement.statements.some(ts.isReturnStatement)))
+    ) {
+      violations.push('database test returns without asserting')
+    }
+    ts.forEachChild(node, (child) => inspectTest(child, context))
+  }
+  function visit(node: ts.Node): void {
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const property = member(node)
-      const owner = node.expression
       if (
-        (['it', 'test', 'describe'].some((name) => named(owner, name)) &&
+        (['it', 'test', 'describe'].includes(finalName(node.expression) ?? '') &&
           ['skip', 'skipIf', 'runIf', 'todo'].includes(property ?? '')) ||
-        (named(owner, 'ctx') && property === 'skip')
+        contextBypass(node)
       ) {
         violations.push('database test bypasses the guard')
       }
     }
-    if (ts.isCallExpression(node) && ['it', 'test'].some((name) => named(node.expression, name))) {
+    if (ts.isCallExpression(node) && ['it', 'test'].includes(finalName(node.expression) ?? '')) {
       const fn = callback(node)
-      if (fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) {
-        for (const statement of fn.body.statements) {
-          if (
-            ts.isIfStatement(statement) &&
-            ts.isPrefixUnaryExpression(statement.expression) &&
-            statement.expression.operator === ts.SyntaxKind.ExclamationToken &&
-            named(statement.expression.operand, 'dbAvailable') &&
-            (ts.isReturnStatement(statement.thenStatement) ||
-              (ts.isBlock(statement.thenStatement) &&
-                statement.thenStatement.statements.some(ts.isReturnStatement)))
-          ) {
-            violations.push('database test returns without asserting')
-          }
-        }
+      if (fn) {
+        const context = fn.parameters[0]?.name
+        inspectTest(fn.body, context && ts.isIdentifier(context) ? context.text : undefined)
       }
     }
     ts.forEachChild(node, visit)
   }
+  inspectHooks(tree.statements)
   visit(tree)
   if (!guarded) violations.push('missing database guard hook')
   return violations
@@ -336,6 +382,30 @@ const guardedDatabaseTest = `
 describe('database skip source guard mutations (#500)', () => {
   it('accepts the executable database guard hook', () => {
     expect(databaseSkipPolicyViolations(guardedDatabaseTest)).toEqual([])
+  })
+
+  it('accepts hooks directly inside nested describe callbacks', () => {
+    expect(
+      databaseSkipPolicyViolations(
+        `vitest['describe']('outer', () => { describe('inner', () => { ${guardedDatabaseTest} }) })`,
+      ),
+    ).toEqual([])
+  })
+
+  it('parses JSX using the scanned filename', () => {
+    const source = `${guardedDatabaseTest}
+      it('renders', (ctx) => {
+        const el = <p>press \` to start</p>
+        ctx.skip()
+      })
+      const hint = \`x\`
+    `
+    expect(databaseSkipPolicyViolations(source, 'temporary.test.tsx')).toContain(
+      'database test bypasses the guard',
+    )
+    expect(
+      databaseSkipPolicyViolations(source.replace('ctx.skip()', ''), 'temporary.test.tsx'),
+    ).toEqual([])
   })
 
   it('accepts a multiline block hook and ignores quoted skip examples', () => {
@@ -363,6 +433,35 @@ describe('database skip source guard mutations (#500)', () => {
     'describe.todo("query")',
     'it("query", () => { if (!dbAvailable) return; query("SELECT 1") })',
     'test("query", async () => { if (!dbAvailable) { return }; await query("SELECT 1") })',
+    // Shapes the lexical scan refused before #500 (a namespace import, a context
+    // not named `ctx`, an early return one block or one wrapper deep).
+    'vitest.it.skip("query", () => {})',
+    'vitest.describe.skipIf(true)("query", () => {})',
+    'vitest.it("query", async () => {\n  if (!dbAvailable) return\n})',
+    'it("query", (_ctx) => { _ctx.skip() })',
+    'it("query", (t) => { t.ctx.skip() })',
+    'it("query", async () => { try {\n  if (!dbAvailable) return\n} finally {} })',
+    'it("query", wrap(async () => {\n  if (!dbAvailable) return\n}))',
+    'it("query", (async () => {\n  if (!dbAvailable) return\n}))',
+    // A bracket key that is a string only after a wrapper or an expression.
+    'ctx[("skip")]()',
+    'ctx["skip" as const]()',
+    'ctx["sk" + "ip"]()',
+    'const key = "skip"; ctx[key]()',
+    'vitest["it"]["skip"]("query", () => {})',
+    'vitest.test.skip("query", () => {})',
+    'vitest["test"]("query", () => { if (!dbAvailable) return })',
+    'vitest["describe"]["runIf"](true)("query", () => {})',
+    'dbctx.skip()',
+    'opts.ctx["skip"]()',
+    'it("query", (context) => { context.skip() })',
+    'test("query", (t) => { t["skip"]() })',
+    'it("query", (t) => { const key = "skip"; t[key]() })',
+    'ctx["skip" satisfies string]()',
+    'ctx[`sk${"ip"}`]()',
+    'it("query", () => { for (;;) { if (!dbAvailable) return } })',
+    'it("query", () => { while (true) { if (!dbAvailable) return } })',
+    'it("query", () => { if (true) { if (!dbAvailable) return } })',
   ])('keeps bypass refused: %s', (bypass) => {
     expect(databaseSkipPolicyViolations(guardedDatabaseTest + bypass).length).toBeGreaterThan(0)
   })
@@ -373,6 +472,12 @@ describe('database skip source guard mutations (#500)', () => {
     'beforeEach((ctx) => { if (false) skipWithoutDatabase(ctx, dbAvailable) })',
     'beforeEach((ctx) => { return "skipWithoutDatabase(ctx, dbAvailable)" })',
     'beforeEach((ctx) => { return; skipWithoutDatabase(ctx, dbAvailable) })',
+    // The hook itself registered from code that never runs.
+    'const unused = () => beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+    'if (false) beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+    'function never() { beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable)) }',
+    'false && beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+    'describe("query", () => { if (false) beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable)) })',
   ])('requires the helper to run in the hook: %s', (decoy) => {
     const source = guardedDatabaseTest.replace(
       'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
@@ -380,6 +485,7 @@ describe('database skip source guard mutations (#500)', () => {
     )
     expect(databaseSkipPolicyViolations(source).length).toBeGreaterThan(0)
   })
+
   it.each([
     ["ctx['skip']()", guardedDatabaseTest.replace("await query('SELECT 1')", "ctx['skip']()")],
     [
@@ -462,10 +568,10 @@ describe('skipWithoutDatabase: what a DB-backed test does with no database', () 
           // a file that mocks `pg` itself never reaches a database
           !/vi\.mock\(\s*'pg'/.test(s),
       )
-    // The ten today, so a clean pass below is not "scanned nothing".
+    // Keep a nonempty inventory floor so a clean pass is not "scanned nothing".
     expect(dbFiles.length).toBeGreaterThanOrEqual(10)
     for (const { f, s } of dbFiles) {
-      expect(databaseSkipPolicyViolations(s), f).toEqual([])
+      expect(databaseSkipPolicyViolations(s, f), f).toEqual([])
     }
   })
 })

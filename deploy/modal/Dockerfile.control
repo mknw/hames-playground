@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+#
+# The Modal control sidecar (control_sidecar.py, #1057) as its own container.
+#
+# WHY A CONTAINER: the sidecar holds the Modal WORKSPACE token (deploy/delete
+# rights, starts and stops billed GPUs). Run from a writable git checkout, anything
+# that can write that tree could change the code that holds the token; this
+# image carries a read-only copy of ONE file, built from a pinned commit, run as
+# a dedicated non-root uid with no capabilities. The token is never baked in:
+# compose passes it at run time from the sidecar's own env file.
+#
+#   docker compose build modal-control      # from a release checkout (compose: docker-compose.prod.yaml)
+#
+# The base tag is pinned to a minor; the digest pin belongs to the operator who
+# builds it (docs: deploy/modal/README.md, "The control sidecar"). Every Python
+# dependency is pinned BY HASH: `requirements.control.txt` is `uv export --frozen`
+# of `uv.lock`, installed with `--require-hashes` (which also refuses anything not
+# listed), so what the token-holding image runs is what the lock reviewed, not
+# whatever grpclib/protobuf/rich resolve to on build day. A source-scan test holds
+# the file equal to the lock. Regenerate after touching `uv.lock`:
+#   uv export --frozen --no-dev --no-emit-project --no-header -o requirements.control.txt
+FROM python:3.13-slim-bookworm
+
+COPY requirements.control.txt /tmp/requirements.control.txt
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /tmp/requirements.control.txt \
+ && rm /tmp/requirements.control.txt \
+ && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin modalctl
+
+WORKDIR /opt/control
+COPY --chmod=0444 control_sidecar.py /opt/control/control_sidecar.py
+
+# Inside its own network namespace the sidecar may bind every interface: the
+# only network it is on is shared with the app and nothing else, and compose
+# publishes no port for it. The CODE default stays 127.0.0.1 — this is the one
+# place that overrides it.
+ENV MODAL_CONTROL_HOST=0.0.0.0 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp
+
+USER 10001
+# -I: ignore PYTHON* env vars and the user site; the sidecar reads only its own env.
+CMD ["python", "-I", "control_sidecar.py"]

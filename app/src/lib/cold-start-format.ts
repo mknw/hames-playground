@@ -24,6 +24,26 @@
  *  short, and independent of the estimate so it can never read as a promise. */
 export const COLD_START_HEADLINE = 'starting GPU'
 
+/** Each box's name as the notice says it (#1057): 'large' is the 27B, 'small'
+ *  the 4B summarizer — the ids `cold-start.server.ts` and `wake.server.ts`
+ *  already use, so the notice cannot name a third box. */
+export const COLD_START_BOX_LABEL: Record<'large' | 'small', string> = {
+  large: 'the 27B',
+  small: 'the 4B',
+}
+
+/** Which boxes the notice waits on, as a phrase appended to the headline
+ *  (#1057): nothing when the payload names no boxes (a notice from before the
+ *  field existed), one name, or both joined — the order is the boxes' own,
+ *  large first, so two notices about one wait never read as two orders. */
+export function coldStartBoxSuffix(boxes: readonly ('large' | 'small')[] | undefined): string {
+  if (!boxes || boxes.length === 0) return ''
+  const ordered: ('large' | 'small')[] = []
+  for (const box of ['large', 'small'] as const) if (boxes.includes(box)) ordered.push(box)
+  const names = ordered.map((box) => COLD_START_BOX_LABEL[box])
+  return ` — ${names.join(' and ')}`
+}
+
 /**
  * A duration in milliseconds as a coarse phrase (`'2 min'`, `'40 sec'`), or
  * `null` when there is nothing worth stating — a non-finite reading, or under
@@ -48,6 +68,95 @@ export function formatColdStartEstimate(ms: number): string | null {
  * so this figure is stated only once the countdown has run out.
  */
 export const COLD_START_FULL_BOOT_MS = 938_000
+
+/**
+ * The measured FULL-BOOT range per box (`deploy/modal/README.md`): 505–938s for
+ * the 27B and 305–552s for the small box. A start that builds a snapshot is not
+ * a failure, and the control-plane lines state this range once a container has
+ * been booting longer than a snapshot restore takes (#1057: "booting, full
+ * boot, 6 min of ~8–15").
+ */
+export const COLD_START_FULL_BOOT_RANGE_MS: Record<'large' | 'small', readonly [number, number]> = {
+  large: [505_000, 938_000],
+  small: [305_000, 552_000],
+}
+
+/** `'8–16 min'`: the box's full-boot range, in whole minutes. */
+export function formatFullBootRange(box: 'large' | 'small'): string {
+  const [lo, hi] = COLD_START_FULL_BOOT_RANGE_MS[box]
+  return `${Math.round(lo / 60_000)}–${Math.round(hi / 60_000)} min`
+}
+
+/** What a box that Modal HAS created a container for is doing, in words
+ *  (#1057): `elapsedMs` is measured from Modal's own container start (`null`
+ *  while Modal lists the container as `Pending`). Inside the snapshot-restore
+ *  estimate it reads as a restore; past it, as the full boot it can only be,
+ *  with its range — so a long boot is not mistaken for a failure, and a failure
+ *  (no container at all) is a different sentence, `boxNotStartingText`. */
+export function boxBootText(
+  box: 'large' | 'small',
+  elapsedMs: number | null,
+  restoreEstimateMs: number,
+): string {
+  const restore = formatColdStartEstimate(restoreEstimateMs) ?? 'under a minute'
+  if (elapsedMs === null) {
+    return `queued by Modal — a snapshot restore takes ~${restore}, a full boot ~${formatFullBootRange(box)}`
+  }
+  const so = formatColdStartEstimate(Math.max(0, elapsedMs)) ?? 'under a minute'
+  return elapsedMs <= restoreEstimateMs
+    ? `booting, likely a snapshot restore — ${so} of ~${restore} (a full boot takes ~${formatFullBootRange(box)})`
+    : `booting, a full boot — ${so} of ~${formatFullBootRange(box)} (a snapshot restore takes ~${restore})`
+}
+
+/** A boot that was asked for and has no container yet. */
+export function boxWaitingText(waitedMs: number): string {
+  const so = formatColdStartEstimate(Math.max(0, waitedMs)) ?? 'under a minute'
+  return `waiting for Modal to start a container — ${so} so far`
+}
+
+/** A boot Modal is not creating a container for. */
+export function boxNotStartingText(waitedMs: number): string {
+  const so = formatColdStartEstimate(Math.max(0, waitedMs)) ?? 'under a minute'
+  return `NOT STARTING — Modal has created no container after ${so}`
+}
+
+/** One box's live phase as the chat notice shows it, from Modal's control
+ *  plane (`WarmingBoxState`, `preview-header.server.ts`). `elapsedMs` already
+ *  includes this browser's time since it received the reading. */
+export interface BoxWaitView {
+  box: 'large' | 'small'
+  phase: 'waiting' | 'booting' | 'not-starting'
+  elapsedMs: number | null
+  restoreEstimateMs: number
+}
+
+/** The notice's line for one box: `the 27B: booting, a full boot — 6 min of
+ *  ~8–16 min …`. A box Modal is not starting says what the user can do. */
+export function boxWaitLine(view: BoxWaitView): string {
+  const name = COLD_START_BOX_LABEL[view.box]
+  switch (view.phase) {
+    case 'waiting':
+      return `${name}: ${boxWaitingText(view.elapsedMs ?? 0)}`
+    case 'booting':
+      return `${name}: ${boxBootText(view.box, view.elapsedMs, view.restoreEstimateMs)}`
+    case 'not-starting':
+      return `${name}: ${boxNotStartingText(view.elapsedMs ?? 0)}. You can stop this turn, wait, or send it again.`
+  }
+}
+
+/** What a screen reader hears when a box's PHASE changes — deliberately no
+ *  counting figure, for the reason `coldStartAnnouncement` states. */
+export function boxWaitAnnouncement(view: BoxWaitView): string {
+  const name = COLD_START_BOX_LABEL[view.box]
+  switch (view.phase) {
+    case 'waiting':
+      return `${name} is waiting for Modal to start a container.`
+    case 'booting':
+      return `${name} is booting.`
+    case 'not-starting':
+      return `${name} is not starting: Modal has created no container. You can stop this turn, wait, or send it again.`
+  }
+}
 
 /**
  * The notice's second line: what is happening and how much longer.
@@ -79,9 +188,18 @@ export function coldStartDetail(estimateMs: number, elapsedMs: number): string {
  * minutes. Same rule as the header strip's warm indicator, where the ticking
  * countdown is `aria-hidden` and only the state word is announced.
  */
-export function coldStartAnnouncement(estimateMs: number): string {
+export function coldStartAnnouncement(
+  estimateMs: number,
+  boxes?: readonly ('large' | 'small')[],
+): string {
   const eta = formatColdStartEstimate(estimateMs)
-  const opening = 'Waiting for the self-hosted model to start.'
+  // #1057: the screen reader hears which models it waits on — the same names
+  // the headline shows, never a second derivation of them.
+  const opening = `Waiting for the self-hosted model${
+    boxes && boxes.length > 0
+      ? ` (${boxes.map((box) => COLD_START_BOX_LABEL[box]).join(' and ')})`
+      : ''
+  } to start.`
   return eta ? `${opening} Estimated time to first token: about ${eta}.` : opening
 }
 

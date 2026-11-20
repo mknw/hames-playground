@@ -2,6 +2,10 @@
  * A script write is not a deliverable; an unchanged old output is not a new one.
  * No inference provider, container engine or external store is contacted. */
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { actorCritic } from '@hames-ai/harness-patterns/patterns/actorCritic.server'
 import { createContext, createScope, commitEvents } from '@hames-ai/harness-patterns/context.server'
@@ -15,6 +19,7 @@ import { getEventPreview } from '@hames-ai/harness-patterns/observability/projec
 import type { CriticFnWithLLMData, ToolCallResult } from '@hames-ai/harness-patterns/types'
 import { withSandbox } from '../with-sandbox.server'
 import { configureWorkspaceStore } from '../workspace-store'
+import { listWorkFiles } from '../work-sync.server'
 import type { ComputeBackend, McpTransport, VMHandle } from '../types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
@@ -144,6 +149,7 @@ function fixture(
     scope,
     files,
     backend,
+    transport,
     async run() {
       await withRunFrame({}, () => pattern.fn(scope, createEventView(context)))
       return scope
@@ -305,4 +311,24 @@ it('the critic observation follows the innermost scope and does not leak into an
     expect(activeRunFrame().criticContext).toBe(outer)
   })
   await withRunFrame({}, async () => expect(activeRunFrame().criticContext).toBeUndefined())
+})
+
+it('the actual listing command propagates a shell failure rather than reporting no files', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'output-listing-'))
+  try {
+    const file = join(scratch, 'not-a-directory')
+    await writeFile(file, 'fixture')
+    const { transport } = fixture(false)
+    transport.callTool = async (_name, args) => {
+      // Execute only the harness-authored listing over this throwaway path.
+      const result = spawnSync('sh', ['-c', String(args.command)], { encoding: 'utf8' })
+      return {
+        success: result.status === 0,
+        data: { stdout: result.stdout, stderr: result.stderr, exit_code: result.status },
+      }
+    }
+    await expect(listWorkFiles(transport, file)).rejects.toThrow('Workspace file listing failed')
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
 })

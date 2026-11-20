@@ -29,6 +29,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { parse } from 'yaml'
+import ts from 'typescript'
 import {
   ALLOW_LOCAL_DB,
   REQUIRE_DB,
@@ -247,6 +248,166 @@ describe('resolveTestDatabase: CI with no database skips', () => {
   })
 })
 
+/** Shared by the real-tree scan and the source mutations below.
+ * Parse code so comments/literals cannot supply a hook, and dot/bracket member
+ * access has the same meaning. This checks the suite's direct Vitest idiom,
+ * not arbitrary JavaScript control flow or aliases.
+ */
+function databaseSkipPolicyViolations(source: string): string[] {
+  const tree = ts.createSourceFile('database.test.ts', source, ts.ScriptTarget.Latest, true)
+  const violations: string[] = []
+  let guarded = false
+  const named = (node: ts.Node | undefined, name: string): boolean =>
+    !!node && ts.isIdentifier(node) && node.text === name
+  const member = (node: ts.Node): string | undefined => {
+    if (ts.isPropertyAccessExpression(node)) return node.name.text
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
+      return node.argumentExpression.text
+    }
+  }
+  const callback = (call: ts.CallExpression) =>
+    call.arguments.find((arg) => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))
+  const isGuardCall = (node: ts.Node, context: ts.BindingName): boolean =>
+    ts.isCallExpression(node) &&
+    named(node.expression, 'skipWithoutDatabase') &&
+    ts.isIdentifier(context) &&
+    named(node.arguments[0], context.text) &&
+    named(node.arguments[1], 'dbAvailable') &&
+    node.arguments.length === 2
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && named(node.expression, 'beforeEach')) {
+      const fn = callback(node)
+      if (fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && fn.parameters[0]) {
+        const body = fn.body
+        // A top-level call in the hook runs for every test; a nested function,
+        // conditional or quoted example does not establish that contract.
+        const statements = ts.isBlock(body) ? body.statements : [body]
+        for (const statement of statements) {
+          // Setup calls may precede the guard, but an earlier return or
+          // conditional makes reachability uncertain and needs inspection.
+          const expression = ts.isExpressionStatement(statement) ? statement.expression : statement
+          if (isGuardCall(expression, fn.parameters[0].name)) guarded = true
+          if (!ts.isExpressionStatement(statement)) break
+        }
+      }
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const property = member(node)
+      const owner = node.expression
+      if (
+        (['it', 'test', 'describe'].some((name) => named(owner, name)) &&
+          ['skip', 'skipIf', 'runIf', 'todo'].includes(property ?? '')) ||
+        (named(owner, 'ctx') && property === 'skip')
+      ) {
+        violations.push('database test bypasses the guard')
+      }
+    }
+    if (ts.isCallExpression(node) && ['it', 'test'].some((name) => named(node.expression, name))) {
+      const fn = callback(node)
+      if (fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) {
+        for (const statement of fn.body.statements) {
+          if (
+            ts.isIfStatement(statement) &&
+            ts.isPrefixUnaryExpression(statement.expression) &&
+            statement.expression.operator === ts.SyntaxKind.ExclamationToken &&
+            named(statement.expression.operand, 'dbAvailable') &&
+            (ts.isReturnStatement(statement.thenStatement) ||
+              (ts.isBlock(statement.thenStatement) &&
+                statement.thenStatement.statements.some(ts.isReturnStatement)))
+          ) {
+            violations.push('database test returns without asserting')
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  if (!guarded) violations.push('missing database guard hook')
+  return violations
+}
+
+const guardedDatabaseTest = `
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  it('queries', async (ctx) => { await query('SELECT 1') })
+`
+
+describe('database skip source guard mutations (#500)', () => {
+  it('accepts the executable database guard hook', () => {
+    expect(databaseSkipPolicyViolations(guardedDatabaseTest)).toEqual([])
+  })
+
+  it('accepts a multiline block hook and ignores quoted skip examples', () => {
+    const source =
+      guardedDatabaseTest.replace(
+        'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+        `beforeEach((ctx) => {
+        resetMocks()
+        skipWithoutDatabase(
+          ctx,
+          dbAvailable,
+        )
+      })`,
+      ) + `\nconst example = "ctx.skip() and it.skip('example')"`
+    expect(databaseSkipPolicyViolations(source)).toEqual([])
+  })
+
+  it.each([
+    'ctx.skip()',
+    'ctx["skip"]()',
+    'ctx[`skip`]()',
+    'it.skip("query", () => {})',
+    'it["runIf"](dbAvailable)("query", () => {})',
+    'test.skipIf(!dbAvailable)("query", () => {})',
+    'describe.todo("query")',
+    'it("query", () => { if (!dbAvailable) return; query("SELECT 1") })',
+    'test("query", async () => { if (!dbAvailable) { return }; await query("SELECT 1") })',
+  ])('keeps bypass refused: %s', (bypass) => {
+    expect(databaseSkipPolicyViolations(guardedDatabaseTest + bypass).length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    'const unused = () => skipWithoutDatabase(ctx, dbAvailable)',
+    'beforeEach((ctx) => { const unused = () => skipWithoutDatabase(ctx, dbAvailable) })',
+    'beforeEach((ctx) => { if (false) skipWithoutDatabase(ctx, dbAvailable) })',
+    'beforeEach((ctx) => { return "skipWithoutDatabase(ctx, dbAvailable)" })',
+    'beforeEach((ctx) => { return; skipWithoutDatabase(ctx, dbAvailable) })',
+  ])('requires the helper to run in the hook: %s', (decoy) => {
+    const source = guardedDatabaseTest.replace(
+      'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+      decoy,
+    )
+    expect(databaseSkipPolicyViolations(source).length).toBeGreaterThan(0)
+  })
+  it.each([
+    ["ctx['skip']()", guardedDatabaseTest.replace("await query('SELECT 1')", "ctx['skip']()")],
+    [
+      'comment decoy',
+      guardedDatabaseTest.replace(
+        'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+        '// skipWithoutDatabase(ctx, dbAvailable)',
+      ),
+    ],
+    [
+      'string decoy',
+      guardedDatabaseTest.replace(
+        'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+        'const decoy = "skipWithoutDatabase(ctx, dbAvailable)"',
+      ),
+    ],
+    [
+      'template decoy',
+      guardedDatabaseTest.replace(
+        'beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+        'const decoy = `skipWithoutDatabase(ctx, dbAvailable)`',
+      ),
+    ],
+  ])('rejects %s', (_name, source) => {
+    expect(databaseSkipPolicyViolations(source).length).toBeGreaterThan(0)
+  })
+})
+
 describe('skipWithoutDatabase: what a DB-backed test does with no database', () => {
   const ctx = () => ({ skip: vi.fn() })
 
@@ -304,10 +465,7 @@ describe('skipWithoutDatabase: what a DB-backed test does with no database', () 
     // The ten today, so a clean pass below is not "scanned nothing".
     expect(dbFiles.length).toBeGreaterThanOrEqual(10)
     for (const { f, s } of dbFiles) {
-      expect(s, f).toContain('skipWithoutDatabase(ctx, dbAvailable)')
-      expect(s, f).not.toMatch(
-        /\b(?:it|test|describe)\.(?:skip|skipIf|runIf|todo)\b|ctx\.skip\(|\bit\(.*\n\s*if \(!dbAvailable\) return/,
-      )
+      expect(databaseSkipPolicyViolations(s), f).toEqual([])
     }
   })
 })

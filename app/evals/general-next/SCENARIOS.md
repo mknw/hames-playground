@@ -786,7 +786,7 @@ Expected assistant: the question is about a public organisation, not the user’
 
 Expected routes: `info-retrieval`. Expected tools: `search` carrying the organisation’s name.
 
-Pass: the web search runs with the organisation’s name; candidate only: the route completes before the turn’s `answer`; the final answer carries Firefox (the flagship a correct answer names); within 6 decisions per turn.
+Pass: the web search runs with the organisation’s name; no office files tool (`graph_files_search`, `graph_files_list`, `graph_files_recent`) runs before that search; candidate only: the route completes before the turn’s `answer`; the final answer carries Firefox (the flagship a correct answer names); within 6 decisions per turn.
 
 #1058 r2 (review): the decide question and the info controller scope the projects rule to the user’s OWN organisation, so a public organisation’s projects are a web question. The row rides the P4 gate like 15/16 (the catalogue’s one listed-but-never-run mechanism) because its graded facts are live web content: reported GATED, never as passing, until a coordinated live run flips it.
 

@@ -3196,7 +3196,7 @@
         {
           "check": "answerNotMatches",
           "says": "no deferral to internal documentation or colleagues while the tools read those sources",
-          "pattern": "consult\\w*[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
+          "pattern": "consult(?:ing)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "I could not find a dedicated Project node; please consult internal documentation for the organisation's projects.",
@@ -3204,12 +3204,14 @@
               "No dedicated Project node was found; please consult internal DTSC documentation.",
               "I found nothing in the graph; please consult internal Lantern documentation.",
               "Try consulting your internal documentation for the projects.",
+              "I cannot find your company's projects; please consult your company's internal project documentation.",
               "Please contact the organization for its projects.",
               "Please contact the organisation."
             ],
             "noMatch": [
               "I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.",
-              "The graph held no Project node, and the files search returned two project folders."
+              "The graph held no Project node, and the files search returned two project folders.",
+              "I consulted your internal SharePoint documentation: the active projects are Lantern Portal and Lantern Field Ops."
             ]
           }
         },
@@ -3274,7 +3276,7 @@
         {
           "check": "answerNotMatches",
           "says": "no 'no Project node' deflection and no deferral to internal documentation while the graph rows name three",
-          "pattern": "no (?:dedicated )?Project node|consult\\w*[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
+          "pattern": "no (?:dedicated )?Project node|consult(?:ing)?\\b[^.]{0,40}\\binternal\\b[^.]{0,30}\\b(?:documentation|docs)|contact (?:the |your )?organi[sz]ation|ask (?:your )?colleagues",
           "examples": {
             "match": [
               "There is no dedicated Project node in the knowledge graph; consult internal documentation.",
@@ -3284,7 +3286,8 @@
             ],
             "noMatch": [
               "The active projects are Lantern Portal, Lantern Field Ops and Lantern Beacon.",
-              "I found no projects in your mail."
+              "I found no projects in your mail.",
+              "I consulted the knowledge graph: the active projects are Lantern Portal, Lantern Field Ops and Lantern Beacon."
             ]
           }
         },
@@ -3332,6 +3335,12 @@
           "tools": ["search"]
         },
         {
+          "check": "toolsNotBefore",
+          "says": "no office files tool (graph_files_search, graph_files_list, graph_files_recent) runs before the public web search",
+          "tools": ["graph_files_search", "graph_files_list", "graph_files_recent"],
+          "before": "search"
+        },
+        {
           "check": "validArgs",
           "says": "module expectedArgs predicate: the search carries the organisation’s name",
           "tool": "search"
@@ -3357,7 +3366,7 @@
       ],
       "dependsOn": ["a coordinated live run"],
       "cells": [["research-public", "web"]],
-      "notes": "#1058 r2 (review): the decide question and the info controller scope the projects rule to the user’s OWN organisation, so a public organisation’s projects are a web question — this row is the live proof. It rides the P4 gate like 15/16 (the catalogue’s one listed-but-never-run mechanism) because its graded facts are live web content: reported GATED, never as passing, until a coordinated live run flips it."
+      "notes": "#1058 r2 (review): the decide question and the info controller scope the projects rule to the user’s OWN organisation, so a public organisation’s projects are a web question — this row is the live proof. It rides the P4 gate like 15/16 (the catalogue’s one listed-but-never-run mechanism) because its graded facts are live web content: reported GATED, never as passing, until a coordinated live run flips it. The live run also grades the scoping the row exists for: no office files tool runs before the web search (toolsNotBefore, r3) — the mirror of 49's web-last rule."
     },
     {
       "id": "p01-calendar-today",

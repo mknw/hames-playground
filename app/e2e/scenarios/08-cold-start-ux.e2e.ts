@@ -135,10 +135,19 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // process never installed the usage recorder (see the README's "outside
     // the traversal"), so nothing has measured a cold start here and the
     // honest answer is the published reading.
-    const notice = warming[0].data as { estimateMs: number; basis: string; samples: number }
+    const notice = warming[0].data as {
+      estimateMs: number
+      basis: string
+      samples: number
+      boxes?: ('large' | 'small')[]
+    }
     expect(notice.estimateMs).toBeGreaterThan(0)
     expect(notice.basis).toBe('default')
     expect(notice.samples).toBe(0)
+    // #1057: the frame names WHICH boxes the wait is on, derived beside the
+    // estimate it carries — a fake cold start means nothing has proven either
+    // box warm, so the honest answer names both, the 27B first.
+    expect(notice.boxes).toEqual(['large', 'small'])
 
     const done = frames.find((f) => f.event === 'done')
     expect(done, 'the turn did not finish').toBeDefined()

@@ -50,6 +50,7 @@ import { DEFAULT_AGENT_ID } from './agent-ids'
 import { largeWakeInFlight, smallWakeInFlight } from '../inference/wake.server'
 import {
   largeProvenWarm,
+  pendingColdStartBoxes,
   pendingColdStartEstimate,
   smallProvenWarm,
   type ColdStartEstimate,
@@ -417,13 +418,14 @@ export interface ConversationTurnState {
   turnInFlight: boolean
   /**
    * The in-flight turn is waiting on a self-hosted box that is still starting:
-   * the same estimate the chat's warming frame carries, for a page that was
-   * (re)loaded while the turn was already in that wait (#1045). `null` when no
-   * turn holds the conversation, when the turn is past the wait (including
-   * while only a keep-warm touch is in flight against a warm box), or when the
-   * conversation does not run on the private tier.
+   * the same estimate the chat's warming frame carries — and since #1057 the
+   * same box names — for a page that was (re)loaded while the turn was already
+   * in that wait (#1045). `null` when no turn holds the conversation, when the
+   * turn is past the wait (including while only a keep-warm touch is in flight
+   * against a warm box), or when the conversation does not run on the private
+   * tier.
    */
-  warming: ColdStartEstimate | null
+  warming: (ColdStartEstimate & { boxes: ('large' | 'small')[] }) | null
 }
 
 /**
@@ -475,7 +477,15 @@ export async function getConversationTurnState(
   // against warm boxes turned into a thrown estimate and a false GPU wait.
   const starting =
     (largeWakeInFlight() && !largeProvenWarm(now)) || (smallWakeInFlight() && !smallProvenWarm(now))
-  return { ...state, warming: starting ? pendingColdStartEstimate(now) : null }
+  const outstanding = starting ? pendingColdStartEstimate(now) : null
+  return {
+    ...state,
+    // `pendingColdStartEstimate` cannot be null while `starting` holds (the
+    // conjunction above names a box nothing proves warm, so that box's figure
+    // is in the list it reduces over) — but the type does not carry the proof,
+    // so the guard is written out rather than asserted.
+    warming: outstanding !== null ? { ...outstanding, boxes: pendingColdStartBoxes(now) } : null,
+  }
 }
 
 /**

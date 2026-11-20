@@ -1,28 +1,28 @@
 /**
- * Scenario 21 — the admin switch: keep the self-deployed GPUs running (#1047).
+ * Scenario 21 — the admin switch: keep the self-deployed GPUs running (#1047,
+ * and since #1057 through Modal's control API).
  *
  * The owner's demo case: "connect the modal gpu on demand. and keep it
  * running." The browser-driven keep-warm this suite already has
  * (`PRIVATE_TIER_WARM_WHILE_OPEN`, off here) stops the moment a page is
  * hidden, closed or idle; the switch is the other thing — server-held state in
- * Postgres plus a process-side loop — so what this scenario establishes is the
- * property the demo needs: with the switch ON, the boxes are kept warm with NO
- * browser paying attention at all, and the switch itself survives a closed tab
- * and a fresh page; with it OFF, the app is exactly what it was — nothing
- * pings, and the box scales down.
+ * Postgres plus a process-side loop — so what this scenario establishes is
+ * the property the demo needs: with the switch ON, the boxes are held up with
+ * NO browser paying attention at all, and the switch itself survives a
+ * closed tab and a fresh page; with it OFF, the app is exactly what it was.
  *
- * ## What is asserted on, and why the wire
+ * ## What holds the boxes up, and what the wire witnesses
  *
- * The wake ping (the 1-token completion `ensureLargeAwake` sends) is the one
- * request the whole keep-warm machinery puts on the large box's wire, and the
- * fake records it with `wake: true` — so "the box is being kept warm" is a
- * COUNT of recorded pings, not a colour on a screen and not a duration. This
- * suite's scale-down window is 2s and the keep-warm floor is 5s
- * (`KEEP_WARM_MIN_INTERVAL_MS`), so the strip's word would flicker between
- * pings here for reasons that are the suite's own configuration, not the
- * product; the wire is the honest witness for the ON half. For the OFF half
- * the panel's own word is honest again: with no pings at all, the box is
- * observably cold.
+ * Since #1057 the switch drives Modal's AUTOSCALER (`min_containers=1`, per
+ * box, asserted every loop tick so a redeploy cannot silently reset it) —
+ * that is what "keep it running" means now, and what this scenario counts on
+ * the fake's Modal-control records to witness. The wake pings the old switch
+ * sent are the FALLBACK, armed only while the control route is unavailable —
+ * and this suite configures it (global setup points `MODAL_CONTROL_BASE` at
+ * the fake), so the acceptance pinned here is the one #1057 asks for verbatim:
+ * **the switch boots both boxes with no request sent to either box.** The
+ * model endpoint's recorded calls are the negative witness — flat across the
+ * whole ON half, pings and all.
  *
  * ## Why "closed tab", not "hidden tab"
  *
@@ -32,11 +32,11 @@
  * suite's browser — a second page, `bringToFront`, none of it changes it), so
  * a "hidden" step would assert nothing while reading as though it had. The
  * closed tab is the STRONGER form of the same inattention and it IS stageable:
- * with the page closed there is provably no browser half at all, which is past
- * the idle cap, past the visibility stop and past every other way a page
+ * with the page closed there is provably no browser half at all, which is
+ * past the idle cap, past the visibility stop and past every other way a page
  * might have kept the boxes warm itself. The suite also runs with
- * `PRIVATE_TIER_WARM_WHILE_OPEN=0`, so no open page could have contributed a
- * ping either — every wake counted below came from the server loop.
+ * `PRIVATE_TIER_WARM_WHILE_OPEN=0`, so no open page could have contributed
+ * anything either.
  */
 import { test, expect } from '../lib/fixtures'
 import type { Page } from '@playwright/test'
@@ -49,20 +49,27 @@ const KEEP_LABEL = 'Keep the self-deployed GPUs running'
 const keepSwitch = (page: Page) => page.getByRole('checkbox', { name: KEEP_LABEL })
 
 /** Wake pings the fake has served — the 27B's keep-warm touch, `wake: true`
- *  in the fake's own classification. */
+ *  in the fake's own classification. The switch's FALLBACK mechanism; the
+ *  whole point of #1057 is that this suite's switch never needs one. */
 async function wakePings(backend: FakeBackend): Promise<number> {
   return (await backend.calls()).filter((call) => call.outcome === 'wake').length
+}
+
+/** The autoscaler assertions the fake recorded: which box, which min_containers. */
+async function autoscalerAssertions(backend: FakeBackend) {
+  return (await backend.modalCalls())
+    .filter((call) => call.route === 'autoscaler')
+    .map(({ box, minContainers }) => ({ box, minContainers }))
 }
 
 /** Wall-clock sleep in the runner — the page under test may be closed. */
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Long enough for the process-side loop to touch the large box several
- *  times: the suite arms it with a 1s tick, and the wake's own freshness
- *  floor is 5s, so ~12s is several keep-warm windows of it. */
+/** Long enough for the process-side loop to assert the autoscaler several
+ *  times: the suite arms it with a 1s tick. */
 const UNATTENDED_MS = 12_000
 
-test('on keeps the GPUs warm with no browser at all; off scales down again', async ({
+test('on holds the GPUs up through Modal’s autoscaler with no browser at all; off releases them again', async ({
   page,
   appUrl,
   backend,
@@ -75,8 +82,9 @@ test('on keeps the GPUs warm with no browser at all; off scales down again', asy
   await expect(keepSwitch(page)).toBeVisible()
   await expect(keepSwitch(page)).not.toBeChecked()
 
-  // ---- ON wakes the boxes NOW, through the one shared wake -----------------
-  const before = await wakePings(backend)
+  // ---- ON asserts min_containers=1 per box, THROUGH THE AUTOSCALER ---------
+  const modelCallsBefore = await backend.calls()
+  const pingsBefore = await wakePings(backend)
   // `press('Space')`, not `click()`: the checkbox is the switch's visually
   // hidden input and its LABEL intercepts pointer events over it — the same
   // interaction the memory panel's switch scenarios use. It is also the honest
@@ -84,8 +92,15 @@ test('on keeps the GPUs warm with no browser at all; off scales down again', asy
   await keepSwitch(page).press('Space')
   await expect(keepSwitch(page)).toBeChecked()
   await expect
-    .poll(async () => wakePings(backend), { message: 'switching on did not wake the 27B' })
-    .toBeGreaterThan(before)
+    .poll(async () => autoscalerAssertions(backend), {
+      message: 'switching on did not assert min_containers=1',
+    })
+    .toContainEqual({ box: 'large', minContainers: 1 })
+
+  // THE acceptance: booted with no request sent — the model endpoint's
+  // records are FLAT across the flip, not one ping on either box.
+  expect(await backend.calls()).toEqual(modelCallsBefore)
+  expect(await wakePings(backend)).toBe(pingsBefore)
 
   // The panel says what it is doing: running since, at a price per hour.
   await expect(page.getByTestId('gpu-keep-since')).toContainText('Kept running since')
@@ -93,27 +108,39 @@ test('on keeps the GPUs warm with no browser at all; off scales down again', asy
 
   // ---- The tab is closed: no browser half exists, and the state survives ---
   // (The "hidden tab" variant cannot be staged in this browser — see the
-  //  module header. Closing is its stronger form.)
+  // module header. Closing is its stronger form.)
   await page.close()
-  const closedStart = await wakePings(backend)
+  const closedModelCalls = await backend.calls()
+  const closedAssertions = await autoscalerAssertions(backend)
   await sleep(UNATTENDED_MS)
-  expect(
-    await wakePings(backend),
-    'the boxes were not kept warm with no page open at all',
-  ).toBeGreaterThanOrEqual(closedStart + 2)
+  // The loop kept asserting min_containers=1 with no page open at all.
+  expect(await autoscalerAssertions(backend)).not.toEqual(closedAssertions)
+  expect(await backend.calls(), 'the loop sent a model request while no page was open').toEqual(
+    closedModelCalls,
+  )
 
   // A FRESH page reads the switch ON from the server: it is not browser state.
   const again = await context.newPage()
   await again.goto(`${appUrl}/admin`)
   await expect(keepSwitch(again)).toBeChecked()
 
-  // ---- OFF is today's behaviour again: no pings, the box scales down -------
+  // ---- OFF releases the autoscaler: min_containers=0, and still no request -
   await keepSwitch(again).press('Space')
   await expect(keepSwitch(again)).not.toBeChecked()
+  await expect
+    .poll(
+      async () => (await autoscalerAssertions(backend)).filter((call) => call.minContainers === 0),
+      {
+        message: 'switching off did not release the autoscaler',
+      },
+    )
+    .toContainEqual({ box: 'large', minContainers: 0 })
 
-  const afterOff = await wakePings(backend)
+  const modelCallsAfterOff = await backend.calls()
   await sleep(UNATTENDED_MS)
-  expect(await wakePings(backend), 'the loop kept pinging after the switch went off').toBe(afterOff)
+  expect(await backend.calls(), 'the loop sent a model request after the switch went off').toEqual(
+    modelCallsAfterOff,
+  )
 
   // And the panel observes what the boxes are: cold, the word the header uses.
   await again.reload()

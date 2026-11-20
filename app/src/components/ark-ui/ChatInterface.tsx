@@ -22,7 +22,16 @@
  *   threads (#47 / #105).
  */
 
-import { createSignal, createEffect, createMemo, onMount, untrack, Show, on } from 'solid-js'
+import {
+  createSignal,
+  createEffect,
+  createMemo,
+  onCleanup,
+  onMount,
+  untrack,
+  Show,
+  on,
+} from 'solid-js'
 import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
@@ -32,6 +41,10 @@ import { MemoryProposalPrompt } from './MemoryProposalPrompt'
 import { OrgProposalPrompt } from './OrgProposalPrompt'
 import { BlockingRequestPrompt } from './BlockingRequestPrompt'
 import { LiveProgressBar } from './LiveProgressBar'
+import {
+  getWarmingBoxStates,
+  type WarmingBoxState,
+} from '~/lib/harness-client/preview-header.server'
 import {
   promoteAction,
   loadConversation,
@@ -220,6 +233,40 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const runningTool = () => currentRunState().runningTool
   /** The cold-start notice for the thread on screen, if its turn hit one. */
   const warming = () => currentRunState().warming
+
+  /**
+   * Modal's live word on the boxes the notice waits on (#1057 §3): booting,
+   * restoring or not starting, with the elapsed time from Modal's own container
+   * start. Read ONLY while a notice is on screen — a settled chat never asks —
+   * at the strip's transition rate, and it is the control plane's read (never a
+   * request to a box). A failed read keeps the last good one; the notice's own
+   * countdown is unaffected. Empty on a deployment without Modal control.
+   */
+  const [boxStates, setBoxStates] = createSignal<{
+    states: WarmingBoxState[]
+    receivedAt: number
+  } | null>(null)
+  createEffect(() => {
+    if (!warming()) {
+      setBoxStates(null)
+      return
+    }
+    let alive = true
+    const read = async () => {
+      try {
+        const states = await getWarmingBoxStates()
+        if (alive) setBoxStates({ states, receivedAt: Date.now() })
+      } catch {
+        // keeps the last good reading
+      }
+    }
+    void read()
+    const timer = setInterval(() => void read(), WARMING_BOX_POLL_MS)
+    onCleanup(() => {
+      alive = false
+      clearInterval(timer)
+    })
+  })
 
   /**
    * The tier switch's most recent write, while it is in flight.
@@ -558,10 +605,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     registry.registerAbort(runSessionId, abortController)
     registry.updateRunState(runSessionId, { isProcessing: true })
 
-    // Settle any tier flip first — see `pendingTierWrite`.
-    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
-
     try {
+      // Settle any tier flip first — see `pendingTierWrite`. Stop or page
+      // teardown may happen during this round trip, before any turn is sent.
+      if (pendingTierWrite) await pendingTierWrite.catch(() => {})
+      if (abortController.signal.aborted) {
+        if (stoppedSessions.has(runSessionId)) {
+          registry.appendMessage(runSessionId, {
+            id: `stop-${Date.now()}`,
+            role: 'warning',
+            content: mode === 'interactive' ? 'Message not sent.' : 'Resume cancelled.',
+            timestamp: new Date(),
+          })
+        }
+        return
+      }
+
       const { outcome, aborted } = await runTurn(
         {
           sessionId: runSessionId,
@@ -756,6 +815,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             pathProjection={currentSnapshot().pathProjection}
             maxProjection={currentSnapshot().maxProjection}
             warming={warming()}
+            boxStates={boxStates()}
             visible={
               isProcessing() &&
               !currentSnapshot().done &&
@@ -880,6 +940,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     </div>
   )
 }
+
+/** How often the notice re-reads Modal's word on a box it waits on: the
+ *  header strip's own mid-transition rate (`ACTIVE_POLL_INTERVAL_MS`). */
+export const WARMING_BOX_POLL_MS = 3_000
 
 /** Replayed messages with their timestamps revived. Spread, don't re-list: a
  *  field list silently dropped the hint/patternId/turnInfo that error and

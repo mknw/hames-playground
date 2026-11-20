@@ -67,7 +67,11 @@ export function readBoxPhase(box: ModalBox, probe: ModalBoxProbe, now: number): 
     const pendingSince = modalBootPendingSince(box)
     const waitedMs = pendingSince !== null ? now - pendingSince : 0
     const phase: BoxPhase =
-      pendingSince === null ? 'cold' : waitedMs > modalNotStartingAfterMs() ? 'not-starting' : 'waiting'
+      pendingSince === null
+        ? 'cold'
+        : waitedMs > modalNotStartingAfterMs()
+          ? 'not-starting'
+          : 'waiting'
     return {
       phase,
       startedAtMs: pendingSince,

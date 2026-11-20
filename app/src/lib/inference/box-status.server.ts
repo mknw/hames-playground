@@ -79,10 +79,7 @@ function boxStatusUrl(box: ModalBox): { url: string; key: string | null } {
  * JSON) — and that `null` is remembered too, so a failing read is not retried
  * on the poll.
  */
-export function readBoxStatus(
-  box: ModalBox,
-  containerId: string,
-): Promise<BoxStatusSample | null> {
+export function readBoxStatus(box: ModalBox, containerId: string): Promise<BoxStatusSample | null> {
   const remembered = cache[box]
   if (remembered && remembered.containerId === containerId) return remembered.read
   const read = fetchBoxStatus(box)

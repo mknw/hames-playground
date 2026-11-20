@@ -388,7 +388,11 @@ export async function setModalBoxMinContainers(
     const reported = (body as { min_containers?: unknown }).min_containers
     return { ok: true, reason: null, minContainers: typeof reported === 'number' ? reported : null }
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err), minContainers: null }
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+      minContainers: null,
+    }
   }
 }
 
@@ -413,7 +417,11 @@ export async function stopModalBoxContainers(box: ModalBox): Promise<ModalContro
     }
     return { ok: true, reason: null, minContainers: null }
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err), minContainers: null }
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+      minContainers: null,
+    }
   }
 }
 

@@ -125,7 +125,7 @@ start time. The SDK's `Server._experimental_list_containers()` is
 (`modal/_server.py:160-175` at the pinned 1.6.1): a `@modal.server` container
 registers only after its `@modal.enter` boot has finished
 (`_runtime/user_code_imports.py:364-379` runs the post-snapshot enter methods,
-*then* `flash_entry.enter()`, which sends `ContainerServerLifecycleReady`,
+_then_ `flash_entry.enter()`, which sends `ContainerServerLifecycleReady`,
 `experimental/flash_server.py:20`), and both boxes boot inside `@modal.enter`.
 So for the whole 8–15 minute full boot that call lists nothing, although the
 container exists. It feeds `ready` (per container) and nothing else; a rule

@@ -498,6 +498,18 @@ describe('getConversationTurnState', () => {
     })
   })
 
+  // #1053: pin the LARGE warmth half independently. Dropping only
+  // `!largeProvenWarm(now)` would otherwise estimate the dark, idle small box.
+  it('answers warming null when only the proven-warm LARGE box has a flight and SMALL is dark and idle', async () => {
+    largeWakeInFlight.mockImplementation(() => true)
+    noteLargeCallCompleted(Date.now())
+
+    await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
+      turnInFlight: true,
+      warming: null,
+    })
+  })
+
   it('answers the estimate when the SMALL box is the one starting', async () => {
     // The small half of the gate is load-bearing on its own: drop
     // `smallWakeInFlight()` from it and this answers null. The 27B answered

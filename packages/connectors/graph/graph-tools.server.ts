@@ -869,6 +869,7 @@ export interface GraphFileRef {
   path: string | null
   /** SharePoint host the item lives on, or null for a plain OneDrive item. */
   site: string | null
+  /** Item's last change by anyone, not the signed-in person's own last edit. */
   modified: string | null
   size: number | null
   /** Half of the handoff to the tools that act on a file — always surfaced. */
@@ -1042,8 +1043,9 @@ export interface GraphRecentFile {
   name: string | null
   /** Human word from insights ("Word", "Excel", "Whiteboard", …) — not a MIME. */
   type: string | null
-  /** When the item was last changed / last opened by this user. */
+  /** When the signed-in person last changed the item; not its any-editor time. */
   modified: string | null
+  /** When the signed-in person last opened the item. */
   accessed: string | null
   /** Handoff pair, parsed from the insight's resourceReference; null when the
    *  insight didn't point at an addressable driveItem. */
@@ -1956,7 +1958,9 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       'honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an ' +
       "extension like docx or pdf), `author` (a person's name), or " +
       '`modified_after` / `modified_before` (dates). Set sort="newest" for ' +
-      "most-recently-modified first. Returns each file's name, folder, site, " +
+      'most-recently-modified by anyone first. `modified` and the date filters ' +
+      "refer to changes by anyone, not just the signed-in person. For that person's " +
+      "own recent edits, use graph_files_recent. Returns each file's name, folder, site, " +
       'modified date, size and a snippet of the matched text, plus the drive_id + ' +
       'item_id pair that identifies a file to the tools that act on one. Acts as ' +
       'the current signed-in person.',
@@ -1981,22 +1985,24 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         },
         author: {
           type: 'string',
-          description: 'Restrict to files authored by this person, e.g. "Jane Smith".',
+          description:
+            'Restrict to files authored by this person, e.g. "Jane Smith". ' +
+            'The author is not necessarily the last editor.',
         },
         modified_after: {
           type: 'string',
-          description: 'Only files modified on/after this date, e.g. 2026-07-01.',
+          description: 'Only files modified by anyone on/after this date, e.g. 2026-07-01.',
         },
         modified_before: {
           type: 'string',
-          description: 'Only files modified on/before this date, e.g. 2026-07-31.',
+          description: 'Only files modified by anyone on/before this date, e.g. 2026-07-31.',
         },
         sort: {
           type: 'string',
           enum: ['relevance', 'newest'],
           description:
             'Result order: best match first (relevance, default) or ' +
-            'most-recently-modified first (newest).',
+            'most-recently-modified by anyone first (newest), not your own last edit.',
         },
         limit: {
           type: 'integer',
@@ -2072,6 +2078,8 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       "(plus drive_id for a SharePoint or shared drive) to list that folder's " +
       'contents. Entries carry the same drive_id + item_id pair as a search result, ' +
       'and folders report isFolder + child_count so you can walk down into them. ' +
+      '`modified` is the last change by anyone, not just the signed-in person. ' +
+      "For that person's own recent edits, use graph_files_recent. " +
       'Use graph_files_search to find a file by its words instead. Acts as the ' +
       'current signed-in person.',
     inputSchema: {
@@ -2123,11 +2131,16 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     namespace: 'graph',
     description:
       'List the files the signed-in person recently used — opened or edited — ' +
-      "newest first, from Microsoft 365's insights. No query needed; this is the " +
-      'right tool for "my recent files" or "what did I work on lately". Each ' +
+      "from Microsoft 365's insights. No query needed; this is the " +
+      'right tool for "my recent files" or "what did I work on lately". ' +
+      '`modified` is the last change by the signed-in person; `accessed` is ' +
+      'the last open by the signed-in person. To find their latest edit, compare ' +
+      'non-null `modified` dates among the returned items, not their order or ' +
+      '`accessed` dates. These are recently used items, not a complete edit history. Each ' +
       'item carries the drive_id + item_id pair the other file tools accept. Use ' +
       'graph_files_search (optionally with sort="newest") to find files by ' +
-      'words or by other people. Acts as the current signed-in person.',
+      'words; its newest sort is by changes by anyone, not just this person. ' +
+      'Acts as the current signed-in person.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2151,14 +2164,16 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       } catch (err) {
         // A 403 here is almost always itemInsights disabled by tenant policy —
         // not a sign-in problem, so a re-auth prompt would be wrong AND the
-        // agent can still answer via search. Degrade to a successful, steerable
-        // result. 401/acquisition failures keep the sign-in path.
+        // agent can still find files via search, but cannot establish personal
+        // edit recency from it. 401/acquisition failures keep the sign-in path.
         if (err instanceof GraphAuthRequiredError && err.status === 403) {
           return {
             items: [],
             note:
               'Item insights are disabled by tenant policy (or this account lacks ' +
-              'consent for them) — use graph_files_search with sort="newest" instead.',
+              'consent for them). You can find files with graph_files_search and ' +
+              'sort="newest", but that orders changes by anyone, not your own edits. ' +
+              'With insights unavailable, these tools cannot determine which file you last edited.',
           }
         }
         throw err

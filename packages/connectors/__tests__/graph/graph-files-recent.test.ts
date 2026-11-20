@@ -43,6 +43,15 @@ beforeEach(() => {
 })
 
 describe('advertisement', () => {
+  it('names whose modification and access times are returned, without promising an edit history', () => {
+    const tool = appToolDescriptions().find((t) => t.name === 'graph_files_recent')!
+    expect(tool.description).toMatch(/modified.*signed-in person/i)
+    expect(tool.description).toMatch(/accessed.*signed-in person/i)
+    expect(tool.description).toMatch(/compare.*modified/i)
+    expect(tool.description).toContain('not a complete edit history')
+    expect(tool.description).toMatch(/newest.*by anyone/i)
+  })
+
   it('takes only a limit — no query, no credential/user/session field', () => {
     const tool = appToolDescriptions().find((t) => t.name === 'graph_files_recent')!
     expect(Object.keys((tool.inputSchema as { properties: object }).properties)).toEqual(['limit'])
@@ -80,6 +89,23 @@ describe('shapeUsedInsight', () => {
 })
 
 describe('graph_files_recent', () => {
+  it('returns the person’s edit time even when the file has a newer any-editor timestamp', async () => {
+    graphFetch.mockResolvedValue({
+      value: [
+        {
+          ...insight('plan.docx'),
+          lastModifiedDateTime: '2026-07-29T12:00:00Z',
+        },
+      ],
+    })
+    const res = await runAppTool('graph_files_recent', {})
+    expect(res.success).toBe(true)
+    expect((res.data as GraphRecentFilesResult).items[0]).toMatchObject({
+      modified: '2026-07-27T09:00:00Z',
+      accessed: '2026-07-28T10:00:00Z',
+    })
+  })
+
   it('inflates $top before the driveItem filter, then slices to limit', async () => {
     // $top applies to the MIXED insight stream (sites, whiteboards, files), so
     // asking for exactly `limit` rows could return fewer than `limit` files.
@@ -107,6 +133,8 @@ describe('graph_files_recent', () => {
     expect(data.items).toEqual([])
     expect(data.note).toMatch(/graph_files_search/)
     expect(data.note).toMatch(/sort="newest"/)
+    expect(data.note).toContain('by anyone')
+    expect(data.note).toContain('cannot determine which file you last edited')
   })
 
   it('a 401 still fails — sign-in IS the fix there', async () => {

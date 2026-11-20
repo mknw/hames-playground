@@ -1327,7 +1327,7 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
       // Unlike the default stream double, fetch honours an already-aborted
       // signal, so the old path paints its misleading stopped-watching notice.
       fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
-        init.signal?.throwIfAborted()
+        if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
         return sseResponse([doneFrame()])
       })
       const host = makeHost()
@@ -1335,6 +1335,7 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
       try {
         await vi.advanceTimersByTimeAsync(60)
         fireEvent.click(container.querySelector('input[value="self_deployed"]')!)
+        await vi.advanceTimersByTimeAsync(20)
         expect(setConversationTier).toHaveBeenCalledWith('s1', 'self_deployed')
 
         send(container, 'cancel before sending')

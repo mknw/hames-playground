@@ -49,6 +49,7 @@ import {
   resetLargeWake,
   LARGE_LLM_WAKE_FAILED,
   LARGE_LLM_WAKE_PROMPT,
+  NOTHING_SENT_ELSEWHERE,
   DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS,
   DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS,
   DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS,
@@ -56,6 +57,13 @@ import {
   largeWakeAttemptTimeoutMs,
   largeWakePollIntervalMs,
 } from '../../../lib/inference/wake.server'
+import {
+  modalBootPendingSince,
+  noteModalBootRequested,
+  resetModalBootPending,
+  resetModalControlCache,
+} from '../../../lib/inference/modal-control.server'
+import { WakeFailure } from '../../../lib/inference/wake-failure'
 import {
   noteLargeCallCompleted,
   resetLargeActivity,
@@ -118,6 +126,8 @@ beforeEach(() => {
   resetLargeWake()
   resetLargeActivity()
   resetColdStartHistory()
+  resetModalBootPending()
+  resetModalControlCache()
   process.env.LARGE_LLM_BASE_URL = ENDPOINT
   process.env.LARGE_LLM_API_KEY = 'test-key'
   for (const name of WAKE_VARS) delete process.env[name]
@@ -131,6 +141,8 @@ afterEach(() => {
   resetLargeWake()
   resetLargeActivity()
   resetColdStartHistory()
+  resetModalBootPending()
+  resetModalControlCache()
   delete process.env.LARGE_LLM_BASE_URL
   delete process.env.LARGE_LLM_API_KEY
   for (const name of WAKE_VARS) delete process.env[name]
@@ -862,5 +874,228 @@ describe('largeWakeInFlight', () => {
     await ensureLargeAwake()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(largeWakeInFlight()).toBe(false)
+  })
+})
+
+// ============================================================================
+// #1057: the poll consults the Modal control plane between attempts
+// ============================================================================
+//
+// A box that cannot start answers the wire exactly like one that is merely
+// slow (2026-11-19: 237 attempts over 1200 s, all bare 503s), so the wire alone
+// cannot tell them apart. The control plane can: a container is created within
+// seconds of the scale-up the poll's first request triggers, so NO container
+// after the threshold means the scale-up itself is failing. What is pinned
+// here, per rule:
+//
+//   - past the threshold, a control plane that reports ZERO containers ends
+//     the poll EARLY with the message that names it (and the user's options),
+//     well inside the budget;
+//   - a control plane that cannot be reached (or answers garbage) degrades to
+//     today's budget-bound behaviour — the check must never be the reason a
+//     turn fails;
+//   - a container UP is slow, not failing: the poll keeps waiting;
+//   - without the env, no control-plane request happens at all.
+describe('#1057: the not-starting check', () => {
+  const MODAL_VARS = [
+    'MODAL_CONTROL_BASE',
+    'MODAL_CONTROL_TOKEN',
+    'MODAL_NOT_STARTING_AFTER_MS',
+  ] as const
+  const MODAL_BASE = 'http://127.0.0.1:8124'
+  /** The sidecar's `/state` answer: zero containers per box by default. */
+  const modalState = (containers: { large?: number; small?: number } = {}) => {
+    const box = (n: number) => ({
+      ok: true,
+      app: 'test-app',
+      server: 'test-server',
+      // A container Modal CREATED and that is not serving yet: in its task list
+      // (`modal container list`), absent from the serving registry — what a
+      // booting box really looks like for its whole boot.
+      containers: Array.from({ length: n }, (_, i) => ({
+        container_id: `ct-${i}`,
+        started_at_ms: null,
+        ready: false,
+      })),
+    })
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        boxes: { large: box(containers.large ?? 0), small: box(containers.small ?? 0) },
+      }),
+    )
+  }
+
+  beforeEach(() => {
+    for (const name of MODAL_VARS) delete process.env[name]
+    process.env.MODAL_CONTROL_BASE = MODAL_BASE
+    process.env.MODAL_CONTROL_TOKEN = 'test-modal-token'
+    process.env.MODAL_NOT_STARTING_AFTER_MS = '20000'
+    // The probe cache survives on `globalThis` between tests in one worker:
+    // reset it or the first test's zero-container answer serves the rest.
+    resetModalControlCache()
+  })
+
+  afterEach(() => {
+    for (const name of MODAL_VARS) delete process.env[name]
+  })
+
+  /** A fetch that stalls the model endpoint and answers the sidecar. */
+  const route = (
+    modal: () => Response,
+  ): ((url: string, init: RequestInit) => Promise<Response>) => {
+    return (url, init) => {
+      if (url.startsWith(MODAL_BASE)) return Promise.resolve(modal())
+      return stalls()(url, init)
+    }
+  }
+
+  it('ends the poll EARLY, naming the box as failing — well before the budget', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState()))
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(100_000)
+    const err = (await wake) as Error
+
+    expect(err).toBeInstanceOf(WakeFailure)
+    // NOT the budget-expiry message: the 2026-11-19 morning would have sat
+    // this out to 1200 s and failed with `did not wake`. The control plane
+    // named it at the threshold instead.
+    expect(err.message).not.toContain('past the 100s this wake is given')
+    expect(err.message).toContain('NO container')
+    expect(err.message).toContain('failing, not slow')
+    expect(err.message).toContain('Modal never created a container')
+    expect(err.message).toContain(NOTHING_SENT_ELSEWHERE)
+    // And it really was EARLY: the full budget would have spent FAST_ATTEMPTS
+    // model attempts; the threshold cut it at the first check past 20 s.
+    expect(fetchMock.mock.calls.length).toBeLessThan(FAST_ATTEMPTS)
+  })
+
+  it('clears the boot-request clock when the poll ends, failing or not', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState()))
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(9_000)
+    // Mid-flight: this process has asked the box to boot, and nothing has
+    // answered — the clock the admin panel counts "not starting" from.
+    expect(modalBootPendingSince('large')).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(100_000)
+    await wake
+    // Settled: no boot is pending from this process any more, so the panel
+    // cannot keep naming a box as not-starting after its poll ended.
+    expect(modalBootPendingSince('large')).toBeNull()
+  })
+
+  it('a poll ending leaves the SWITCH’s boot clock standing', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState()))
+    // The admin switch asked for this boot before the turn did.
+    const t0 = Date.now()
+    noteModalBootRequested('large', t0, 'switch')
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(modalBootPendingSince('large')).toBe(t0)
+    await vi.advanceTimersByTimeAsync(100_000)
+    await wake
+    // The poll's own ask is gone; the switch's, unanswered, is not.
+    expect(modalBootPendingSince('large')).toBe(t0)
+  })
+
+  it('keeps polling to the budget when the control plane itself is unreachable', async () => {
+    // The check must never be the reason a turn fails: a down sidecar falls
+    // back to today's behaviour exactly.
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => new Response('down', { status: 503 })))
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(100_000)
+    const err = (await wake) as Error
+
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
+    expect(err.message).not.toContain('NO container')
+  })
+
+  it('keeps polling while a container EXISTS — a boot inside a container is slow, not failing', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState({ large: 1 })))
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(100_000)
+    const err = (await wake) as Error
+
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
+    expect(err.message).not.toContain('NO container')
+  })
+
+  it('a full boot of 10 MINUTES with a container present is NOT ended early — the 300s default is for "no container at all"', async () => {
+    // The review-round-1 blocker: with "no container" read from the serving
+    // registry, every full boot (the 27B takes 8-15 min, all of it inside
+    // @modal.enter) was ended at 300s as "NOT STARTING … failing, not slow",
+    // although the turn would have succeeded. Modal HAS a container the whole
+    // time here; the box answers at minute 10, and the wake must reach it.
+    delete process.env.MODAL_NOT_STARTING_AFTER_MS // the shipped 300s default
+    vi.useFakeTimers()
+    Object.assign(process.env, {
+      LARGE_LLM_WAKE_TIMEOUT_MS: '1200000',
+      LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: '30000',
+      LARGE_LLM_WAKE_POLL_INTERVAL_MS: '5000',
+    })
+    const t0 = Date.now()
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.startsWith(MODAL_BASE)) return Promise.resolve(modalState({ large: 1 }))
+      return Date.now() - t0 >= 600_000 ? Promise.resolve(ok()) : stalls()(url, init)
+    })
+
+    let settled = false
+    const wake = ensureLargeAwake().then(
+      () => 'woke',
+      (err: unknown) => ((settled = true), err as Error),
+    )
+    await vi.advanceTimersByTimeAsync(590_000)
+    expect(settled, 'still booting at minute 9:50 — nothing may have ended it').toBe(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await wake).toBe('woke')
+    expect(settled).toBe(false)
+    // The control plane WAS consulted past the threshold (the rule is live)…
+    expect(fetchMock.mock.calls.some(([u]) => String(u) === `${MODAL_BASE}/state`)).toBe(true)
+  })
+
+  it('"no container at all" needs TWO distinct control-plane readings — one reading is a blip', async () => {
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    process.env.MODAL_NOT_STARTING_AFTER_MS = '20000'
+    fetchMock.mockImplementation(route(() => modalState()))
+    let settled = false
+    const wake = quiet(ensureLargeAwake()).then((e) => ((settled = true), e))
+    // The first zero reading lands at the first check past 20s; the probe is
+    // cached for 12s, so the SECOND (fresh) one cannot come before ~32s.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(settled, 'ended on a single zero reading').toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    const err = (await wake) as Error
+    expect(settled).toBe(true)
+    expect(err.message).toContain('NO container')
+  })
+
+  it('sends nothing to the control plane while the route is unconfigured', async () => {
+    for (const name of MODAL_VARS) delete process.env[name]
+    vi.useFakeTimers()
+    Object.assign(process.env, FAST_POLL)
+    fetchMock.mockImplementation(route(() => modalState()))
+
+    const wake = quiet(ensureLargeAwake())
+    await vi.advanceTimersByTimeAsync(100_000)
+    await wake
+    for (const [url] of fetchMock.mock.calls as unknown as [string][]) {
+      expect(url).not.toContain('/state')
+    }
   })
 })

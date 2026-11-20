@@ -90,6 +90,12 @@ vi.mock('~/lib/memory/confirm-actions.server', () => ({
   listMemoryProposals: (s: string) => listMemoryProposals(s),
   answerMemoryProposal: vi.fn(),
 }))
+// #1057: the warming notice reads Modal's word on each box through this one
+// server action (the real module is a `'use server'` file with a session gate).
+const getWarmingBoxStates = vi.fn(async () => [] as unknown[])
+vi.mock('~/lib/harness-client/preview-header.server', () => ({
+  getWarmingBoxStates: () => getWarmingBoxStates(),
+}))
 vi.mock('~/lib/harness-client', async () => {
   const graph = await import('@hames-ai/agents')
   const refs = await import('@hames-ai/agents')
@@ -114,7 +120,7 @@ vi.mock('~/lib/harness-client', async () => {
   }
 })
 
-const { ChatInterface } = await import('~/components/ark-ui/ChatInterface')
+const { ChatInterface, WARMING_BOX_POLL_MS } = await import('~/components/ark-ui/ChatInterface')
 const { createSessionRegistry } = await import('~/lib/session-registry')
 const { SessionRegistryContext } = await import('~/lib/session-registry-context')
 type SessionRegistry = import('~/lib/session-registry').SessionRegistry
@@ -903,6 +909,54 @@ describe('ChatInterface — sending a message', () => {
     expect(transcript(container)).toContain('Here is your answer.')
   })
 
+  // #1057 §3. The notice used to say only "starting GPU — the 27B", fixed at the
+  // moment the wait began. It now reads Modal's word on each box while it is on
+  // screen — booting, restoring, not starting, with the elapsed time from
+  // Modal's own container start — and stops asking the moment it clears (a
+  // settled chat never polls the control plane).
+  it('reads Modal’s word on each box while the notice is on screen, and stops when it clears', async () => {
+    getWarmingBoxStates.mockResolvedValue([
+      { box: 'large', phase: 'booting', elapsedMs: 6 * 60_000, restoreEstimateMs: 157_000 },
+    ])
+    const stream = drivenSseResponse()
+    fetchMock.mockResolvedValue(stream.response)
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+    expect(getWarmingBoxStates, 'a settled chat must not ask').not.toHaveBeenCalled()
+
+    send(container, 'go')
+    await settle()
+    stream.push({
+      event: 'warming',
+      data: {
+        sessionId: 's1',
+        estimateMs: 146_000,
+        basis: 'default',
+        samples: 0,
+        boxes: ['large'],
+      },
+    })
+    await tick(450)
+    expect(getWarmingBoxStates).toHaveBeenCalledTimes(1) // immediately, not after an interval
+    expect(
+      container.querySelector('[data-testid="cold-start-box-large"]')?.textContent,
+      'the notice never named what Modal says',
+    ).toContain('the 27B: booting, a full boot — 6 min of ~8–16 min')
+
+    // It keeps asking while the notice stays.
+    await tick(WARMING_BOX_POLL_MS + 200)
+    expect(getWarmingBoxStates.mock.calls.length).toBeGreaterThanOrEqual(2)
+
+    stream.push(doneFrame())
+    stream.close()
+    await settle()
+    expect(container.querySelector('[data-testid="cold-start-notice"]')).toBeNull()
+    const after = getWarmingBoxStates.mock.calls.length
+    await tick(WARMING_BOX_POLL_MS + 200)
+    expect(getWarmingBoxStates.mock.calls.length, 'polled after the notice cleared').toBe(after)
+  }, 20_000)
+
   it('ignores an SSE event name it does not know', async () => {
     fetchMock.mockResolvedValue(
       sseResponse([{ event: 'telemetry', data: { anything: true } }, doneFrame()]),
@@ -1308,6 +1362,68 @@ describe('ChatInterface — adopting a turn found running on the server (#1045)'
       'the bar never mounted for the adopted turn',
     ).toBeTruthy()
   })
+
+  it.each(['resolve', 'reject'] as const)(
+    'Stop before a pending tier write settles (%s) leaves the message unsent',
+    async (settlement) => {
+      vi.useFakeTimers()
+      getConversationTurnState.mockResolvedValue(null)
+      let resolveWrite!: (value: { tier: string; selfDeployedAvailable: boolean }) => void
+      let rejectWrite!: (error: Error) => void
+      setConversationTier.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveWrite = resolve
+            rejectWrite = reject
+          }),
+      )
+      const runTurn = vi.spyOn(await import('~/lib/turn-stream'), 'runTurn')
+      // Unlike the default stream double, fetch honours an already-aborted
+      // signal, so the old path paints its misleading stopped-watching notice.
+      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+        if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+        return sseResponse([doneFrame()])
+      })
+      const host = makeHost()
+      const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+      try {
+        await vi.advanceTimersByTimeAsync(60)
+        fireEvent.click(container.querySelector('input[value="self_deployed"]')!)
+        await vi.advanceTimersByTimeAsync(20)
+        expect(setConversationTier).toHaveBeenCalledWith('s1', 'self_deployed')
+
+        send(container, 'cancel before sending')
+        await vi.advanceTimersByTimeAsync(20)
+        expect(host.registry.runState('s1').isProcessing).toBe(true)
+        expect(runTurn).not.toHaveBeenCalled()
+        fireEvent.click(container.querySelector('button[aria-label="Stop generating"]')!)
+
+        if (settlement === 'resolve') {
+          resolveWrite({ tier: 'self_deployed', selfDeployedAvailable: true })
+        } else {
+          rejectWrite(new Error('tier write failed'))
+        }
+        await vi.advanceTimersByTimeAsync(100)
+
+        expect(transcript(container)).toContain('Message not sent.')
+        expect(transcript(container)).not.toContain('Stopped watching this response.')
+        expect(transcript(container)).not.toContain('The agent finishes server-side')
+        expect(runTurn).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(host.registry.runState('s1').isProcessing).toBe(false)
+
+        // The cancelled run releases its local claim and Stop marker. A fresh
+        // send starts normally, rather than inheriting either of them.
+        send(container, 'send the next message')
+        await vi.advanceTimersByTimeAsync(100)
+        expect(runTurn).toHaveBeenCalledTimes(1)
+        expect(transcript(container)).toContain('Here is your answer.')
+        expect(transcript(container)).not.toContain('Stopped watching this response.')
+      } finally {
+        runTurn.mockRestore()
+      }
+    },
+  )
 
   // #1045 review, LOW: the tier-write window. `runSend` awaits a pending tier
   // write before its first state lands, so a turn-state read resolving inside

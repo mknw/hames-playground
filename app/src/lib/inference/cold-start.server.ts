@@ -336,6 +336,20 @@ function estimateFor(box: WakeBox): ColdStartEstimate {
 }
 
 /**
+ * The boxes with a start outstanding RIGHT NOW: each box that nothing proves
+ * warm — the same predicate `pendingColdStartEstimate` filters its figures
+ * through, exported for the warming notice (#1057) so the message can name
+ * WHICH boxes the turn waits on rather than only for how long. Empty when
+ * every box is proven warm.
+ */
+export function pendingColdStartBoxes(now: number = Date.now()): WakeBox[] {
+  return [
+    ...(!largeProvenWarm(now) ? (['large'] as const) : []),
+    ...(!smallProvenWarm(now) ? (['small'] as const) : []),
+  ]
+}
+
+/**
  * The estimate for whatever is outstanding RIGHT NOW: the larger of the two
  * boxes' figures, over the boxes that are not proven warm. This is what the
  * warming frame sends a turn that is about to wait, and — since #1045 — what

@@ -38,15 +38,20 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import { resolveTier } from '../inference/tier.server'
 import { selfDeployedConfigured, type InferenceTier } from '../inference/config.server'
+import { verdaControlPlaneConfigured } from '../inference/verda-control-plane.server'
 import { largeWarmth, type LargeWarmth } from '../inference/large-activity.server'
+import { probeVerdaReplicas } from '../inference/verda-control-plane.server'
 import {
-  probeVerdaReplicas,
-  type VerdaControlPlaneProbe,
-} from '../inference/verda-control-plane.server'
-import { coldStartEstimate } from '../inference/cold-start.server'
+  modalBoxProbe,
+  modalControlConfigured,
+  probeModalBoxes,
+} from '../inference/modal-control.server'
+import { coldStartEstimate, smallColdStartEstimate } from '../inference/cold-start.server'
+import { readBoxPhase } from '../inference/box-phase.server'
 import {
   ensurePrivateTierAwake,
   keepWarmIntervalMs,
@@ -170,9 +175,19 @@ export interface PreviewHeaderState {
  * already had); and only the no-turn, no-evidence cases ask the control plane,
  * where an unavailable probe — the one error path — is `unknown`.
  */
+/** The probe, normalized: whichever control plane owns this deployment reports
+ *  the same three facts about the 27B's box — is it up at all (count), and
+ *  when its oldest container/replica started (the one honest elapsed-time
+ *  base for a `starting` countdown). `null` when no control plane answers. */
+export interface BoxControlProbe {
+  ok: boolean
+  count: number | null
+  oldestStartedAtMs: number | null
+}
+
 function displayWarmth(
   w: LargeWarmth,
-  probe: VerdaControlPlaneProbe | null,
+  probe: BoxControlProbe | null,
   waking: boolean,
 ): HeaderWarmth {
   let state: WarmthDisplayState
@@ -188,7 +203,7 @@ function displayWarmth(
   // against a proven-warm box leaves `ready` standing.
   else if (waking) state = 'starting'
   else if (!probe || !probe.ok) state = 'unknown'
-  else state = (probe.replicaCount ?? 0) > 0 ? 'starting' : 'cold'
+  else state = (probe.count ?? 0) > 0 ? 'starting' : 'cold'
 
   // The estimate is read only for the state that shows it. `coldStartEstimate()`
   // is cheap (a median over a handful of samples), but a field that is always
@@ -208,7 +223,7 @@ function displayWarmth(
   const estimate = state === 'starting' ? coldStartEstimate() : null
   let estimateMs: number | null = null
   if (estimate) {
-    const startedAt = probe?.ok ? probe.oldestReplicaStartedAtMs : null
+    const startedAt = probe?.ok ? probe.oldestStartedAtMs : null
     const elapsedMs = startedAt !== null ? Math.max(0, Date.now() - startedAt) : 0
     const remainingMs = estimate.estimateMs - elapsedMs
     estimateMs = remainingMs > 0 ? remainingMs : null
@@ -234,16 +249,99 @@ function displayWarmth(
  * The control-plane probe rides the same `Promise.all` and is cached
  * process-side for 12s, so a settled poll pays it at most once per interval —
  * and when it cannot be answered, it degrades to `unknown` inside its own
- * 5s-per-fetch bound instead of hanging a poll that is supposed to be safe
+ * 15s-per-fetch bound (`MODAL_CONTROL_TIMEOUT_MS`) instead of hanging a poll
+ * that is supposed to be safe
  * beside a live chat. Skipped entirely when there is no endpoint: the whole
  * indicator is hidden for that deployment, so a probe would be noise. */
+/** The 27B's control-plane probe — the ONE question the strip asks a control
+ *  plane: Modal's while its sidecar is configured (`modal-control.server.ts`,
+ *  #1057), Verda's on the deployment it was built for, `null` when neither
+ *  answers. On the OpenRouter route the 27B is not a Modal box of ours, so
+ *  the Modal probe is skipped exactly as the wake skips the box — the strip
+ *  then has Verda or nothing, which is today's behaviour. */
+async function boxProbeFor(): Promise<BoxControlProbe | null> {
+  if (selfDeployedConfigured() && modalControlConfigured() && !largeOnOpenRouter()) {
+    const modal = modalBoxProbe(await probeModalBoxes(), 'large')
+    return {
+      ok: modal.ok,
+      count: modal.containerCount,
+      oldestStartedAtMs: modal.oldestContainerStartedAtMs,
+    }
+  }
+  if (verdaControlPlaneConfigured()) {
+    const verda = await probeVerdaReplicas()
+    return {
+      ok: verda.ok,
+      count: verda.replicaCount,
+      oldestStartedAtMs: verda.oldestReplicaStartedAtMs,
+    }
+  }
+  return null
+}
+
+/** One box a chat turn may be waiting on, as Modal's control plane has it
+ *  (#1057 §3): only the phases that are a wait — a box that is up, cold or
+ *  unreadable is not listed. The elapsed time is measured SERVER-side at the
+ *  moment of the answer (the browser adds its own time since receipt, never
+ *  subtracting a server stamp from its clock). */
+export interface WarmingBoxState {
+  box: 'large' | 'small'
+  /** `waiting` — asked, Modal has created no container yet; `booting` — a
+   *  container exists, not serving yet; `not-starting` — asked a long time ago
+   *  and Modal still created none. */
+  phase: 'waiting' | 'booting' | 'not-starting'
+  /** From Modal's container start (`booting`) or from the ask (`waiting`,
+   *  `not-starting`); `null` while Modal lists the container as `Pending`. */
+  elapsedMs: number | null
+  /** This box's snapshot-restore estimate, ms — what the notice sets the
+   *  elapsed time against (a full boot is stated past it). */
+  restoreEstimateMs: number
+}
+
+/**
+ * The chat notice's live read: which boxes a turn is waiting on and what Modal
+ * says about each. The same derivation as the admin panel's lines
+ * (`inference/box-phase.server.ts`), so the two surfaces cannot disagree. Empty
+ * while Modal control is unavailable (the notice then shows what it always did)
+ * and never a request to either box — the control plane only. No owner
+ * argument: the one read is the same for every signed-in user, and carries
+ * only box names, phases and durations.
+ */
+export async function getWarmingBoxStates(): Promise<WarmingBoxState[]> {
+  await requireUser()
+  if (!selfDeployedConfigured() || !modalControlConfigured()) return []
+  const probe = await probeModalBoxes()
+  const now = Date.now()
+  const out: WarmingBoxState[] = []
+  for (const box of (largeOnOpenRouter() ? ['small'] : ['large', 'small']) as (
+    'large' | 'small'
+  )[]) {
+    const reading = readBoxPhase(box, modalBoxProbe(probe, box), now)
+    if (
+      reading.phase !== 'waiting' &&
+      reading.phase !== 'booting' &&
+      reading.phase !== 'not-starting'
+    ) {
+      continue
+    }
+    out.push({
+      box,
+      phase: reading.phase,
+      elapsedMs: reading.startedAtMs !== null ? Math.max(0, now - reading.startedAtMs) : null,
+      restoreEstimateMs: (box === 'large' ? coldStartEstimate() : smallColdStartEstimate())
+        .estimateMs,
+    })
+  }
+  return out
+}
+
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   const user = await requireUser()
   const [stored, activeUsers, usage, probe] = await Promise.all([
     getStoredInferenceTier(user.id),
     countActiveUsers(),
     getUsageToday(),
-    selfDeployedConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
+    boxProbeFor(),
   ])
   const tier = resolveTier(null, stored)
   return {

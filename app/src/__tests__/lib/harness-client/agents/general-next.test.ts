@@ -147,6 +147,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 
 const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
+  controllerOptions: vi.fn(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
   synthesizerOptions: vi.fn(),
@@ -183,7 +184,10 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('@hames-ai/harness-baml', async (original) => ({
   ...(await original<object>()),
-  createLoopControllerAdapter: () => mocks.controller,
+  createLoopControllerAdapter: (options: unknown) => {
+    mocks.controllerOptions(options)
+    return mocks.controller
+  },
   createActorControllerAdapter: (options: unknown) => {
     mocks.actorOptions(options)
     return mocks.actor
@@ -485,16 +489,20 @@ describe('general-next composition', () => {
     expect(instructions).toBe(
       // #1032 (scenario 48: "the documents that person shared with me" went to
       // read-documents in every live run): shares are office-data's, uploads alone are read-documents'.
-      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata, and the files someone shared with the user, belong to Microsoft 365 tools (office-data); read-documents searches only this conversation’s uploads. When a request needs routes working together (one route’s result is another’s input), choose think first.',
+      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata, and the files someone shared with the user, belong to Microsoft 365 tools (office-data); read-documents searches only this conversation’s uploads. ' +
+        // #1058: the source order for an organisation question's own projects — the
+        // release defect was the public web (or 'consult internal documentation').
+        'The organisation’s own projects are found in its own sources, in order: the knowledge graph, then its Microsoft 365 files and sites (office-data); the public web is the last resort for them. ' +
+        'When a request needs routes working together (one route’s result is another’s input), choose think first.',
     )
     expect(state).not.toContain('Choose the route whose own tools perform the next step')
     expect(criteria['office-data']).toBe(
-      'Read mail, calendar date ranges and files; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
-        'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
+      'Read mail, calendar and the organisation’s files and sites — its projects live there; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+        'Tools: mail/calendar (graph_mail_recent, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
     )
     expect(criteria['info-retrieval']).toBe(
-      'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.\n' +
-        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
+      'Look things up in the knowledge graph, on the public web and in library docs; cannot open this conversation’s uploads. The graph identifies people (a name to an email) and, when recorded, the organisation’s projects; a projects question it cannot answer goes to office-data, the web last.\n' +
+        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (context7).',
     )
     expect(criteria['read-documents']).toBe(
       'Search this conversation’s uploaded and indexed documents, including files office-data copied in with graph_file_ingest, and return cited excerpts; it cannot see OneDrive, SharePoint or what someone shared with the user, which office-data finds.\n' +
@@ -545,6 +553,68 @@ describe('general-next composition', () => {
       expect(criteria['info-retrieval']).toContain('Look things up')
     },
   )
+
+  // #1058 (owner, on release): asked about the organisation's projects the agent went
+  // to the public web and then answered "no dedicated Project node… consult internal
+  // documentation" — it had no basis for looking in the organisation's own sources, and
+  // nothing anywhere in the decision path said where projects live. These pins are the
+  // hermetic reproduction (each was red on main): every surface the decision path reads
+  // now names where projects live and the order of the organisation's own sources, and
+  // the answer writer's rule (pinned on the wire in
+  // app/src/__tests__/lib/harness-baml/synthesize-consult-internal.test.ts) keeps the
+  // reply from deferring the user to documentation the tools themselves read.
+  // MUTATIONS, each red: drop the projects sentence from the question; drop the
+  // "its projects live there" clause from office-data's criterion; drop the projects
+  // clause from info-retrieval's criterion; drop the project-material sentence from
+  // either capability; drop the project-material sentence from the office actor's
+  // contextPrefix; drop the organisation-sources paragraph from the info loop's
+  // controller context.
+  it('#1058: the decision path carries where projects live and the source order', async () => {
+    choices = ['answer']
+    await run()
+    const body = JSON.parse(String(requests.mock.calls[0][1].body))
+    const { criteria, instructions } = body.questions.next_step as {
+      criteria: Record<string, string>
+      instructions: string
+    }
+    // The decide instruction orders the organisation's own sources: graph, then
+    // office-data's files and sites, the public web last.
+    expect(instructions).toContain(
+      'The organisation’s own projects are found in its own sources, in order: the knowledge graph, then its Microsoft 365 files and sites (office-data); the public web is the last resort for them.',
+    )
+    // Each criterion the decider reads names its route's share of that order.
+    expect(criteria['office-data']).toContain(
+      'the organisation’s files and sites — its projects live there',
+    )
+    expect(criteria['info-retrieval']).toContain(
+      'a projects question it cannot answer goes to office-data, the web last',
+    )
+    // The agent map (planner and the actorCritic route scope) reads the capabilities.
+    expect(composition.routes['office-data']).toMatchObject({
+      capability: expect.stringContaining(
+        'the organisation’s own project material — project sites, folders and files in SharePoint and OneDrive, project mail and meetings — is read here',
+      ),
+    })
+    expect(composition.routes['info-retrieval']).toMatchObject({
+      capability: expect.stringContaining(
+        'the graph may hold the organisation’s own projects (Project nodes) and may hold none',
+      ),
+    })
+    // The office actor is told how project material is reached.
+    const officePrefix = mocks.actorOptions.mock.calls.at(-1)![0].contextPrefix
+    expect(officePrefix).toContain(
+      'search files with plain words (a project’s name, or “project” for the project folders)',
+    )
+    // The info loop's controller context: org questions from org sources, graph first,
+    // and no deferral to internal documentation.
+    const infoContext = String(mocks.controllerOptions.mock.calls.at(-1)![0])
+    expect(infoContext).toContain(
+      'A question about the organisation’s own work — its projects, people, plans — is answered from the organisation’s own sources: query the graph first.',
+    )
+    expect(infoContext).toContain(
+      'Never send the user to consult internal documentation: your tools read the organisation’s own sources, and the reply reports what they found.',
+    )
+  })
 
   // p87 (owner, 2026-10-22): exact calculation on numbers in the user's LATEST message is
   // sandbox work; a follow-up over an earlier turn's number is not (the child cannot see it).
@@ -700,9 +770,7 @@ describe('general-next composition', () => {
       const criteria = second.questions.next_step.criteria
       expect(criteria['read-documents']).toContain('uploaded and indexed documents')
       expect(criteria['read-documents']).toContain('Data Stash search, cited passages')
-      expect(criteria['info-retrieval']).toContain(
-        'cannot open files uploaded to this conversation',
-      )
+      expect(criteria['info-retrieval']).toContain('cannot open this conversation’s uploads')
     },
   )
 
@@ -1017,10 +1085,10 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
-        'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.\n' +
-        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
+        'Look things up in the knowledge graph, on the public web and in library docs; cannot open this conversation’s uploads. The graph identifies people (a name to an email) and, when recorded, the organisation’s projects; a projects question it cannot answer goes to office-data, the web last.\n' +
+        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (context7).',
       capability:
-        'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; search or fetch public web sources and library documentation.',
+        'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; the graph may hold the organisation’s own projects (Project nodes) and may hold none — when it holds none, a projects question is office-data’s to answer from the organisation’s own files and sites next, the public web last; search or fetch public web sources and library documentation.',
     })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
@@ -1620,7 +1688,9 @@ describe('general-next composition', () => {
       const intent = mocks.critic.mock.calls[0][0]
       const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
       expect(request).toBe(message)
-      expect(scope).toMatch(/^- office-data: Read mail, calendar date ranges and files; /)
+      expect(scope).toMatch(
+        /^- office-data: Read mail, calendar and the organisation’s files and sites — its projects live there; /,
+      )
       // #832 (owner, 2026-10-28): the office step saves the file and the user indexes it
       // from the Data Stash, so "index it for this chat" is answered by saying so, not
       // missing from the step's results. MUTATION: drop the sentence from the office-data
@@ -2894,7 +2964,7 @@ describe('general-next think route, in isolation', () => {
       )
       // The graph identifies people before the office route searches.
       expect(criteria['info-retrieval']).toContain(
-        'Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files.',
+        'The graph identifies people (a name to an email) and, when recorded, the organisation’s projects',
       )
       expect(context).toContain(
         'which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them',
@@ -2917,8 +2987,9 @@ describe('general-next think route, in isolation', () => {
   )
 
   // rv-1034 (proposed): the #880 bound in the tightest configuration. With the
-  // product-management tools on, info-retrieval's criterion is 447 of 450.
-  // MUTATION: lengthen the Lenny's Data clause by 4 characters (447 → 451): red.
+  // product-management tools on, info-retrieval's criterion is 419 of 450 (#1058 moved
+  // its PM archive mention to the Tools line to make room for the projects clause).
+  // MUTATION: lengthen the Lenny's Data clause by 32 characters (419 → 451): red.
   it('T7: every Decide criterion stays within 450 characters with the product-management tools on', async () => {
     gateway.names = [...gateway.names, 'lennys_search_archive']
     choices = ['answer']

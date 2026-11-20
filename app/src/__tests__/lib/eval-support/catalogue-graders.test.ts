@@ -108,6 +108,34 @@ describe('catalogue graders', () => {
     )
   })
 
+  // #1058: the two projects rows' answerNotMatches graders exist for the release
+  // turn's actual deflections ("no dedicated Project node… consult internal
+  // documentation"). MUTATION (red): reword either pattern so those phrasings
+  // slip through, or drop its negate.
+  it('the #1058 deflection graders fail the release answers they exist for', () => {
+    const replies = [
+      'There is no dedicated Project node; please consult internal documentation for the organisation’s projects.',
+      'No dedicated Project node was found, so I cannot answer; please consult internal documentation.',
+    ]
+    for (const id of ['49-org-projects-office-source', '50-org-projects-in-graph']) {
+      const negated = (catalogueGraders(catalogue, id).answerPatterns ?? []).filter((p) => p.negate)
+      expect(negated.length, id).toBeGreaterThan(0)
+      for (const p of negated)
+        for (const reply of replies)
+          expect(answerNotMatchesCheck(reply, p.pattern).pass, `${id}: ${p.says}`).toBe(false)
+      // The answers the rows grade as correct still pass.
+      for (const p of negated) {
+        expect(
+          answerNotMatchesCheck(
+            'I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.',
+            p.pattern,
+          ).pass,
+          `${id}: ${p.says}`,
+        ).toBe(true)
+      }
+    }
+  })
+
   it('an unknown row throws at module load', () => {
     expect(() => catalogueGraders(catalogue, 'p99-nothing')).toThrow(/No catalogue row/)
   })

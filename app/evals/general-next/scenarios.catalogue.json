@@ -3137,6 +3137,153 @@
       "notes": "Built for #1032, redesigned on the coordinator's scenario ruling (no pre-uploaded document: the files exist only behind the office route). The route order is not graded: the answer needs both routes, in whichever order. Unfiltered, the person's files sit past the first 2 000 characters of the list, where the office route's compact record stops. A second turn asking for a file's contents would need graph_file_ingest, which this driver gates (P4), so it is not part of the row."
     },
     {
+      "id": "49-org-projects-office-source",
+      "title": "Projects live in the organisation’s own sources: graph first, then its files",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval", "office-data"],
+        "sources": ["knowledge-graph", "m365-files"],
+        "intents": ["lookup-fact"],
+        "turnShape": "single",
+        "toolShape": "several-routes",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": ["What projects are active at Lantern?"],
+      "expected": "The graph is queried first and holds no Project node (the release shape: the org-knowledge hook is its only Project writer and it is off); the office route then searches the organisation's own SharePoint and OneDrive files and finds the two project folders; the public web is never reached, and the answer names Lantern Portal and Lantern Field Ops from those files instead of deferring the user to internal documentation (#1058, owner-reported on release).",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools: the graph is read before the organisation's files",
+          "tools": ["read_neo4j_cypher", "graph_files_search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the graph query targets Project nodes",
+          "tool": "read_neo4j_cypher"
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the files search carries project words",
+          "tool": "graph_files_search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes: both projects the files search returned",
+          "facts": ["Lantern Portal", "Lantern Field Ops"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes: the graph first, then the organisation's own files",
+          "routes": ["info-retrieval", "office-data"]
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "no deferral to internal documentation or colleagues while the tools read those sources",
+          "pattern": "consult (?:the |your )?internal documentation|ask (?:your )?colleagues|contact the organisation",
+          "examples": {
+            "match": [
+              "I could not find a dedicated Project node; please consult internal documentation for the organisation's projects.",
+              "There is no project information here; you may want to ask your colleagues."
+            ],
+            "noMatch": [
+              "I searched the knowledge graph and your SharePoint files; the active projects are Lantern Portal and Lantern Field Ops.",
+              "The graph held no Project node, and the files search returned two project folders."
+            ]
+          }
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the scenario's own graph rows (none: no Project node exists) and a two-hit graph_files_search result in the real tool's shape, each hit with its folder, site and link (module toolData)",
+        "hermetic only: the scripted controller's queries (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
+      ],
+      "cells": [
+        ["lookup-fact", "knowledge-graph"],
+        ["lookup-fact", "m365-files"]
+      ],
+      "notes": "Red on the release behaviour (#1058): the info route alone answered 'no dedicated Project node' and the answer deferred the user to internal documentation while office-data's files hold the projects. Hermetic: the routes are scripted, so a pass proves the wiring — the graph read happens first, the office files search runs after it, and its results reach the answer writer (answerFromPrompt). A live pass proves the model's own route order and the no-deferral answer. The web is never a graded source here; a live run that reaches it fails answerContains, which only the files search's facts satisfy."
+    },
+    {
+      "id": "50-org-projects-in-graph",
+      "title": "With Project nodes in the graph, a projects question is answered from the graph",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval"],
+        "sources": ["knowledge-graph"],
+        "intents": ["lookup-fact"],
+        "turnShape": "single",
+        "toolShape": "one",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": ["What projects are active at Lantern in the knowledge graph?"],
+      "expected": "The graph holds three Project nodes (what the org-knowledge hook writes when it is on and the person accepts), and the answer names all three from the graph alone, with no office route, no web and none of the release turn's deflections.",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools: the graph is read",
+          "tools": ["read_neo4j_cypher"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the graph query targets Project nodes",
+          "tool": "read_neo4j_cypher"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes: all three projects from the graph rows",
+          "facts": ["Lantern Portal", "Lantern Field Ops", "Lantern Beacon"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes: the graph alone answers it",
+          "routes": ["info-retrieval"]
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "no 'no Project node' deflection and no deferral to internal documentation while the graph rows name three",
+          "pattern": "no (?:dedicated )?Project node|consult (?:the |your )?internal documentation",
+          "examples": {
+            "match": [
+              "There is no dedicated Project node in the knowledge graph; consult internal documentation.",
+              "The graph holds no Project node, so I cannot say."
+            ],
+            "noMatch": [
+              "The active projects are Lantern Portal, Lantern Field Ops and Lantern Beacon.",
+              "I found no projects in your mail."
+            ]
+          }
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the scenario's own graph rows: three Project nodes (module toolData)",
+        "hermetic only: the scripted controller's query (module scriptedArgs), and the scripted Synthesize names each expected fact only when the prompt it was handed carries it (module answerFromPrompt)"
+      ],
+      "notes": "The graph half of #1058. Hermetic: a pass proves the graph rows reach the answer writer (answerFromPrompt). A live pass proves the model answers from the graph instead of the release turn's 'no dedicated Project node… consult internal documentation'."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",

@@ -140,6 +140,10 @@ services:
     # or DNS problem — i.e. exactly when going through Caddy is not an option.
     ports: !override ["127.0.0.1:3444:3444"]
 
+    # The app is the ONLY other member of the `modal-control` network (below),
+    # which is how it reaches the control sidecar by service name.
+    networks: !override [app-network, modal-control]
+
     # `!override` rather than the additive default: on this host the single
     # source of runtime config is the repo-root `.env`, and a leftover
     # `app/.env` (e.g. from a hand-run build) must not contribute variables the
@@ -165,6 +169,54 @@ services:
       - VITE_DEV_BYPASS_AUTH=false
       - SANDBOX_ENVIRONMENT=release
       - SANDBOX_CACHE_VOLUME=kg-sandbox-cache-release
+
+  # ---------------------------------------------------------------------------
+  # The Modal control sidecar (#1057) — OPT-IN: `COMPOSE_PROFILES=app,modal-control`.
+  #
+  # It holds the Modal WORKSPACE token (deploy/delete rights; it starts and stops
+  # billed GPUs) behind one shared bearer, so the wiring is the narrowest that
+  # works, and compose-modal-control.test.ts pins each piece:
+  #   * NO `ports:` — nothing is published, on loopback or anywhere else. A
+  #     published port bypasses host firewall rules, and the sidecar must not
+  #     become reachable from the host's public interface.
+  #   * its own network, `modal-control`, shared ONLY with `app`. It cannot be
+  #     `internal: true` (the sidecar needs egress to Modal's API), so
+  #     membership is the control: nothing else on `app-network` can reach it.
+  #   * it binds 0.0.0.0 INSIDE its own container only (MODAL_CONTROL_HOST below;
+  #     the code default is 127.0.0.1); the app reaches it by service name.
+  #   * the workspace token comes from the sidecar's OWN env file (mode 600),
+  #     never the app's `.env`; only the shared bearer (MODAL_CONTROL_TOKEN) is in
+  #     both, read from the root `.env` so there is one value.
+  #   * a read-only image holding one file, a dedicated uid, no capabilities —
+  #     not a writable checkout that anything with write access could edit.
+  # The app side is `MODAL_CONTROL_BASE=http://modal-control:8124` and
+  # `MODAL_CONTROL_TOKEN` in the root `.env` (.env.production.example).
+  # ---------------------------------------------------------------------------
+  modal-control:
+    build:
+      context: ./deploy/modal
+      dockerfile: Dockerfile.control
+    image: hames-modal-control:local
+    container_name: hames-modal-control
+    restart: unless-stopped
+    profiles: ["modal-control"]
+    ports: !override []
+    env_file:
+      - path: ./deploy/modal/control.local.env
+        required: true
+    environment:
+      - MODAL_CONTROL_HOST=0.0.0.0
+      - MODAL_CONTROL_TOKEN=${MODAL_CONTROL_TOKEN:?set MODAL_CONTROL_TOKEN in .env — the bearer the app presents to the sidecar (openssl rand -hex 32)}
+    networks:
+      - modal-control
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
 
   # ---------------------------------------------------------------------------
   # TLS termination
@@ -214,3 +266,7 @@ networks:
     internal: true
     driver_opts:
       com.docker.network.bridge.gateway_mode_ipv4: isolated
+  # Shared ONLY by `app` and `modal-control`. Not `internal`: the sidecar needs
+  # egress to Modal's API. Membership is the access control.
+  modal-control:
+    driver: bridge

@@ -10,10 +10,10 @@
 import { readFileSync } from 'node:fs'
 import { expect } from '@playwright/test'
 import { HANDLES_FILE } from './env'
-import type { FakeCall, Fault, HeldRequest } from '../../e2e/lib/fake-llm'
+import type { FakeCall, Fault, HeldRequest, ModalControlCall } from '../../e2e/lib/fake-llm'
 import type { FakeToolCall } from '../../e2e/lib/fake-gateway'
 
-export type { FakeCall, Fault, HeldRequest }
+export type { FakeCall, Fault, HeldRequest, ModalControlCall }
 
 /** What global setup parked for the workers. */
 export interface Handles {
@@ -59,6 +59,25 @@ export class FakeBackend {
    *  table. */
   async arm(fault: Fault): Promise<void> {
     await this.post('/arm', fault)
+  }
+
+  /** #1057: arm the fake Modal control plane's container counts — the
+   *  observation the admin panel's per-box lines and the header's `cold` /
+   *  `starting` render from. `0` (the default) is the scaled-down
+   *  observation. Cleared by `reset()`. */
+  async modalArm(
+    boxes: { large?: number; small?: number },
+    opts: { ready?: boolean; startedAgoMs?: number } = {},
+  ): Promise<void> {
+    await this.post('/modal-arm', { ...boxes, ...opts })
+  }
+
+  /** #1057: every `/autoscaler` and `/stop` request the app sent the fake
+   *  Modal control sidecar since the last reset — the wire a switch flip and
+   *  a stop-now travel, so "the switch booted the boxes with no request
+   *  sent" is an assertion on THESE records plus `calls()` staying flat. */
+  async modalCalls(): Promise<ModalControlCall[]> {
+    return (await this.get<{ calls: ModalControlCall[] }>('/modal-calls')).calls
   }
 
   /**

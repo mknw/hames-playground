@@ -375,6 +375,8 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'loop_recovery',
   'decision_made',
   'model_call',
+  // A persisted deliverable survives even when the loop's content is discarded.
+  'outputs_promoted',
   // The egress gate's audit, refusal and block records: a security record is not
   // optional history, and the tripwire's count is derived from the refusals.
   'egress_audit',

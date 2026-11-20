@@ -31,6 +31,7 @@ import { DEFAULT_AGENT_ID } from '../../lib/harness-client/agent-ids'
 // Server-computed link verdicts (#901 slice 1): the recognised-host list
 // stays here — only the per-link verdict crosses on the done frame.
 import { recognisedLinkHostsFor } from '../../lib/harness-client/link-verdicts.server'
+import { pendingColdStartBoxes } from '../../lib/inference/cold-start.server'
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -148,8 +149,18 @@ export async function POST(event: APIEvent) {
           // conversation, and must not be persisted into the blob or replayed
           // on reload. The client clears it on the next frame of any kind —
           // see `WarmingEventData`.
-          onWarming: (estimate) =>
-            send(`event: warming\ndata: ${JSON.stringify({ sessionId, ...estimate })}\n\n`),
+          onWarming: (estimate) => {
+            // #1057: the notice names WHICH boxes it waits on, from the same
+            // predicate the estimate is filtered through — one derivation, so
+            // the figure and the name cannot disagree.
+            return send(
+              `event: warming\ndata: ${JSON.stringify({
+                sessionId,
+                ...estimate,
+                boxes: pendingColdStartBoxes(),
+              })}\n\n`,
+            )
+          },
 
           // The final result, as a named event.
           onResult: (result) =>

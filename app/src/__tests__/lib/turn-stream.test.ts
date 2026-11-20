@@ -594,7 +594,17 @@ describe('runTurn — failure paths', () => {
 /** A `warming` frame as the SSE route emits it. */
 const warmingFrame = (over: Partial<WarmingEventData> = {}): Frame => ({
   event: 'warming',
-  data: { sessionId: 's1', estimateMs: 146_000, basis: 'default', samples: 0, ...over },
+  // #1057: every frame the route emits names the boxes it waits on; the
+  // default here is the 27B alone, the shape the old frames carried before a
+  // payload named boxes at all.
+  data: {
+    sessionId: 's1',
+    estimateMs: 146_000,
+    basis: 'default',
+    samples: 0,
+    boxes: ['large'],
+    ...over,
+  },
 })
 
 describe('runTurn — the cold-start notice', () => {
@@ -603,7 +613,15 @@ describe('runTurn — the cold-start notice', () => {
     fetchMock.mockResolvedValue(sseResponse([warmingFrame(), controllerAction({}), done()]))
     await runTurn(request(), rec.sink)
 
-    expect(rec.warmings[0]).toMatchObject({ estimateMs: 146_000, basis: 'default', samples: 0 })
+    expect(rec.warmings[0]).toMatchObject({
+      estimateMs: 146_000,
+      basis: 'default',
+      samples: 0,
+      // #1057: the frame names the boxes it waits on, derived where the
+      // estimate is — so the notice cannot name a box it is not counting
+      // down for.
+      boxes: ['large'],
+    })
   })
 
   it('clears it on the next frame of ANY kind — that is what "first token" means here', async () => {
@@ -915,7 +933,12 @@ describe('runTurn — a stream lost before the answer', () => {
 // `transition`) → the first case reddens on `rec.states`. MUTATION: drop the
 // `observe` retraction → the first case reddens on its mid-watch `warmings`.
 describe('adoptRunningTurn — a turn found already running', () => {
-  const ESTIMATE: TurnWarmingEstimate = { estimateMs: 157_000, basis: 'default', samples: 0 }
+  const ESTIMATE: TurnWarmingEstimate = {
+    estimateMs: 157_000,
+    basis: 'default',
+    samples: 0,
+    boxes: ['large'],
+  }
 
   /** A recovery double scripted poll by poll: each entry is one poll's answer
    *  (or `null` — no row), and the LAST entry repeats. */

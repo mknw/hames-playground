@@ -416,7 +416,17 @@ describe('getConversationTurnState', () => {
 
     await expect(actions.getConversationTurnState('c1')).resolves.toMatchObject({
       turnInFlight: true,
-      warming: { estimateMs: 157_000, basis: 'default', samples: 0 },
+      warming: {
+        estimateMs: 157_000,
+        basis: 'default',
+        samples: 0,
+        // #1057: the reloaded page's notice names the boxes too — the same
+        // derivation the SSE frame carries, so a reload cannot put a
+        // different wait on screen than the one the turn is in. BOTH boxes
+        // here: nothing in this fixture proves either one warm, and the
+        // derivation names every box the turn's wake will have to start.
+        boxes: ['large', 'small'],
+      },
     })
   })
 

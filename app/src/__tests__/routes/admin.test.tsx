@@ -9,17 +9,19 @@
  * reverts the switch.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
+import { fireEvent, render, screen, waitFor, within } from '@solidjs/testing-library'
 
 const mocks = vi.hoisted(() => ({
   admin: vi.fn(),
   set: vi.fn(),
+  stop: vi.fn(),
   header: vi.fn(),
 }))
 
 vi.mock('~/lib/harness-client/gpu-admin.server', () => ({
   getGpuAdminState: mocks.admin,
   setGpuKeepRunning: mocks.set,
+  stopGpuBoxNow: mocks.stop,
 }))
 
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
@@ -44,6 +46,10 @@ const ADMIN_STATE = {
   largeUpSince: 1,
   smallState: 'ready',
   smallUpSince: 1,
+  // #1057: the Modal control half — null is the unconfigured route, the
+  // default every test here starts from.
+  modal: null,
+  releasePending: [],
 } as const
 
 /** A header payload with the 27B up — one the server can actually send: an
@@ -213,6 +219,55 @@ describe('the admin page', () => {
     const soFar = await screen.findByText(/so far/)
     expect(soFar.textContent).toMatch(/€5\.67/)
     expect(soFar.textContent).not.toMatch(/€11/)
+  })
+
+  it('#1057: seeds from the CONTROL PLANE’s container start when it reports one — Modal bills from container creation', async () => {
+    // The switch went on two hours ago; Modal reports the 27B’s container
+    // started an hour ago — the honest bill start, because Modal bills while
+    // the container exists. The seed is the container start when there is
+    // one, the process clock only otherwise, so the meter follows the thing
+    // that bills rather than the thing this process happened to see.
+    const since = Date.now() - 2 * 3_600_000
+    const containerStart = Date.now() - 3_600_000
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      keepRunning: true,
+      switchedOnAt: since,
+      // The restart case on both halves: no process up-since for either box,
+      // and the 4B observed cold — so the ONLY seed in the figure is the
+      // control plane's container start.
+      largeUpSince: null,
+      smallUpSince: null,
+      smallState: 'cold',
+      modal: {
+        large: {
+          state: 'up',
+          containers: 1,
+          containerStartedAtMs: containerStart,
+          restored: true,
+          gpu: 'NVIDIA H100',
+          reason: null,
+        },
+        small: {
+          state: 'cold',
+          containers: 0,
+          containerStartedAtMs: null,
+          restored: null,
+          gpu: null,
+          reason: null,
+        },
+      },
+    })
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+    const soFar = await screen.findByText(/so far/)
+    // One hour of the 27B only — the container-start seed, not the switch-on
+    // (two hours), and not nothing (the null process up-since).
+    expect(soFar.textContent).toMatch(/€4\.60/)
+    expect(soFar.textContent).not.toMatch(/€9/)
   })
 
   it('starts from its own observation when the server has no up-since — the restart case, a floor', async () => {
@@ -791,5 +846,219 @@ describe('the poll’s failure discipline', () => {
       (screen.getByRole('checkbox', { name: GPU_KEEP_LABEL }) as HTMLInputElement).checked,
     ).toBe(true)
     expect(screen.queryByTestId('gpu-keep-busy')).toBeNull()
+  })
+})
+
+// ============================================================================
+// #1057: the Modal control plane's half of the payload
+// ============================================================================
+//
+// The server half (`gpu-admin.test.ts`) pins what the payload carries; what
+// is pinned here is what a person SEES for each answer: the fallback line
+// while the route is unconfigured, one line per box once it is, and the
+// stop-now button behind its confirmation — the one control that ends a
+// billed container on purpose.
+describe('#1057: the Modal control lines', () => {
+  const renderAdmin = () =>
+    render(() => (
+      <MemoryRouter>
+        <Route path="*" component={Admin as never} />
+      </MemoryRouter>
+    ))
+
+  const UP_LARGE = {
+    state: 'up',
+    containers: 1,
+    containerStartedAtMs: Date.now() - 12 * 60_000,
+    restored: true,
+    gpu: 'NVIDIA H100',
+    restoreEstimateMs: null,
+    reason: null,
+  }
+  const COLD_SMALL = {
+    state: 'cold',
+    containers: 0,
+    containerStartedAtMs: null,
+    restored: null,
+    gpu: null,
+    restoreEstimateMs: null,
+    reason: null,
+  }
+
+  it('says Modal control unavailable (no token) while the route is unconfigured', async () => {
+    renderAdmin()
+    const card = await screen.findByTestId('gpu-modal-card')
+    expect(card.textContent).toContain('Modal control unavailable (no token)')
+    expect(card.textContent).toContain('keep-warm pings')
+  })
+
+  it('renders one line per box from the control plane, with the stop-now control per line', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: { large: UP_LARGE, small: COLD_SMALL },
+    })
+    renderAdmin()
+
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(large.textContent).toContain('27B')
+    expect(large.textContent).toContain('up')
+    expect(large.textContent).toContain('restored from a snapshot')
+    expect(large.textContent).toContain('NVIDIA H100')
+    expect(large.textContent).toContain('up for')
+    expect(screen.getByTestId('gpu-modal-small').textContent).toContain('4B')
+    expect(screen.getByTestId('gpu-modal-small').textContent).toContain('cold')
+
+    // The stop control exists only where there is a container to stop.
+    expect(within(large).getByRole('button', { name: /stop now/i })).toBeTruthy()
+    expect(within(screen.getByTestId('gpu-modal-small')).queryByRole('button')).toBeNull()
+  })
+
+  it('renders the 27B’s NOT-STARTING line in the danger role — named, with nothing to stop and no button', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: {
+        large: {
+          ...COLD_SMALL,
+          state: 'not-starting',
+          containerStartedAtMs: Date.now() - 7 * 60_000,
+          reason: 'Modal reports no container after 420s of asking',
+        },
+        small: COLD_SMALL,
+      },
+    })
+    renderAdmin()
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(large.textContent).toContain('NOT STARTING')
+    expect(large.textContent).toContain('no container after 7 min')
+    // Round 1 said "stop it below" while rendering no button for this state.
+    expect(large.textContent).not.toContain('stop it below')
+    expect(large.textContent).toContain('nothing to stop')
+    expect(within(large).queryByRole('button')).toBeNull()
+  })
+
+  it('renders a booting box with the elapsed time FROM MODAL’S container start and the restore-vs-full-boot estimate', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: {
+        large: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 1,
+          containerStartedAtMs: Date.now() - 6 * 60_000,
+          restoreEstimateMs: 157_000,
+        },
+        small: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 1,
+          containerStartedAtMs: Date.now() - 40_000,
+          restoreEstimateMs: 32_000,
+        },
+      },
+    })
+    renderAdmin()
+    // #1057's own example: "booting, full boot, 6 min of ~8–15".
+    expect((await screen.findByTestId('gpu-modal-large')).textContent).toContain(
+      '27B: booting, a full boot — 6 min of ~8–16 min (a snapshot restore takes ~3 min)',
+    )
+    // 40s against the 4B's 32s restore estimate is already past it: a full boot.
+    expect(screen.getByTestId('gpu-modal-small').textContent).toMatch(
+      /a full boot — \d+ sec of ~5–9 min/,
+    )
+  })
+
+  it('renders an asked-for boot with no container yet as waiting on Modal, with the time since the ask', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: {
+        large: {
+          ...COLD_SMALL,
+          state: 'booting',
+          containers: 0,
+          containerStartedAtMs: Date.now() - 90_000,
+          restoreEstimateMs: 157_000,
+        },
+        small: COLD_SMALL,
+      },
+    })
+    renderAdmin()
+    expect((await screen.findByTestId('gpu-modal-large')).textContent).toContain(
+      'waiting for Modal to start a container — 2 min so far',
+    )
+  })
+
+  it('does not offer stop now while the switch is ON — and says why', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      keepRunning: true,
+      switchedOnAt: Date.now() - 60_000,
+      modal: { large: UP_LARGE, small: COLD_SMALL },
+    })
+    renderAdmin()
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(within(large).queryByRole('button', { name: /stop now/i })).toBeNull()
+    const why = screen.getByTestId('gpu-stop-disabled-large')
+    expect(why.textContent).toContain('replacement')
+    expect(why.textContent).toContain('Switch it off first')
+  })
+
+  it('does not offer stop now while a release is unconfirmed — and says why, for that box only', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      releasePending: ['large'],
+      modal: { large: UP_LARGE, small: { ...UP_LARGE } },
+    })
+    renderAdmin()
+    const large = await screen.findByTestId('gpu-modal-large')
+    expect(within(large).queryByRole('button', { name: /stop now/i })).toBeNull()
+    const why = screen.getByTestId('gpu-stop-disabled-large')
+    expect(why.textContent).toContain('until Modal confirms the release')
+    expect(why.textContent).toContain('replacement')
+    // The other box's release is not pending: its button stays.
+    expect(
+      within(screen.getByTestId('gpu-modal-small')).getByRole('button', { name: /stop now/i }),
+    ).toBeTruthy()
+  })
+
+  it('stop now asks for a confirmation, and only the confirmed call stops', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: { large: UP_LARGE, small: COLD_SMALL },
+    })
+    mocks.stop.mockResolvedValue({ ...ADMIN_STATE })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderAdmin()
+
+    const large = await screen.findByTestId('gpu-modal-large')
+    await fireEvent.click(within(large).getByRole('button', { name: /stop now/i }))
+    // Declined: nothing was stopped.
+    expect(confirm).toHaveBeenCalled()
+    expect(mocks.stop).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await fireEvent.click(within(large).getByRole('button', { name: /stop now/i }))
+    expect(mocks.stop).toHaveBeenCalledWith('large')
+    confirm.mockRestore()
+  })
+
+  it('labels the keep-warm mechanism as the fallback while the route is unconfigured', async () => {
+    renderAdmin()
+    // Unconfigured: the wake-and-wait wording, exactly today’s.
+    expect((await screen.findByTestId('gpu-keep-card')).textContent).toContain(
+      'wakes both GPUs now',
+    )
+  })
+
+  it('says the switch drives Modal’s autoscaler while the route exists', async () => {
+    mocks.admin.mockResolvedValue({
+      ...ADMIN_STATE,
+      modal: { large: UP_LARGE, small: COLD_SMALL },
+    })
+    renderAdmin()
+    // Configured: min_containers, and no request to either box.
+    const card = await screen.findByTestId('gpu-keep-card')
+    expect(card.textContent).toContain('min_containers=1')
+    expect(card.textContent).toContain('no request is sent')
+    expect((await screen.findByTestId('gpu-modal-card')).textContent).not.toContain('unavailable')
   })
 })

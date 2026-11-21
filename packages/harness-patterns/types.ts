@@ -249,6 +249,8 @@ export type EventType =
   | 'tool_result'
   | 'controller_action'
   | 'critic_result'
+  /** Files successfully persisted from a workspace, after execution. */
+  | 'outputs_promoted'
   | 'pattern_enter'
   | 'pattern_exit'
   /** @deprecated Legacy: superseded by `hitl_request` (#433). Rendered
@@ -1402,6 +1404,11 @@ export interface RouteTraceRef {
   /** The rounds the loop ended at its consecutive-recovery cap (their `error`
    *  events' `turn` / `iteration`): errored steps, left out and counted. */
   capped?: number[]
+}
+
+/** Durable promotion receipt. Human-facing filenames; model views use counts. */
+export interface OutputsPromotedEventData {
+  filenames: string[]
 }
 
 /** Data payload for controller_action event */

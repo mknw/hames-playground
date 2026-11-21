@@ -64,6 +64,7 @@ export const eventIconClasses: Record<EventType, string> = {
   tool_result: 'i-material-symbols-download',
   controller_action: 'i-material-symbols-adjust',
   critic_result: 'i-material-symbols-rate-review-outline',
+  outputs_promoted: 'i-material-symbols-save-outline',
   pattern_enter: 'i-material-symbols-play-arrow',
   pattern_exit: 'i-material-symbols-stop',
   approval_request: 'i-material-symbols-pause-circle-outline',
@@ -111,6 +112,7 @@ export const eventColors: Record<EventType, string> = {
   tool_result: varname('tool_result'), // cyan
   controller_action: varname('controller_action'), // amber
   critic_result: varname('critic_result'), // pink
+  outputs_promoted: varname('outputs_promoted'), // green — successful persistence
   pattern_enter: varname('pattern_enter'), // slate; overridden per-pattern
   pattern_exit: varname('pattern_exit'), // slate; overridden per-pattern
   approval_request: varname('approval_request'), // orange

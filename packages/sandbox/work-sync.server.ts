@@ -148,10 +148,9 @@ export async function listWorkFiles(
   transport: McpTransport,
   dir: string = WORK_OUT_DIR,
 ): Promise<Map<string, string>> {
-  const cmd =
-    `mkdir -p ${shq(dir)} && cd ${shq(dir)} && ` +
-    `find . -type f -exec sha256sum {} + 2>/dev/null || true`
+  const cmd = `mkdir -p ${shq(dir)} && cd ${shq(dir)} && find . -type f -exec sha256sum {} +`
   const r = await bash(transport, cmd)
+  if (!r.ok) throw new Error('Workspace file listing failed')
   const map = new Map<string, string>()
   for (const line of r.stdout.split('\n')) {
     const m = /^([0-9a-f]{64})\s+\.\/(.+)$/.exec(line.trim())

@@ -579,6 +579,12 @@ function formatEventData(event: ContextEvent): string {
       const head = `${data.namespace}/${data.tool}: ${data.findings.length} finding(s) neutralized`
       return rules ? `${head} [${rules}]` : head
     }
+    case 'outputs_promoted': {
+      // Filenames can contain instructions. The receipt is human-facing;
+      // subsequent model-facing views carry only the success count.
+      const data = event.data as { filenames: string[] }
+      return `${data.filenames.length} workspace output(s) saved to the document store`
+    }
     case 'warning': {
       // METADATA ONLY — never `data.error`. That is the failed describe call's
       // message verbatim, and a describe call is handed tool results verbatim:

@@ -66,6 +66,7 @@ export type {
   RouteTraceRef,
   ControllerActionEventData,
   CriticResultEventData,
+  OutputsPromotedEventData,
   PatternEnterEventData,
   PatternExitEventData,
   ErrorEventData,

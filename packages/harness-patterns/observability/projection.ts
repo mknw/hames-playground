@@ -12,6 +12,7 @@ import type {
   EventType,
   ToolCallEventData,
   CriticResultEventData,
+  OutputsPromotedEventData,
   ToolResultEventData,
   ControllerActionEventData,
   ErrorEventData,
@@ -104,6 +105,10 @@ function actionPreview(type: EventType, data: unknown): string {
     case 'tool_result': {
       const d = data as ToolResultEventData
       return `${d.tool}: ${d.success ? 'ok' : 'error'}`
+    }
+    case 'outputs_promoted': {
+      const d = data as OutputsPromotedEventData
+      return `${d.filenames.length} file(s) saved to the Data Stash`
     }
     case 'controller_action': {
       const d = data as ControllerActionEventData

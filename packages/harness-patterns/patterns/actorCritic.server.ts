@@ -31,6 +31,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { hitlPending } from '../hitl.server'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
+import { activeRunFrame } from '../run-frame.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import {
   isRecoverableLLMFailure,
@@ -264,7 +265,19 @@ export function actorCritic<T extends ActorCriticData>(
         return 'continue'
       }
 
-      const criticIntent = criticConversation ? `${intent}\n\n${criticConversation}` : intent
+      let criticIntent = criticConversation ? `${intent}\n\n${criticConversation}` : intent
+      const observe = activeRunFrame().criticContext
+      if (observe) {
+        let observation: string
+        try {
+          observation = await observe()
+        } catch {
+          // Evidence unavailable is not evidence of an empty workspace. Never
+          // send a transport error (which can quote file content) to the critic.
+          observation = 'Execution observation unavailable; do not infer that a deliverable exists.'
+        }
+        if (observation) criticIntent += `\n\n${observation}`
+      }
       const { result: evalResult, llmCall: criticLlmCall } = await critic(
         criticIntent,
         previousAttempts,

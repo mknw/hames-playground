@@ -292,6 +292,9 @@ export interface RunFrame {
   stashWriteObservers?: readonly StashWriteObserver[]
   /** Hooks run after every tool call dispatched inside this scope. */
   afterToolCall?: readonly AfterToolCallHook[]
+  /** Fresh execution evidence for an actorCritic verdict. The innermost
+   *  workspace supplies it; absent, the critic's input stays unchanged. */
+  criticContext?: () => Promise<string>
   /** Checks run before any tool dispatch in this scope. */
   egressChecks?: readonly EgressCheck[]
   /** Which route of a `decisionLoop` this scope runs, as the loop names it (its
@@ -374,6 +377,7 @@ export interface ActiveRunFrame {
   readonly stashWriteObservers: readonly StashWriteObserver[]
   /** Never undefined, innermost first. */
   readonly afterToolCall: readonly AfterToolCallHook[]
+  readonly criticContext?: () => Promise<string>
   /** Never undefined; innermost first, without dropping outer checks. */
   readonly egressChecks: readonly EgressCheck[]
   /** The innermost `decisionLoop` route this code runs inside, if any. */
@@ -532,6 +536,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       ? Object.freeze([...frame.stashWriteObservers])
       : NO_HOOKS,
     afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
+    criticContext: frame.criticContext,
     egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
     route: frame.route,
     continuation: frame.continuation ? Object.freeze([...frame.continuation]) : NO_HOOKS,
@@ -627,6 +632,8 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     check runs; any denial denies, so an inner scope cannot remove one.
  *   - `route` REPLACES, like everything else: a nested `decisionLoop`'s child
  *     runs under its own route's label, and leaving it restores the outer one.
+ *   - `criticContext` REPLACES: evidence comes from the innermost workspace,
+ *     just as its transport receives the actor's calls.
  *   - `continuation` REPLACES: a resumable pattern supplies the whole path, the
  *     enclosing one plus its own segment (`resume.server.ts`).
  *   - `resume` REPLACES, and `null` clears it: a pattern on a resumed path
@@ -675,6 +682,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
       : open.egressChecks,
     route: partial.route ?? open.route,
+    criticContext: partial.criticContext ?? open.criticContext,
     continuation: partial.continuation
       ? Object.freeze([...partial.continuation])
       : open.continuation,

@@ -68,7 +68,12 @@ describe('neo4j driver shapes', () => {
   it('extracts a driver Relationship inside a collection as an edge', () => {
     const result = [{ rels: [{ identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2 }] }]
     const [edge] = extractGraphElements([ev('read_neo4j_cypher', result)])
-    expect(edge.data).toMatchObject({ id: '11', source: '1', target: '2', label: 'HAS_CONCEPT' })
+    expect(edge.data).toMatchObject({
+      id: 'neo4j-rel:11',
+      source: '1',
+      target: '2',
+      label: 'HAS_CONCEPT',
+    })
   })
 
   it('uses the elementId endpoints when the numeric ones are absent', () => {
@@ -80,7 +85,12 @@ describe('neo4j driver shapes', () => {
       },
     ]
     const [edge] = extractGraphElements([ev('read_neo4j_cypher', result)])
-    expect(edge.data).toMatchObject({ id: '5:r:1', source: 'a', target: 'b', label: 'LINKS' })
+    expect(edge.data).toMatchObject({
+      id: 'neo4j-rel:5:r:1',
+      source: 'a',
+      target: 'b',
+      label: 'LINKS',
+    })
   })
 
   it('walks a driver Path into its nodes and relationships', () => {
@@ -90,7 +100,7 @@ describe('neo4j driver shapes', () => {
     const result = [{ paths: [{ segments: [{ start, relationship, end }] }] }]
     const elements = extractGraphElements([ev('read_neo4j_cypher', result)])
 
-    expect(elements.map((e) => e.data?.id)).toEqual(['1', '3', '2'])
+    expect(elements.map((e) => e.data?.id)).toEqual(['1', 'neo4j-rel:3', '2'])
     expect(elements.filter(isEdge)).toHaveLength(1)
   })
 
@@ -122,7 +132,7 @@ describe('neo4j driver shapes', () => {
         source: 'neo4j',
         data: {
           ...('properties' in rel ? rel.properties : {}),
-          id: 'identity' in rel ? '11' : '5:r:1',
+          id: 'identity' in rel ? 'neo4j-rel:11' : 'neo4j-rel:5:r:1',
           source: '1',
           target: '2',
           label: 'HAS_CONCEPT',
@@ -160,7 +170,7 @@ describe('neo4j driver shapes', () => {
           group: 'edges',
           source: 'neo4j',
           data: {
-            id: '11',
+            id: 'neo4j-rel:11',
             source: '1',
             target: '2',
             label: 'HAS_CONCEPT',

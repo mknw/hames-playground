@@ -81,7 +81,20 @@ function unfence(value: unknown): unknown {
   if (typeof value === 'string') return unspotlight(value)
   if (Array.isArray(value)) return value.map(unfence)
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unfence(v)]))
+    // Driver Integers stringify exactly (including beyond Number.MAX_SAFE_INTEGER)
+    // only while their prototype survives. Normalize entity identities before
+    // walking their fields; ordinary node properties retain their own values.
+    const identities = isNeo4jRelationship(value)
+      ? ['identity', 'start', 'end']
+      : isNeo4jNode(value)
+        ? ['identity']
+        : []
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [
+        k,
+        unfence(v != null && identities.includes(k) ? String(v) : v),
+      ]),
+    )
   }
   return value
 }
@@ -265,11 +278,17 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         continue
       }
 
-      // MCP node format: plain object with properties (has name/id, no identity/elementId).
+      // MCP node format: plain object with properties (has name/id/title).
+      // Driver relationships must reach the driver parser even without properties.
       // Require a string name/id/title to be confident this is a real node — this avoids
       // synthesizing fake nodes from schema-info bags (`get_neo4j_schema` shape) and other
       // metadata-shaped objects. (Bug #14 root cause was the absence of this guard.)
-      if (typeof value === 'object' && !Array.isArray(value) && !isNeo4jNode(value)) {
+      if (
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        !isNeo4jNode(value) &&
+        !isNeo4jRelationship(value)
+      ) {
         const obj = value as Record<string, unknown>
         if (looksLikeSchemaInfo(obj)) continue
         const idSource = obj.name ?? obj.id ?? obj.title
@@ -329,7 +348,10 @@ function extractGraphEntities(
     const rel = value as Neo4jRelationship
     elements.push(
       edgeElement(
-        String(rel.identity ?? rel.elementId ?? `rel-${Date.now()}`),
+        // Neo4j allocates node and relationship identities independently.
+        // Keep node keys/endpoints intact for selection and node-edit RPCs;
+        // put driver relationships in their own canvas-key namespace.
+        `neo4j-rel:${rel.identity ?? rel.elementId ?? `rel-${Date.now()}`}`,
         String(rel.start ?? rel.startNodeElementId),
         String(rel.end ?? rel.endNodeElementId),
         rel.type ?? 'RELATES_TO',
@@ -394,15 +416,23 @@ interface Neo4jPath {
 function isNeo4jNode(value: unknown): value is Neo4jNode {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
+  // Relationships also carry identity + properties; never emit a phantom node
+  // whose id would make deduplication discard the real edge (#14).
   return (
-    ('identity' in v || 'elementId' in v) && (Array.isArray(v.labels) || v.properties !== undefined)
+    !isNeo4jRelationship(value) &&
+    ('identity' in v || 'elementId' in v) &&
+    (Array.isArray(v.labels) || v.properties !== undefined)
   )
 }
 
 function isNeo4jRelationship(value: unknown): value is Neo4jRelationship {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return ('identity' in v || 'elementId' in v) && ('type' in v || 'start' in v || 'end' in v)
+  return (
+    ('identity' in v || 'elementId' in v) &&
+    (v.start != null || v.startNodeElementId != null) &&
+    (v.end != null || v.endNodeElementId != null)
+  )
 }
 
 function isNeo4jPath(value: unknown): value is Neo4jPath {

@@ -31,13 +31,16 @@ describe('graph-extractor — schema regression (#14)', () => {
     expect(elements).toEqual([])
   })
 
-  it('does not synthesize nodes from schema-info bags even via other tools', () => {
-    // If a future tool happened to return a value shaped like { type: 'node', count: 37 },
-    // the tightened fallback should still refuse to fabricate a node.
-    const fakeResult = [{ Concept: { type: 'node', count: 37 } }]
-    const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', fakeResult)])
-    expect(elements).toEqual([])
-  })
+  it.each(['node', 'relationship'])(
+    'does not synthesize nodes from %s schema-info bags even via other tools',
+    (type) => {
+      // If a future tool happened to return a value shaped like { type: 'node', count: 37 },
+      // the tightened fallback should still refuse to fabricate a node.
+      const fakeResult = [{ Concept: { type, count: 37, name: 'Metadata', id: 'schema-info' } }]
+      const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', fakeResult)])
+      expect(elements).toEqual([])
+    },
+  )
 })
 
 describe('graph-extractor — read_neo4j_cypher (MCP shape)', () => {

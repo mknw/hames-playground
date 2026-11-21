@@ -329,10 +329,18 @@ on the non-deprecated Office Graph insights surface (`GET /me/insights/used`,
 - Each row's `resourceReference.id` is `drives/{driveId}/items/{itemId}` — the
   same handoff pair search hits carry, so recent files feed the other file
   tools directly.
+- In search and folder listings, `modified` is the item's last change **by
+  anyone**; search's date filters and `sort="newest"` use that same meaning.
+  `author` selects an author, not necessarily the last editor. In recent-file
+  insights, `modified` is the **signed-in person's** last change and `accessed`
+  their last open. Compare non-null `modified` dates within the returned recent
+  items for their latest edit; result order and access times do not establish
+  edit recency, and the returned items are not a complete edit history.
 - A tenant can disable item insights by policy; that 403 degrades to a
   **successful** empty result with a note steering the model to
-  `graph_files_search` with `sort="newest"` — not to a sign-in prompt, which
-  couldn't help.
+  `graph_files_search` with `sort="newest"`, explicitly explaining that this
+  orders changes by anyone and cannot establish which file the person last
+  edited. A sign-in prompt couldn't help.
 
 ---
 

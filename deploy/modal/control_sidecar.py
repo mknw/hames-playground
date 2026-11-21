@@ -164,7 +164,10 @@ class _Ordered:
 
     def watchdog(self, stop: threading.Event) -> None:
         while not stop.wait(1):
-            self.check_watchdog()
+            try:
+                self.check_watchdog()
+            except Exception:
+                print("control_sidecar: watchdog check failed; retrying", file=sys.stderr, flush=True)
 
     def run(self, key: str, fn: Any) -> Any:
         with self._cond:

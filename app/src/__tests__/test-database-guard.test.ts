@@ -459,6 +459,9 @@ describe('database skip source guard mutations (#500)', () => {
     'it("query", (t) => { const key = "skip"; t[key]() })',
     'ctx["skip" satisfies string]()',
     'ctx[`sk${"ip"}`]()',
+    // A wrapper may receive setup and the callback it returns as separate arguments.
+    'function wrap<T>(_setup: unknown, body: T): T { return body }; it("query", wrap(() => {}, async () => {\n  if (!dbAvailable) return\n}))',
+    'function wrap<T>(_setup: unknown, body: T): T { return body }; it("query", wrap(() => {}, (context: { skip: () => void }) => { context.skip() }))',
     'it("query", () => { for (;;) { if (!dbAvailable) return } })',
     'it("query", () => { while (true) { if (!dbAvailable) return } })',
     'it("query", () => { if (true) { if (!dbAvailable) return } })',
@@ -477,6 +480,7 @@ describe('database skip source guard mutations (#500)', () => {
     'if (false) beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
     'function never() { beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable)) }',
     'false && beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))',
+    'function wrap<T>(_setup: unknown, body: T): T { return body }; beforeEach(wrap((ctx: { skip: () => void }) => skipWithoutDatabase(ctx, dbAvailable), () => {}))',
     'describe("query", () => { if (false) beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable)) })',
   ])('requires the helper to run in the hook: %s', (decoy) => {
     const source = guardedDatabaseTest.replace(

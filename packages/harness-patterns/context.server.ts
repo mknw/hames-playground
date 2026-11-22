@@ -384,6 +384,12 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'egress_blocked',
 ])
 
+/** Keep durable records when a child throws, without its partial content.
+ *  Child-scope merges and final commits use the same policy. */
+export function durableEvents(events: ContextEvent[]): ContextEvent[] {
+  return dropHitl(events).filter((e) => ALWAYS_COMMIT_TYPES.has(e.type))
+}
+
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are
  *  always committed regardless of strategy, interleaved with content events
@@ -405,7 +411,7 @@ export function commitEvents<T>(
         ctx.events.push(...events)
       } else {
         // Only lifecycle events
-        ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+        ctx.events.push(...durableEvents(events))
       }
       break
     case 'last': {
@@ -421,7 +427,7 @@ export function commitEvents<T>(
     }
     case 'never':
       // Only lifecycle events
-      ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+      ctx.events.push(...durableEvents(events))
       break
   }
 }

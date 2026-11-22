@@ -350,7 +350,8 @@ primitive here, whether it is a loop, a router, a planner, a guard or the
 answer step, reads that log and appends to it, so primitives compose without
 knowing about one another and any one of them can be swapped without disturbing
 the rest. A pattern writes into a private draft of the log and commits it only
-when it finishes, so a step that throws leaves nothing behind — and because a
+when it finishes. A step that throws discards partial content and results while
+retaining durable records, including successful output promotions. Because a
 session _is_ its serialized log, continuing a conversation and resuming after an
 approval gate (a pause until a person approves a step) are two arguments to the
 same mechanism rather than two subsystems.

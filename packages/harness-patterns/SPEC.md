@@ -325,7 +325,7 @@ How UnifiedContext flows through the system:
 
 **Patterns write to scope, never directly to context.** This enables:
 
-- **Rollback on error** - If a pattern fails, its events aren't committed
+- **Rollback on error** - A throwing pattern's partial content and result are discarded; durable records, including successful output promotions, survive through `chain`, `routes` and `parallel` child scopes.
 - **Configurable commit strategies** - Control when/what gets persisted
 - **Clean separation** - Each pattern has its own workspace
 
@@ -1047,7 +1047,7 @@ parallel<SimpleLoopData & Record<string, unknown>>([
 1. Each branch gets an isolated child scope (`events: []`, same `data`)
 2. All branches run concurrently via `Promise.allSettled`
 3. Fulfilled branches: events wrapped with `pattern_enter` / `pattern_exit` markers, then merged into parent scope
-4. Rejected branches: tracked as `error` events, don't block other branches
+4. Rejected branches: durable events are retained and the failure is tracked as an `error` event; partial content and data are discarded, and other branches continue.
 
 ### `withInjectionGuard(config)(pattern)`
 

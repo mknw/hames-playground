@@ -5,8 +5,8 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import type { ConfiguredPattern, PatternConfig } from '../types'
-import { trackEvent, resolveConfig, createEvent } from '../context.server'
+import type { ConfiguredPattern, PatternConfig, PatternScope } from '../types'
+import { trackEvent, resolveConfig, createEvent, durableEvents } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 
 assertServerOnImport()
@@ -43,22 +43,20 @@ export function parallel<T extends Record<string, unknown>>(
         // would read as the moment the slowest sibling finished, and sort after
         // the branch's own events in the panel (which orders by `ts`).
         const spans = patterns.map(() => ({ start: 0, end: 0 }))
+        const childScopes = patterns.map((p): PatternScope<T> => ({
+          ...scope,
+          id: p.config.patternId ?? p.name,
+          events: [],
+        }))
         const results = await Promise.allSettled(
-          patterns.map((p, i) => {
+          patterns.map(async (p, i) => {
             spans[i].start = Date.now()
-            return p
-              .fn(
-                {
-                  ...scope,
-                  id: p.config.patternId ?? p.name,
-                  events: [],
-                  startTime: spans[i].start,
-                },
-                view,
-              )
-              .finally(() => {
-                spans[i].end = Date.now()
-              })
+            childScopes[i].startTime = spans[i].start
+            try {
+              return await p.fn(childScopes[i], view)
+            } finally {
+              spans[i].end = Date.now()
+            }
           }),
         )
 
@@ -95,6 +93,7 @@ export function parallel<T extends Record<string, unknown>>(
             emitLive(exitEvt)
             scope.data = { ...scope.data, ...r.value.data }
           } else {
+            scope.events.push(...durableEvents(childScopes[i].events))
             trackEvent(
               scope,
               'error',

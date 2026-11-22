@@ -607,6 +607,190 @@ describe('#1057 review: the release is confirmed, retried, and never raced', () 
     expect(posted).toHaveLength(6)
   })
 
+  describe.each([false, true])(
+    '#1070: panel flips before an outage (public large route=%s)',
+    (publicLarge) => {
+      const boxes = () => (publicLarge ? ['small'] : ['large', 'small']) as ('large' | 'small')[]
+      const posts = (min_containers: number) => boxes().map((box) => ({ box, min_containers }))
+
+      beforeEach(() => {
+        if (publicLarge) vi.stubEnv('LARGE_LLM_ROUTE', 'openrouter')
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+      })
+
+      /** Arm the loop with its boot read either ON (it asserts 1) or failing (unknown). */
+      async function armWithLastRead(lastRead: 'ON' | 'unknown'): Promise<void> {
+        if (lastRead === 'ON')
+          getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+        else getGpuState.mockRejectedValue(new Error('database not up yet'))
+        startGpuKeepRunningLoop(TICK)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(getGpuState).toHaveBeenCalled() // the boot tick ran (an ON tick reads twice)
+        expect(posted).toEqual(lastRead === 'ON' ? posts(1) : [])
+        posted.length = 0
+      }
+
+      // A failed OFF write: a failed write must not record OFF. Mutants that record OFF
+      // before (or regardless of) the write send `0` at the first outage tick.
+      it.each(['ON', 'unknown'] as const)(
+        'a rejected panel OFF write keeps the last read (%s) and sends no release during the outage',
+        async (lastRead) => {
+          await armWithLastRead(lastRead)
+          setGpuState.mockRejectedValueOnce(new Error('write failed'))
+          await expect(driveModalSwitch(false, boxes())).rejects.toThrow('write failed')
+          expect(setGpuState).toHaveBeenCalledWith(false)
+          expect(posted).toEqual([]) // the flip never reached the control route
+
+          getGpuState.mockRejectedValue(new Error('database down'))
+          const readsBefore = getGpuState.mock.calls.length
+          await vi.advanceTimersByTimeAsync(2 * OFF_REASSERT_MS + TICK)
+          // Control: the loop was alive and re-reading every tick of the outage…
+          expect(getGpuState.mock.calls.length - readsBefore).toBe((2 * OFF_REASSERT_MS) / TICK + 1)
+          // …and sent nothing: neither a guessed 0 nor a new 1, nor a ping.
+          expect(posted).toEqual([])
+          expect(pendingReleaseBoxes()).toEqual([])
+          expect(urls().filter((url) => !url.startsWith(MODAL_BASE))).toEqual([])
+
+          // Recovery: the DB still says ON (the write failed), and the next read acts on it.
+          getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+          await vi.advanceTimersByTimeAsync(TICK)
+          expect(posted).toEqual(posts(1))
+        },
+      )
+
+      // A successful OFF is recorded even when the loop has never read the
+      // switch. Requiring a prior read would lose its retries in an outage.
+      it('a successful panel OFF with the switch never read retries its failed release, then re-asserts, during the outage', async () => {
+        await armWithLastRead('unknown')
+        answer = () => new Response(JSON.stringify({ ok: false, error: 'control unavailable' }))
+        expect(await driveModalSwitch(false, boxes())).toMatchObject({ doing: 'release' })
+        expect(posted).toEqual(posts(0))
+        expect(pendingReleaseBoxes().sort()).toEqual(boxes().sort())
+
+        answer = okAnswer
+        await vi.advanceTimersByTimeAsync(RELEASE_BACKOFF_BASE_MS - TICK)
+        expect(posted).toEqual(posts(0)) // the backoff is honoured: not before 30 s
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted).toEqual([...posts(0), ...posts(0)]) // retried at exactly 30 s
+        expect(pendingReleaseBoxes()).toEqual([])
+
+        // The confirmed OFF is then re-asserted at the cap, still with the DB down.
+        await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS - TICK)
+        expect(posted).toHaveLength(2 * boxes().length)
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted).toEqual([...posts(0), ...posts(0), ...posts(0)])
+        expect(urls().filter((url) => !url.startsWith(MODAL_BASE))).toEqual([])
+      })
+
+      it('a confirmed panel OFF with the switch never read is re-asserted at the cap during the outage', async () => {
+        await armWithLastRead('unknown')
+        expect(await driveModalSwitch(false, boxes())).toBeNull()
+        expect(posted).toEqual(posts(0))
+        await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS - TICK)
+        expect(posted).toEqual(posts(0))
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted).toEqual([...posts(0), ...posts(0)])
+      })
+
+      // Restraint control: a successful ON from unknown sends no `0`
+      // and no new `1` during the outage (the record must not over-reach).
+      it('a successful panel ON with the switch never read sends nothing more during the outage', async () => {
+        await armWithLastRead('unknown')
+        expect(await driveModalSwitch(true, boxes())).toBeNull()
+        expect(posted).toEqual(posts(1))
+        const readsBefore = getGpuState.mock.calls.length
+        await vi.advanceTimersByTimeAsync(2 * OFF_REASSERT_MS + TICK)
+        expect(getGpuState.mock.calls.length - readsBefore).toBe((2 * OFF_REASSERT_MS) / TICK + 1)
+        expect(posted).toEqual(posts(1))
+        expect(pendingReleaseBoxes()).toEqual([])
+        expect(urls().filter((url) => !url.startsWith(MODAL_BASE))).toEqual([])
+
+        getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted).toEqual([...posts(1), ...posts(0)])
+      })
+
+      it('retries a failed panel OFF during an outage after the loop last read ON', async () => {
+        getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+        startGpuKeepRunningLoop(TICK)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(posted).toEqual(posts(1))
+        posted.length = 0
+
+        let finish!: (response: Response) => void
+        answer = () => new Promise<Response>((resolve) => (finish = resolve))
+        const flip = driveModalSwitch(false, boxes())
+        await vi.advanceTimersByTimeAsync(0)
+        expect(setGpuState).toHaveBeenCalledWith(false)
+        getGpuState.mockRejectedValue(new Error('database down immediately after write'))
+        // A tick queues behind the flip's held control call, under the same lock.
+        const reads = getGpuState.mock.calls.length
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(getGpuState).toHaveBeenCalledTimes(reads)
+        answer = () => new Response(JSON.stringify({ ok: false, error: 'control unavailable' }))
+        finish(new Response(JSON.stringify({ ok: false, error: 'control unavailable' })))
+        expect(await flip).toMatchObject({ doing: 'release' })
+        expect(pendingReleaseBoxes().sort()).toEqual(boxes().sort())
+        expect(posted).toEqual(posts(0))
+
+        answer = okAnswer
+        await vi.advanceTimersByTimeAsync(RELEASE_BACKOFF_BASE_MS - TICK)
+        expect(posted).toEqual(posts(0)) // retry not due yet
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted).toEqual([...posts(0), ...posts(0)])
+        expect(pendingReleaseBoxes()).toEqual([])
+        expect(largePings() + smallPings()).toBe(0)
+
+        // A recovered read is authoritative again, including an external ON.
+        getGpuState.mockResolvedValue({ keepRunning: true, switchedOnAt: Date.now() })
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted.slice(-boxes().length)).toEqual(posts(1))
+      })
+
+      it('never reasserts stale OFF after a successful panel ON and an immediate outage', async () => {
+        startGpuKeepRunningLoop(TICK)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(posted).toEqual(posts(0)) // the PRE-flip state is definitely cached
+        posted.length = 0
+
+        let finishWrite!: () => void
+        setGpuState.mockImplementationOnce(
+          () => new Promise<void>((resolve) => (finishWrite = resolve)),
+        )
+        const flip = driveModalSwitch(true, boxes())
+        await vi.advanceTimersByTimeAsync(0)
+        expect(posted).toEqual([])
+        getGpuState.mockRejectedValue(new Error('database down immediately after write'))
+        finishWrite()
+        expect(await flip).toBeNull()
+        expect(posted).toEqual(posts(1))
+        await vi.advanceTimersByTimeAsync(2 * OFF_REASSERT_MS + TICK)
+        expect(posted).toEqual(posts(1)) // neither stale 0 nor new 1 during outage
+        expect(largePings() + smallPings()).toBe(0)
+
+        getGpuState.mockResolvedValue({ keepRunning: false, switchedOnAt: null })
+        await vi.advanceTimersByTimeAsync(TICK)
+        expect(posted.slice(boxes().length)).toEqual(posts(0))
+      })
+    },
+  )
+
+  it('a rejected panel write preserves the last observed OFF during an outage', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startGpuKeepRunningLoop(TICK)
+    await vi.advanceTimersByTimeAsync(0)
+    setGpuState.mockRejectedValueOnce(new Error('write failed'))
+    await expect(driveModalSwitch(true, ['large', 'small'])).rejects.toThrow('write failed')
+    getGpuState.mockRejectedValue(new Error('database down'))
+    await vi.advanceTimersByTimeAsync(OFF_REASSERT_MS)
+    expect(posted).toEqual([
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+      { box: 'large', min_containers: 0 },
+      { box: 'small', min_containers: 0 },
+    ])
+  })
+
   it('does not guess OFF when the database has never answered or was last ON', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     getGpuState.mockRejectedValue(new Error('database down'))

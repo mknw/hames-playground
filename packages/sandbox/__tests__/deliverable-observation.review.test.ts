@@ -1,20 +1,24 @@
-/** Independent review probes. Expected contract assertions intentionally expose regressions. */
+/** #441: receipts survive failed chains and nested execution keeps its own evidence. */
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import { createContext, createScope } from '@hames-ai/harness-patterns/context.server'
+import { createContext, createScope, trackEvent } from '@hames-ai/harness-patterns/context.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
 import { runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { actorCritic } from '@hames-ai/harness-patterns/patterns/actorCritic.server'
-import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { activeRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeTransports } from '@hames-ai/harness-patterns/tool-transport.server'
-import type { ConfiguredPattern, PatternScope } from '@hames-ai/harness-patterns/types'
+import type {
+  CommitStrategy,
+  ConfiguredPattern,
+  PatternScope,
+} from '@hames-ai/harness-patterns/types'
 import { withSandbox } from '../with-sandbox.server'
 import { configureWorkspaceStore } from '../workspace-store'
 import type { ComputeBackend, McpTransport, VMHandle } from '../types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
-function vmFixture(id: string) {
+function vmFixture(id: string, rejectFilename?: string) {
   const files = new Map<string, string>()
   const stored: string[] = []
   const transport: McpTransport = {
@@ -54,6 +58,7 @@ function vmFixture(id: string) {
     list: async () => [],
     get: async () => null,
     store: async (doc) => {
+      if (doc.filename === rejectFilename) throw new Error('synthetic store failure')
       stored.push(doc.filename)
     },
     guessMimeType: () => 'text/csv',
@@ -71,40 +76,79 @@ const view = () => createEventView(createContext('Produce report.csv'))
 const scope = () => createScope('review', { intent: 'Produce report.csv' })
 function pattern(
   fn: ConfiguredPattern<Record<string, unknown>>['fn'],
+  commitStrategy: CommitStrategy = 'never',
 ): ConfiguredPattern<Record<string, unknown>> {
   return {
     name: 'review',
-    config: { patternId: 'review', commitStrategy: 'never' },
+    config: { patternId: 'review', commitStrategy },
     fn,
     estimateTurns: () => 1,
   }
 }
 
 for (const lazy of [false, true]) {
-  it(`review receipt survives throwing real chain lazy=${lazy}`, async () => {
-    const f = vmFixture(`throw-${lazy}`)
-    let internal: PatternScope<Record<string, unknown>> | undefined
+  it.each(['never', 'on-success', 'last', 'always'] as const)(
+    `receipt survives throwing real chain lazy=${lazy}, strategy=%s`,
+    async (strategy) => {
+      const f = vmFixture(`throw-${lazy}`)
+      let internal: PatternScope<Record<string, unknown>> | undefined
+      const wrapped = withSandbox({
+        backend: f.backend,
+        id: `throw-${lazy}`,
+        syncWorkspace: true,
+        lazy,
+      })(
+        pattern(async (s) => {
+          internal = s
+          trackEvent(s, 'tool_result', { partial: 'discarded content' }, true)
+          s.data = { ...s.data, response: 'discarded response' }
+          await activeTransports()[0].callTool('sandbox_write', {
+            path: '/work/out/report.csv',
+            content: '42',
+          })
+          throw new Error('synthetic pattern failure')
+        }, strategy),
+      )
+      const ctx = createContext('Produce report.csv')
+      const onEvent = vi.fn()
+      await withRunFrame({}, () => runChain(ctx, [wrapped], onEvent))
+      expect(ctx.status).toBe('error')
+      expect(ctx.error).toBe('synthetic pattern failure')
+      expect(ctx.data.response).toBeUndefined()
+      expect(ctx.events.filter((e) => e.type === 'tool_result')).toHaveLength(0)
+      expect(f.stored).toEqual(['report.csv'])
+      expect(internal!.events.some((e) => e.type === 'outputs_promoted')).toBe(true)
+      expect(ctx.events.filter((e) => e.type === 'outputs_promoted')).toHaveLength(1)
+      expect(onEvent.mock.calls.filter(([e]) => e.type === 'outputs_promoted')).toHaveLength(1)
+    },
+  )
+
+  it(`throwing chain receipts name only successfully stored files lazy=${lazy}`, async () => {
+    const f = vmFixture(`partial-${lazy}`, 'failed.csv')
     const wrapped = withSandbox({
       backend: f.backend,
-      id: `throw-${lazy}`,
+      id: `partial-${lazy}`,
       syncWorkspace: true,
       lazy,
     })(
-      pattern(async (s) => {
-        internal = s
-        await activeTransports()[0].callTool('sandbox_write', {
-          path: '/work/out/report.csv',
-          content: '42',
-        })
+      pattern(async () => {
+        for (const filename of ['report.csv', 'failed.csv']) {
+          await activeTransports()[0].callTool('sandbox_write', {
+            path: `/work/out/${filename}`,
+            content: '42',
+          })
+        }
         throw new Error('synthetic pattern failure')
       }),
     )
     const ctx = createContext('Produce report.csv')
     await withRunFrame({}, () => runChain(ctx, [wrapped]))
     expect(ctx.status).toBe('error')
+    expect(ctx.error).toBe('synthetic pattern failure')
     expect(f.stored).toEqual(['report.csv'])
-    expect(internal!.events.some((e) => e.type === 'outputs_promoted')).toBe(true)
-    expect(ctx.events.filter((e) => e.type === 'outputs_promoted')).toHaveLength(1)
+    expect(ctx.events.filter((e) => e.type === 'outputs_promoted').map((e) => e.data)).toEqual([
+      { filenames: ['report.csv'] },
+    ])
   })
 
   it(`review inner non-sync sandbox does not claim outer evidence lazy=${lazy}`, async () => {
@@ -134,13 +178,24 @@ for (const lazy of [false, true]) {
       syncWorkspace: false,
       lazy,
     })(loop)
+    let before = ''
+    let after = ''
     const wrapped = withSandbox({
       backend: outer.backend,
       id: `outer-${lazy}`,
       syncWorkspace: true,
-    })(nested)
+    })(
+      pattern(async (s, v) => {
+        before = await activeRunFrame().criticContext!()
+        await nested.fn(s, v)
+        after = await activeRunFrame().criticContext!()
+        return s
+      }),
+    )
     await withRunFrame({}, () => wrapped.fn(scope(), view()))
     expect(inner.files.has('/work/script.py')).toBe(true)
     expect(observed).not.toContain('outer-only.csv')
+    expect(before).toContain('outer-only.csv')
+    expect(after).toBe(before)
   })
 }

@@ -92,6 +92,9 @@ function runWithSandbox<T>(
 ): Promise<T> {
   return amendRunFrame(
     {
+      // A new execution transport owns the evidence too. Sync sandboxes
+      // replace this below; plain sandboxes have no output observation.
+      criticContext: async () => '',
       transports: [
         {
           id: `sandbox:${transport.vmId}`,
@@ -1163,14 +1166,12 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
       {
         transports: [transport],
         ...(restoring ? restoring.frame : {}),
-        ...(run.syncWorkspace
-          ? {
-              criticContext: async () =>
-                live
-                  ? observeOutputs(live.att.transport, live.baseline)
-                  : 'WORKSPACE OUTPUT OBSERVATION: sandbox not started; no output observed.',
-            }
-          : {}),
+        criticContext: run.syncWorkspace
+          ? async () =>
+              live
+                ? observeOutputs(live.att.transport, live.baseline)
+                : 'WORKSPACE OUTPUT OBSERVATION: sandbox not started; no output observed.'
+          : async () => '',
       },
       () => pattern.fn(scope, view),
     )

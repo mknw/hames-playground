@@ -32,6 +32,7 @@ function fixture(
     content?: string
     companion?: boolean
     sync?: boolean
+    observation?: () => Promise<string>
   } = {},
 ) {
   const files = new Map([['/work/out/old.csv', 'old output']])
@@ -139,7 +140,15 @@ function fixture(
     sessionId: 'fixture-session',
     syncWorkspace: options.sync ?? true,
     lazy,
-  })(loop)
+  })(
+    options.observation
+      ? {
+          ...loop,
+          fn: (scope, view) =>
+            amendRunFrame({ criticContext: options.observation }, () => loop.fn(scope, view)),
+        }
+      : loop,
+  )
   const scope = createScope('deliverable', { intent: 'Produce report.csv as a file.' })
   const context = createContext('Produce report.csv as a file.')
   return {
@@ -287,15 +296,14 @@ it('observing an unused lazy workspace does not boot it', async () => {
 })
 
 it('a failing observation callback is explicit to the critic without exposing its error', async () => {
-  const f = fixture(false, { sync: false })
-  await withRunFrame(
-    {
-      criticContext: async () => {
-        throw new Error('private transport detail')
-      },
+  const f = fixture(false, {
+    sync: false,
+    // Install the callback inside the execution scope whose evidence it owns.
+    observation: async () => {
+      throw new Error('private transport detail')
     },
-    f.run,
-  )
+  })
+  await f.run()
   expect(f.observed[0]).toContain('Execution observation unavailable')
   expect(f.observed[0]).not.toContain('private transport detail')
 })

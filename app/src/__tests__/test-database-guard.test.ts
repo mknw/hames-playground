@@ -280,15 +280,10 @@ function databaseSkipPolicyViolations(source: string, filename = 'database.test.
     node = unwrap(node)
     return ts.isIdentifier(node) ? node.text : member(node)
   }
-  function callback(node: ts.Expression): ts.ArrowFunction | ts.FunctionExpression | undefined {
+  function callbacks(node: ts.Expression): (ts.ArrowFunction | ts.FunctionExpression)[] {
     node = unwrap(node)
-    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node
-    if (ts.isCallExpression(node)) {
-      for (const arg of node.arguments) {
-        const fn = callback(arg)
-        if (fn) return fn
-      }
-    }
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return [node]
+    return ts.isCallExpression(node) ? node.arguments.flatMap(callbacks) : []
   }
   const isGuardCall = (node: ts.Node, context: ts.BindingName): boolean =>
     ts.isCallExpression(node) &&
@@ -303,7 +298,9 @@ function databaseSkipPolicyViolations(source: string, filename = 'database.test.
       if (!ts.isExpressionStatement(statement)) continue
       const call = unwrap(statement.expression)
       if (!ts.isCallExpression(call)) continue
-      const fn = callback(call)
+      // A wrapper with several callbacks does not establish which one runs.
+      const candidates = callbacks(call)
+      const fn = candidates.length === 1 ? candidates[0] : undefined
       if (!fn) continue
       if (finalName(call.expression) === 'describe' && ts.isBlock(fn.body)) {
         inspectHooks(fn.body.statements)
@@ -360,8 +357,7 @@ function databaseSkipPolicyViolations(source: string, filename = 'database.test.
       }
     }
     if (ts.isCallExpression(node) && ['it', 'test'].includes(finalName(node.expression) ?? '')) {
-      const fn = callback(node)
-      if (fn) {
+      for (const fn of callbacks(node)) {
         const context = fn.parameters[0]?.name
         inspectTest(fn.body, context && ts.isIdentifier(context) ? context.text : undefined)
       }

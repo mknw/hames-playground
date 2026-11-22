@@ -558,6 +558,113 @@ class OrderContract(SidecarTestCase):
         order.check_watchdog()
         self.assertEqual(exits, [], "completed calls disarm their deadline")
 
+    def test_watchdog_recovers_from_a_throwing_check_and_enforces_a_real_overdue_call(self):
+        module = self.sidecar([])
+        now, exits, failures = [0.0], [], []
+        order = module._Ordered(clock=lambda: now[0], exit_process=exits.append)
+        entered, release = threading.Event(), threading.Event()
+        worker = threading.Thread(target=lambda: order.run(
+            "large", lambda: (entered.set(), release.wait(5))))
+        worker.start()
+        stop = mock.Mock()
+        stop.wait.side_effect = [False, False, True]
+        real_check = order.check_watchdog
+        checks = []
+
+        def check():
+            checks.append(True)
+            if len(checks) == 1:
+                raise RuntimeError("transient check failure")
+            real_check()
+
+        def watch():
+            try:
+                order.watchdog(stop)
+            except BaseException as err:
+                failures.append(err)
+
+        try:
+            self.assertTrue(entered.wait(1))
+            now[0] = module.AUTOSCALER_CALL_TIMEOUT_S
+            with mock.patch.object(order, "check_watchdog", check), \
+                 mock.patch.object(module, "print", create=True) as logged:
+                watchdog = threading.Thread(target=watch)
+                watchdog.start()
+                watchdog.join(1)
+                self.assertFalse(watchdog.is_alive(), "stop must still end the watchdog")
+                self.assertEqual(failures, [], "one failed check must not kill the watchdog")
+                self.assertEqual(exits, [1], "the following check must enforce the active deadline")
+                logged.assert_called_once()
+                self.assertIn("watchdog", logged.call_args.args[0])
+                self.assertIs(logged.call_args.kwargs["file"], sys.stderr)
+        finally:
+            release.set()
+            worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(order._active, {})
+
+    def test_watchdog_does_not_swallow_a_process_exit_substitute(self):
+        module = self.sidecar([])
+        order = module._Ordered(exit_process=lambda code: sys.exit(code))
+        order._active["large"] = order._clock() - module.AUTOSCALER_CALL_TIMEOUT_S
+        stop = mock.Mock()
+        stop.wait.side_effect = [False, True]
+        with self.assertRaises(SystemExit) as raised:
+            order.watchdog(stop)
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_active_deadline_starts_after_nonzero_queue_wait_and_disarms_on_completion(self):
+        module = self.sidecar([])
+        now, exits = [0.0], []
+        order = module._Ordered(clock=lambda: now[0], exit_process=exits.append)
+        first_entered, first_release = threading.Event(), threading.Event()
+        queued, second_entered, second_release = (threading.Event() for _ in range(3))
+        first = threading.Thread(target=lambda: order.run(
+            "large", lambda: (first_entered.set(), first_release.wait(5))))
+        second = threading.Thread(target=lambda: order.run(
+            "large", lambda: (second_entered.set(), second_release.wait(5))))
+        # Observe the second request actually waiting before advancing fake time.
+        real_wait = order._cond.wait
+
+        def wait(timeout):
+            queued.set()
+            return real_wait(timeout)
+
+        first.start()
+        try:
+            self.assertTrue(first_entered.wait(1))
+            now[0] = 1.0  # second request ARRIVES
+            with mock.patch.object(order._cond, "wait", wait):
+                second.start()
+                self.assertTrue(queued.wait(1))
+                now[0] = 1.0 + module.AUTOSCALER_WAIT_TIMEOUT_S / 2
+                first_release.set()
+                self.assertTrue(second_entered.wait(1))
+            call_start = now[0]
+            now[0] = 1.0 + module.AUTOSCALER_CALL_TIMEOUT_S
+            order.check_watchdog()
+            self.assertEqual(exits, [], "queue wait must not consume the active-call budget")
+            now[0] = call_start + module.AUTOSCALER_CALL_TIMEOUT_S - 0.01
+            order.check_watchdog()
+            self.assertEqual(exits, [])
+            now[0] = call_start + module.AUTOSCALER_CALL_TIMEOUT_S
+            order.check_watchdog()
+            self.assertEqual(exits, [1], "the 90s bound includes its exact deadline")
+        finally:
+            first_release.set()
+            second_release.set()
+            first.join(1)
+            if second.ident is not None:
+                second.join(1)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(order._active, {})
+        self.assertEqual(order._queues, {})
+        exits.clear()
+        now[0] += 1000
+        order.check_watchdog()
+        self.assertEqual(exits, [], "completed calls must not trigger a later timeout")
+
     def test_three_arrivals_remain_FIFO_even_if_a_mutex_prefers_the_latest_waiter(self):
         module = self.sidecar([])
         # Python promises no fairness for Lock. This legal LIFO lock makes

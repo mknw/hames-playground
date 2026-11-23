@@ -400,6 +400,22 @@ class Tick(unittest.TestCase):
         self.assertEqual(self.run_tick("release"), "deployed")
         self.assertEqual(self.host.files[ROOT_ENV], before)
 
+    def test_cached_build_with_a_new_index_deploys_when_compose_sees_the_same_manifest(self):
+        # Docker can give a cached build a new index (attestations), while
+        # Compose sees the same runtime manifest and skips ordinary `up`.
+        command_host = follow.Host(config("dev", self.dir))
+
+        def compose(*args):
+            if "--force-recreate" in args:
+                FakeHost.up(self.host)
+
+        self.host.up = command_host.up
+        with patch.object(command_host, "_compose", side_effect=compose):
+            self.assertEqual(self.run_tick(), "deployed")
+        self.assertEqual(self.host.running, "sha256:new-b")
+        self.assertEqual(self.host.cid, "c-sha256:new-b")
+        self.assertEqual(self.state()["deployed"], B)
+
     def test_a_failed_build_restores_everything_and_is_not_retried(self):
         self.host.build_fails = True
         self.host.files[RUNTIME] += "GUARD_EGRESS=x\n"
@@ -607,7 +623,7 @@ class HostCommands(unittest.TestCase):
             self.host().up()
             self.host().build()
         up, build = run.call_args_list[0][0][0], run.call_args_list[1][0][0]
-        self.assertEqual(up, ["docker", "compose", "up", "-d", "--no-deps", "app-dev"])
+        self.assertEqual(up, ["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "app-dev"])
         self.assertEqual(build, ["docker", "compose", "build", "--quiet", "app-dev"])
 
     def test_compose_errors_never_reach_the_journal(self):
@@ -1591,7 +1607,8 @@ MUTATIONS = [
     ("no-hash-drift", "FOLLOW_SCRIPT", '    names = (set(before) | set(after)) - {service}', '    names = set()'),
     ("drift-not-undone", "FOLLOW_SCRIPT", '                if drift:\n                    raise Stop("infra"', '                if False:\n                    raise Stop("infra"'),
     # deploy and rollback
-    ("full-up", "FOLLOW_SCRIPT", 'self._compose("up", "-d", "--no-deps", self.config["FOLLOW_SERVICE"])', 'self._compose("up", "-d", self.config["FOLLOW_SERVICE"])'),
+    ("full-up", "FOLLOW_SCRIPT", 'self._compose("up", "-d", "--no-deps", "--force-recreate", self.config["FOLLOW_SERVICE"])', 'self._compose("up", "-d", "--force-recreate", self.config["FOLLOW_SERVICE"])'),
+    ("cached-build-not-recreated", "FOLLOW_SCRIPT", '"--no-deps", "--force-recreate", self.config["FOLLOW_SERVICE"]', '"--no-deps", self.config["FOLLOW_SERVICE"]'),
     ("no-rollback-tag", "FOLLOW_SCRIPT", '            host.tag(image, tag)\n', ''),
     ("no-ref-pin", "FOLLOW_SCRIPT", 'host.write(root_env, set_env_value(host.read(root_env), cfg["FOLLOW_REF_KEY"], head))', 'pass'),
     ("health-ignored", "FOLLOW_SCRIPT", '            if status != "healthy":\n                raise Stop("health"', '            if False:\n                raise Stop("health"'),

@@ -58,8 +58,11 @@ intent`) plus `docker image · build · boot`, the job that boots the image bein
    `<image>:follow-rollback-<env>`, an in-flight record is written, the checkout
    moves (DEV also updates `DEV_REF` in the root `.env`; each backup is recorded
    before its file changes). Then `docker compose build <service>` and
-   `docker compose up -d --no-deps <service>`. Never a full `up`: that re-runs shared
-   one-shots and can recreate shared services.
+   `docker compose up -d --no-deps --force-recreate <service>`. Forced recreation
+   also applies to rollback: a cached rebuild can change the OCI image index
+   without changing its runtime manifest, so Compose may otherwise keep the old
+   container and fail the exact built-image check. Never a full `up`: that
+   re-runs shared one-shots and can recreate shared services.
 8. **Health.** The new container must reach `healthy` from the image just built,
    within `FOLLOW_HEALTH_TIMEOUT` (default 600 s). An image without a healthcheck
    is not healthy.

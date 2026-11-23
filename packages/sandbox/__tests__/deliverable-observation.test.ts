@@ -244,6 +244,7 @@ for (const lazy of [false, true]) {
       expect(f.observed[1]).not.toContain(filename)
       expect(f.observed[1]).toContain('⟦')
       const event = f.scope.events.find((e) => String(e.type) === 'outputs_promoted')!
+      expect(event).toBeDefined()
       expect(event.data).toEqual({ filenames: [filename] })
       expect(getEventPreview(event.type, event.data)).toBe('1 file(s) saved to the Data Stash')
       const ctx = createContext('file request')

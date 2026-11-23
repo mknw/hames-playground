@@ -6,6 +6,7 @@ import { createContext, trackEvent } from '@hames-ai/harness-patterns/context.se
 import { runChain, chain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { parallel } from '@hames-ai/harness-patterns/patterns/parallel.server'
 import { routes } from '@hames-ai/harness-patterns/patterns/router.server'
+import { withReferences } from '@hames-ai/harness-patterns/patterns/with-references.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeTransports } from '@hames-ai/harness-patterns/tool-transport.server'
 import type {
@@ -224,4 +225,76 @@ for (const lazy of [false, true]) {
     ])
     expect(onEvent.mock.calls.filter(([e]) => e.type === 'outputs_promoted')).toHaveLength(1)
   })
+}
+
+for (const lazy of [false, true]) {
+  for (const composition of ['chain', 'routes', 'parallel', 'references-outer'] as const) {
+    it.each(['never', 'on-success', 'last', 'always'] as const)(
+      `references retain receipts across composition=${composition}, lazy=${lazy}, strategy=%s`,
+      async (strategy) => {
+        const f = vmFixture(`references-composed-${lazy}`, 'failed.csv')
+        const failure = new Error('synthetic nested failure')
+        const wrapped = withSandbox({
+          backend: f.backend,
+          id: `references-composed-${lazy}`,
+          syncWorkspace: true,
+          lazy,
+        })(
+          pattern(async (s) => {
+            trackEvent(s, 'tool_result', { partial: 'discarded content' }, true)
+            s.data = { ...s.data, response: 'discarded response' }
+            for (const filename of ['report.csv', 'failed.csv']) {
+              await activeTransports()[0].callTool('sandbox_write', {
+                path: `/work/out/${filename}`,
+                content: '42',
+              })
+            }
+            throw failure
+          }, strategy),
+        )
+        const references = (p: ConfiguredPattern<Record<string, unknown>>) =>
+          withReferences(p, {
+            patternId: 'references',
+            selector: async () => ({ selected: [], reasoning: 'unused' }),
+          })
+        const entry =
+          composition === 'chain'
+            ? chain(references(wrapped))
+            : composition === 'routes'
+              ? routes({ child: references(wrapped) })
+              : composition === 'parallel'
+                ? parallel([references(wrapped)])
+                : references(chain(routes({ child: chain(wrapped) })))
+        entry.config = { ...entry.config, commitStrategy: strategy, liveEvents: true }
+        const ctx = createContext<Record<string, unknown>>('Produce reports', { route: 'child' })
+        const onEvent = vi.fn()
+        let nextRan = false
+        const next = pattern(async (s) => {
+          nextRan = true
+          expect(s.data.response).toBeUndefined()
+          return { ...s, data: { ...s.data, response: 'recovered response' } }
+        })
+        await withRunFrame({}, () => runChain(ctx, [entry, next], onEvent))
+        // The enclosing composition still owns severity: chain/routes stop on
+        // their default irrecoverable fallback; references/parallel recover.
+        const recovers = composition === 'parallel' || composition === 'references-outer'
+        expect(ctx.status).toBe(recovers ? 'running' : 'error')
+        if (recovers) expect(ctx.error).toBeUndefined()
+        else expect(ctx.error).toBe(failure.message)
+        expect(nextRan).toBe(recovers)
+        expect(ctx.data.response).toBe(recovers ? 'recovered response' : undefined)
+        expect(ctx.events.filter((e) => e.type === 'tool_result')).toHaveLength(0)
+        expect(
+          ctx.events.filter(
+            (e) => e.type === 'error' && (e.data as { error: string }).error === failure.message,
+          ),
+        ).toHaveLength(1)
+        expect(f.stored).toEqual(['report.csv'])
+        expect(ctx.events.filter((e) => e.type === 'outputs_promoted').map((e) => e.data)).toEqual([
+          { filenames: ['report.csv'] },
+        ])
+        expect(onEvent.mock.calls.filter(([e]) => e.type === 'outputs_promoted')).toHaveLength(1)
+      },
+    )
+  }
 }

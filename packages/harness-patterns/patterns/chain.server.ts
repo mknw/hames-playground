@@ -14,7 +14,6 @@ import type {
   ConfiguredPattern,
   ContinuationSegment,
   PatternConfig,
-  PatternScope,
   ErrorEventData,
 } from '../types'
 import {
@@ -26,7 +25,7 @@ import {
   setError,
   createEvent,
   dropHitl,
-  durableEvents,
+  runChildScope,
 } from '../context.server'
 import {
   commitHitlBuffer,
@@ -379,13 +378,7 @@ export function chain<T extends Record<string, unknown>>(
         }
         const subView = createEventView(syntheticCtx, pattern.config.viewConfig, subId)
         const childScope = createScope<T>(subId, currentData)
-        let result: PatternScope<T>
-        try {
-          result = await pattern.fn(childScope, subView)
-        } catch (error) {
-          scope.events.push(...durableEvents(childScope.events))
-          throw error
-        }
+        const result = await runChildScope(scope, childScope, () => pattern.fn(childScope, subView))
         // Drop every hitl_* event HERE, not only at the final commit: the next
         // sub-pattern's view is built from these events, so a forged answer
         // merged now would be read before anything commits (#433, F6).

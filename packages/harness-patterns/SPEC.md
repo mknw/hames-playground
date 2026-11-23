@@ -325,7 +325,7 @@ How UnifiedContext flows through the system:
 
 **Patterns write to scope, never directly to context.** This enables:
 
-- **Rollback on error** - A throwing pattern's partial content and result are discarded; durable records, including successful output promotions, survive through `chain`, `routes` and `parallel` child scopes.
+- **Rollback on error** - A throwing pattern's partial content and result are discarded; durable records, including successful output promotions, survive through `chain`, `routes`, `parallel` and `withReferences` child scopes. Sequential child dispatch shares this failure transfer; parallel dispatch applies the same durable-event policy when merging settled branches in declaration order. `withReferences` still records a recoverable error and returns its parent scope when its child throws.
 - **Configurable commit strategies** - Control when/what gets persisted
 - **Clean separation** - Each pattern has its own workspace
 

@@ -114,6 +114,22 @@ export function createScope<T>(patternId: string, data: T): PatternScope<T> {
   }
 }
 
+/** Execute an isolated child. On a throw, retain its durable records in the
+ *  parent and rethrow the original failure, without merging partial content or results.
+ *  Successful results are merged by the caller, which owns its boundaries. */
+export async function runChildScope<T>(
+  parent: PatternScope<unknown>,
+  child: PatternScope<T>,
+  run: () => Promise<PatternScope<T>>,
+): Promise<PatternScope<T>> {
+  try {
+    return await run()
+  } catch (error) {
+    parent.events.push(...durableEvents(child.events))
+    throw error
+  }
+}
+
 // ============================================================================
 // Event Helpers
 // ============================================================================

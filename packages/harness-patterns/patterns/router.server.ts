@@ -32,7 +32,7 @@ import {
   createEvent,
   createScope,
   redactCall,
-  durableEvents,
+  runChildScope,
 } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
@@ -363,13 +363,7 @@ export function routes<T extends RouterData & Record<string, unknown>>(
       scope.events.push(enterEvent)
       emitLive(enterEvent)
 
-      let childResult: PatternScope<T>
-      try {
-        childResult = await pattern.fn(childScope, view)
-      } catch (error) {
-        scope.events.push(...durableEvents(childScope.events))
-        throw error
-      }
+      const childResult = await runChildScope(scope, childScope, () => pattern.fn(childScope, view))
       // Merge child events and data back into routes' scope
       scope.events.push(...childResult.events)
       const exitEvent = createEvent('pattern_exit', childId, { status: 'completed' })

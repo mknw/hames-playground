@@ -4,7 +4,7 @@
 One run is one timer tick. It polls the branch head, waits for that commit's
 CI, compares the target's env-key manifest with the environment's runtime env
 file, rebuilds and recreates ONLY the environment's app service
-(`docker compose up -d --no-deps <service>`), health-checks it and rolls back
+(`docker compose up -d --no-deps --force-recreate <service>`), health-checks it and rolls back
 to the previous image on failure. Every step is journaled. The decision rules
 and their failure modes are in docs/deployment/branch-deploys.md.
 
@@ -541,7 +541,10 @@ class Host:
         self._compose("build", "--quiet", self.config["FOLLOW_SERVICE"])
 
     def up(self):
-        self._compose("up", "-d", "--no-deps", self.config["FOLLOW_SERVICE"])
+        # A cached rebuild can change the image index (attestations) without
+        # changing its runtime manifest. Compose may otherwise keep a container
+        # on the old index, which cannot pass our exact built-image check.
+        self._compose("up", "-d", "--no-deps", "--force-recreate", self.config["FOLLOW_SERVICE"])
 
     def health(self, cid):
         return self._run([*self.docker, "inspect", "--format",

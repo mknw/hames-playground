@@ -10,7 +10,14 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { trackEvent, resolveConfig, createScope, createEvent, shouldTrack } from '../context.server'
+import {
+  trackEvent,
+  resolveConfig,
+  createScope,
+  createEvent,
+  shouldTrack,
+  runChildScope,
+} from '../context.server'
 import { hitlPending } from '../hitl.server'
 import { resumableStep, takeResume, wrapperResumable } from '../resume.server'
 import type {
@@ -349,14 +356,14 @@ export function withReferences<T>(
     const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
     const childScope = createScope<T>(innerPatternId, scope.data)
     // The boundary is stamped when the inner pattern STARTS. The events are
-    // pushed after it finishes (so a throw leaves none behind), but an event
-    // stamped there reads as "entered after everything it contains" — the
+    // pushed after it finishes (a throw retains only durable child records),
+    // but an event stamped there reads as "entered after everything it contains" — the
     // panel sorts by `ts`, so the enter row landed below the inner pattern's
     // own events.
     const enterEvent = createEvent('pattern_enter', innerPatternId, {
       pattern: wrappedPattern.name,
     })
-    const result = await wrappedPattern.fn(childScope, view)
+    const result = await runChildScope(scope, childScope, () => wrappedPattern.fn(childScope, view))
 
     scope.events.push(enterEvent)
     scope.events.push(...result.events)

@@ -45,6 +45,13 @@ const events = [
     patternId: 'synthetic',
     data: { callId: 'pair', tool: 'synthetic_tool', success: true, result: { answer: 42 } },
   },
+  {
+    id: 'synthetic-promotion',
+    ts: 4,
+    type: 'outputs_promoted',
+    patternId: 'synthetic',
+    data: { filenames: ['synthetic-report.csv'] },
+  },
 ]
 
 async function seedConversation(id: string): Promise<void> {
@@ -115,5 +122,15 @@ for (const theme of ['light', 'dark'] as const) {
     )
     await expectReadable(detail.getByText('Status', { exact: true }), `pair status in ${theme}`)
     await expectReadable(detail.getByText('Success'), `pair result in ${theme}`)
+
+    await detail.getByRole('button', { name: 'Close' }).click()
+    await expect(page.getByText('1 file(s) saved to the Data Stash', { exact: true })).toBeVisible()
+    await page.getByText('outputs promoted', { exact: true }).click()
+    await expect(detail).toBeVisible()
+    await expectReadable(
+      detail.getByText('outputs promoted', { exact: true }),
+      `promotion in ${theme}`,
+    )
+    await expect(detail).toContainText('synthetic-report.csv')
   })
 }

@@ -437,6 +437,12 @@ them:
   into the stash) is copied into `/work/in` right after that call returns, so
   the agent can open it in the same run. If that copy fails, the call is
   reported as failed rather than as a success that the agent cannot act on.
+  Before each actor/critic verdict, synced workspaces supply a fresh listing of
+  `/work/out` and the files changed since turn entry. The critic can distinguish
+  a script from its output; this does not verify contents or promise storage.
+  Failed listings are reported as unavailable. After execution, successful
+  storage emits an always-committed `outputs_promoted` event naming only the
+  files actually stored; partial failures keep their existing error events.
 - **Starting the sandbox only when it is used** — `withSandbox({ id, lazy: true })`
   starts the container on the agent's first `sandbox_*` call instead of at the start
   of the turn, so a turn that never runs code never needs a container engine. Until

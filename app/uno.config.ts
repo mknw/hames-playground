@@ -299,6 +299,7 @@ export default defineConfig({
           --ui-evt-plan-created: #a1905d;
           --ui-evt-model-call: #a1905d;
           --ui-evt-critic-result: #ca78a1;
+          --ui-evt-outputs-promoted: #5d9f78;
           --ui-evt-pattern-enter: #94a3b8;
           --ui-evt-pattern-exit: #94a3b8;
           --ui-evt-approval-request: #b3896a;
@@ -399,6 +400,7 @@ export default defineConfig({
           --ui-evt-plan-created: #706441;
           --ui-evt-model-call: #706441;
           --ui-evt-critic-result: #8c516f;
+          --ui-evt-outputs-promoted: #406e53;
           --ui-evt-pattern-enter: #5b6470;
           --ui-evt-pattern-exit: #5b6470;
           --ui-evt-approval-request: #7d5e48;

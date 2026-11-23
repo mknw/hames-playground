@@ -183,6 +183,7 @@ type EventType =
   | 'tool_result'
   | 'controller_action'
   | 'critic_result'
+  | 'outputs_promoted' // successful workspace storage; filenames for people, count-only in model views
   | 'pattern_enter'
   | 'pattern_exit'
   | 'approval_request' // @deprecated legacy (#433) — superseded by hitl_request; readHitl() never reads it
@@ -324,7 +325,7 @@ How UnifiedContext flows through the system:
 
 **Patterns write to scope, never directly to context.** This enables:
 
-- **Rollback on error** - If a pattern fails, its events aren't committed
+- **Rollback on error** - A throwing pattern's partial content and result are discarded; durable records, including successful output promotions, survive through `chain`, `routes`, `parallel` and `withReferences` child scopes. Sequential child dispatch shares this failure transfer; parallel dispatch applies the same durable-event policy when merging settled branches in declaration order. `withReferences` still records a recoverable error and returns its parent scope when its child throws.
 - **Configurable commit strategies** - Control when/what gets persisted
 - **Clean separation** - Each pattern has its own workspace
 
@@ -439,6 +440,15 @@ and no other:
    returns (before promotion and release): inherited observers/hooks become
    inert and a restore in flight is drained. A write to another conversation's
    stash is ignored; a call that stored nothing costs a map lookup.
+   A workspace may also supply `criticContext: () => Promise<string>` on the
+   run frame. `actorCritic` awaits it immediately before each critic call and
+   appends its current evidence to the critic's intent; absent, the input is
+   unchanged. The innermost callback replaces the outer one for its scope. A
+   failing callback produces a fixed unavailable-evidence notice. Synced sandbox
+   workspaces use this for a sanitised output listing and its pre-turn diff,
+   without promoting before the verdict. Successful storage afterwards records
+   `outputs_promoted` with `OutputsPromotedEventData.filenames`, always committed
+   regardless of history/commit strategy; model-facing views render only a count.
 2. **Process transports** — supplied by `registerTransport(t)`, in registration
    order. Today's one is the app-side in-process tools.
 3. **The MCP gateway** — the terminal fallback, and deliberately NOT a
@@ -1037,7 +1047,7 @@ parallel<SimpleLoopData & Record<string, unknown>>([
 1. Each branch gets an isolated child scope (`events: []`, same `data`)
 2. All branches run concurrently via `Promise.allSettled`
 3. Fulfilled branches: events wrapped with `pattern_enter` / `pattern_exit` markers, then merged into parent scope
-4. Rejected branches: tracked as `error` events, don't block other branches
+4. Rejected branches: durable events are retained and the failure is tracked as an `error` event; partial content and data are discarded, and other branches continue.
 
 ### `withInjectionGuard(config)(pattern)`
 

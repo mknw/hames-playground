@@ -26,7 +26,14 @@ import type {
   RouteFn,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
-import { trackEvent, resolveConfig, createEvent, createScope, redactCall } from '../context.server'
+import {
+  trackEvent,
+  resolveConfig,
+  createEvent,
+  createScope,
+  redactCall,
+  runChildScope,
+} from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
 import { currentRunFrame } from '../run-frame.server'
@@ -356,7 +363,7 @@ export function routes<T extends RouterData & Record<string, unknown>>(
       scope.events.push(enterEvent)
       emitLive(enterEvent)
 
-      const childResult = await pattern.fn(childScope, view)
+      const childResult = await runChildScope(scope, childScope, () => pattern.fn(childScope, view))
       // Merge child events and data back into routes' scope
       scope.events.push(...childResult.events)
       const exitEvent = createEvent('pattern_exit', childId, { status: 'completed' })

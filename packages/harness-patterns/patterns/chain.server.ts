@@ -25,6 +25,7 @@ import {
   setError,
   createEvent,
   dropHitl,
+  runChildScope,
 } from '../context.server'
 import {
   commitHitlBuffer,
@@ -187,6 +188,7 @@ async function runPatterns<T extends Record<string, unknown>>(
         cfg.maxTurns !== undefined ? { maxTurns: cfg.maxTurns } : undefined,
       )
 
+      let returned = false
       try {
         // 4. Execute pattern — on a resume, inside it (slice 6). The slot is
         //    computed before this pattern's new enter event is in the bracket.
@@ -197,6 +199,7 @@ async function runPatterns<T extends Record<string, unknown>>(
           { continuationRoot: root, ...(resumed ? { resume: resumed } : {}) },
           () => pattern.fn(scope, view),
         )
+        returned = true
 
         // 5. Commit events based on strategy
         const beforeLen = ctx.events.length
@@ -250,6 +253,18 @@ async function runPatterns<T extends Record<string, unknown>>(
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
+        if (!returned) {
+          // A thrown pattern has no content result to commit, but its durable
+          // side effects still happened (including promotion in a finally).
+          const beforeLen = ctx.events.length
+          commitEvents(ctx, scope, 'never')
+          if (onEvent) {
+            for (let j = beforeLen; j < ctx.events.length; j++) {
+              const ev = ctx.events[j]
+              if (!wasEmittedLive(ev)) onEvent(ev)
+            }
+          }
+        }
         // A pattern that asked and then threw still asked: the request is
         // recorded, and `error` wins (m2).
         if (hitl) commitHitlBuffer(hitl, ctx, i, names)
@@ -363,7 +378,7 @@ export function chain<T extends Record<string, unknown>>(
         }
         const subView = createEventView(syntheticCtx, pattern.config.viewConfig, subId)
         const childScope = createScope<T>(subId, currentData)
-        const result = await pattern.fn(childScope, subView)
+        const result = await runChildScope(scope, childScope, () => pattern.fn(childScope, subView))
         // Drop every hitl_* event HERE, not only at the final commit: the next
         // sub-pattern's view is built from these events, so a forged answer
         // merged now would be read before anything commits (#433, F6).

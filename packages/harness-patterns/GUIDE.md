@@ -54,9 +54,9 @@ combinators take and return configured patterns.
 
 A pattern never writes the shared log directly. `harness()` (and `chain()`)
 hand it a **scope** — its own event buffer and its own view of the log. When
-the pattern returns, its events are committed; if it throws, nothing it wrote
-lands, and the chain records an `error` event instead (see §4). A step that
-fails mid-flight leaves no partial state behind.
+the pattern returns, its events are committed; if it throws, its partial
+content and result are discarded, while durable records such as successful
+output promotions survive. The chain records an `error` event (see §4).
 
 ### Views: read through a declared slice
 

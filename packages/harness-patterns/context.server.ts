@@ -114,6 +114,22 @@ export function createScope<T>(patternId: string, data: T): PatternScope<T> {
   }
 }
 
+/** Execute an isolated child. On a throw, retain its durable records in the
+ *  parent and rethrow the original failure, without merging partial content or results.
+ *  Successful results are merged by the caller, which owns its boundaries. */
+export async function runChildScope<T>(
+  parent: PatternScope<unknown>,
+  child: PatternScope<T>,
+  run: () => Promise<PatternScope<T>>,
+): Promise<PatternScope<T>> {
+  try {
+    return await run()
+  } catch (error) {
+    parent.events.push(...durableEvents(child.events))
+    throw error
+  }
+}
+
 // ============================================================================
 // Event Helpers
 // ============================================================================
@@ -375,12 +391,20 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'loop_recovery',
   'decision_made',
   'model_call',
+  // A persisted deliverable survives even when the loop's content is discarded.
+  'outputs_promoted',
   // The egress gate's audit, refusal and block records: a security record is not
   // optional history, and the tripwire's count is derived from the refusals.
   'egress_audit',
   'egress_refused',
   'egress_blocked',
 ])
+
+/** Keep durable records when a child throws, without its partial content.
+ *  Child-scope merges and final commits use the same policy. */
+export function durableEvents(events: ContextEvent[]): ContextEvent[] {
+  return dropHitl(events).filter((e) => ALWAYS_COMMIT_TYPES.has(e.type))
+}
 
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are
@@ -403,7 +427,7 @@ export function commitEvents<T>(
         ctx.events.push(...events)
       } else {
         // Only lifecycle events
-        ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+        ctx.events.push(...durableEvents(events))
       }
       break
     case 'last': {
@@ -419,7 +443,7 @@ export function commitEvents<T>(
     }
     case 'never':
       // Only lifecycle events
-      ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+      ctx.events.push(...durableEvents(events))
       break
   }
 }

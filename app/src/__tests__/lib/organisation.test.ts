@@ -155,3 +155,15 @@ it('bounds and quotes identity metadata; rejects instructions and non-domains', 
   )
   expect(formatOrganisationBlock(identity)).toContain('Name: "Lumen Orchard Works"')
 })
+
+it.each([
+  'Abbreviations: ["LOW"]',
+  'Domains: ["lumen-orchard.example.org"]',
+  '“we” / “our company”',
+  'the knowledge graph, then its Microsoft 365 files and sites (office-data)',
+  'search with its full name and domain, never a bare abbreviation',
+  'A question explicitly about another organisation still uses the web',
+  'it supplies no VAT number, payment instructions or other business facts',
+])('renders the identity field or source rule: %s', (required) => {
+  expect(formatOrganisationBlock(identity)).toContain(required)
+})

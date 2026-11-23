@@ -58,6 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { TurnClock } from './clock'
+import type { OrganisationIdentity } from './organisation'
 import type { ToolTransport } from './tool-transport.server'
 import type {
   ByTier,
@@ -282,6 +283,9 @@ export interface RunFrame {
    *  with itself. Absent: no time block is rendered and tools keep their own
    *  zone fallback. */
   clock?: TurnClock
+  /** Host-resolved and cached per session. null means the host tried and the
+   * organisation is unknown; undefined means no identity source was supplied. */
+  organisation?: OrganisationIdentity | null
   /** Whether a person is there to answer `askHuman` (#433). Supplied by the
    *  host's amend around its MAIN run only, never below it — a sidecar (a title
    *  agent, a detached compaction) has none, so it can never pause the user's
@@ -365,6 +369,7 @@ export interface ActiveRunFrame {
   readonly live?: LiveEventSlot
   readonly inference?: InferenceSlot
   readonly clock?: TurnClock
+  readonly organisation?: OrganisationIdentity | null
   /** Frozen, and nothing but `attended` (#477 F1). The run's HITL bookkeeping
    *  is not here: it is in a store of its own that the owning `runChain`
    *  opens (`hitl.server.ts`), so nothing that can read the frame can write
@@ -527,6 +532,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       : undefined,
     inference: frame.inference,
     clock: frame.clock,
+    organisation: frame.organisation,
     hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
     stashWriteObservers: frame.stashWriteObservers
       ? Object.freeze([...frame.stashWriteObservers])
@@ -664,6 +670,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       : open.live,
     inference: partial.inference ?? open.inference,
     clock: partial.clock ?? open.clock,
+    organisation: partial.organisation !== undefined ? partial.organisation : open.organisation,
     hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
     stashWriteObservers: partial.stashWriteObservers
       ? Object.freeze([...partial.stashWriteObservers, ...open.stashWriteObservers])

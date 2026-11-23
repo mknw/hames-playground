@@ -102,6 +102,7 @@ import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { resolveTurnClock } from '../time-zone.server'
+import { sessionOrganisation } from '../organisation.server'
 import { pausedTurnClock } from '@hames-ai/harness-patterns/clock'
 import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
 import { beginSelfDeployedTurn, endSelfDeployedTurn } from '../inference/large-activity.server'
@@ -373,6 +374,7 @@ export async function runTurnAndPersist(
           config: req.settings ?? DEFAULT_SETTINGS,
           inference: { tier },
           clock,
+          organisation: await sessionOrganisation(sessionId, userId),
         },
         async () => {
           // The header's warm indicator and the global counters both learn about

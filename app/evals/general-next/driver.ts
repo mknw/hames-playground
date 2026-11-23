@@ -494,6 +494,7 @@ export async function createDriver(
         {
           inference: { tier: 'self_deployed' },
           hitl: { attended: false },
+          ...(next.organisation ? { organisation: next.organisation.identity } : {}),
           // A scenario's fixed clock (45): the host's per-turn slot, held for the scenario.
           ...(next.clock
             ? {

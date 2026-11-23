@@ -17,7 +17,7 @@
  * carry over unchanged in kind."
  */
 
-import { currentTimeBlock } from './time-block.server'
+import { currentTurnContext } from './turn-context.server'
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
@@ -223,7 +223,7 @@ async function synthesize(
       // and is not fence-escaped; null renders nothing.
       guide,
       // `current_time`: the turn's clock block (time-block.server.ts), or null.
-      currentTimeBlock(),
+      currentTurnContext(),
       synthOpts,
     )
   } catch (e) {

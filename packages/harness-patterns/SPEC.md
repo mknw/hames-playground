@@ -2341,6 +2341,21 @@ included). It renders in user-role content after stable system content and,
 where present, after the last cache breakpoint. No timestamp enters the cached
 prefix; all existing cache blocks keep their contents. Routing is unchanged.
 
+**The organisation block (#1072).** `RunFrame.organisation` is the host-resolved
+`OrganisationIdentity` (`displayName?`, `abbreviations`, `domains`), cached by the
+host per session and authenticated owner. Core reads it at execution, never at
+pattern construction, and puts `formatOrganisationBlock(identity)` after the
+clock in the state, included in the fixed state budget. A state override receives
+the rendered block as `DecisionLoopStateInput.organisation` and owns placement.
+The BAML controllers, planner, critic and writer reuse their existing opaque
+`current_time` tail for clock plus identity (`currentTurnContext`), after all
+cache markers; no BAML signature changes. Absent identity renders no bytes.
+`null` means resolution was attempted but failed: the loop records an
+“Organisation unknown” warning and continues. Fields are bounded, normalised,
+checked by the deterministic injection corpus and JSON quoted; domains are
+validated. Identity selects own sources (graph, then Microsoft 365 files/sites),
+and full-name/domain web queries; it is never evidence of a business fact.
+
 **The documents block (#507).** With `documents` configured, the state gains one
 block between the conversation and **This turn so far**, constant within a turn.
 Core never reads a tier and never reads a stash: the host's source returns the

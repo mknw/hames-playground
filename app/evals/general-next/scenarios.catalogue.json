@@ -3378,6 +3378,135 @@
       "notes": "#1058 r2 (review): the decide question and the info controller scope the projects rule to the user’s OWN organisation, so a public organisation’s projects are a web question — this row is the live proof. It rides the P4 gate like 15/16 (the catalogue’s one listed-but-never-run mechanism) because its graded facts are live web content: reported GATED, never as passing, until a coordinated live run flips it. The live run also grades the scoping the row exists for: no office files tool runs before the web search (toolsNotBefore, r3) — the mirror of 49's web-last rule."
     },
     {
+      "id": "52-own-organisation-invoicing",
+      "title": "Our organisation’s abbreviation selects its own invoicing sources",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["think", "info-retrieval", "office-data"],
+        "sources": ["knowledge-graph", "m365-files"],
+        "intents": ["lookup-fact"],
+        "turnShape": "single",
+        "toolShape": "several-routes",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": ["What are LOW’s VAT number and invoicing details?"],
+      "expected": "Own files before any public web lookup. The answer contains the correct synthetic VAT details and excludes those of the other organisation.",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools",
+          "tools": ["read_neo4j_cypher", "graph_files_search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate",
+          "tool": "graph_files_search"
+        },
+        {
+          "check": "toolsNotBefore",
+          "says": "Own files before any public web lookup",
+          "tools": ["search", "fetch"],
+          "before": "graph_files_search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes",
+          "facts": ["SYNTHETIC-LOW-VAT-314", "billing@lumen-orchard.example.org"]
+        },
+        {
+          "check": "answerExcludes",
+          "says": "Do not substitute another organisation’s invoicing details",
+          "facts": ["SYNTHETIC-NAMESAKE-VAT-999", "pay@league-of-windmills.example.org"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "module expectedRoutes",
+          "routes": ["think", "info-retrieval", "office-data"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions",
+          "max": 6
+        }
+      ],
+      "fixtures": ["Invented organisation and public namesake; no real company data."],
+      "cells": [
+        ["lookup-fact", "knowledge-graph"],
+        ["lookup-fact", "m365-files"]
+      ],
+      "notes": "#1072. Hermetic model reads the identity/evidence actually carried by the request. A live run still requires owner spend approval."
+    },
+    {
+      "id": "53-other-organisation-web",
+      "title": "An explicitly different organisation is still searched on the public web",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["info-retrieval"],
+        "sources": ["web"],
+        "intents": ["research-public"],
+        "turnShape": "single",
+        "toolShape": "one",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": ["What is the VAT number of the League of Windmills?"],
+      "expected": "Another organisation is a web question. The answer contains the correct synthetic VAT details and excludes those of the other organisation.",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools",
+          "tools": ["search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate",
+          "tool": "search"
+        },
+        {
+          "check": "toolsNotBefore",
+          "says": "Another organisation is a web question",
+          "tools": ["graph_files_search"],
+          "before": "search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes",
+          "facts": ["SYNTHETIC-NAMESAKE-VAT-999"]
+        },
+        {
+          "check": "answerExcludes",
+          "says": "Do not substitute another organisation’s invoicing details",
+          "facts": ["SYNTHETIC-LOW-VAT-314"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "module expectedRoutes",
+          "routes": ["info-retrieval"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions",
+          "max": 6
+        }
+      ],
+      "fixtures": ["Invented organisation and public namesake; no real company data."],
+      "cells": [["research-public", "web"]],
+      "notes": "#1072. Hermetic model reads the identity/evidence actually carried by the request. A live run still requires owner spend approval."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",
@@ -13912,8 +14041,7 @@
     "negativeOnlyIntents": {},
     "unusedValues": {
       "tier:anthropic": "Excluded by the owner's 2026-10-15 ruling: this Eval runs the private tier only.",
-      "guardPaths:hitl-prompt": "Unreachable in this layer: the driver runs unattended (hitl.attended false, app/evals/general-next/driver.ts:202), so a person prompt always takes its unattended default. It belongs to the browser layer once the dialog shell exists.",
-      "routes:think": "Dropped with p05-plan-then-multi-route (owner verdict 2026-10-22: the plan's inputs are not in the knowledge graph yet). No remaining scenario selects the think route; an unprompted-plan sibling is a later addition."
+      "guardPaths:hitl-prompt": "Unreachable in this layer: the driver runs unattended (hitl.attended false, app/evals/general-next/driver.ts:202), so a person prompt always takes its unattended default. It belongs to the browser layer once the dialog shell exists."
     }
   }
 }

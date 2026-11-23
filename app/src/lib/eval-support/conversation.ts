@@ -80,6 +80,12 @@ export interface ConversationScenario {
    * instant (ISO) and the user's IANA zone. Absent = no clock, as before, so no
    * other scenario's prompts change. Graders compare against this, never the wall clock. */
   clock?: { instant: string; timeZone: string }
+  /** Synthetic deployment identity, supplied by the host on the run frame.
+   * The hermetic model reads the rendered identity before choosing own sources. */
+  organisation?: {
+    identity: { displayName: string; abbreviations: string[]; domains: string[] }
+    question: 'own' | 'other'
+  }
   /** A must whose acceptance run is pending: the flip gate lists it in the report
    * (with this issue number) but does not block the flip on it. Pinned by PENDING_MUSTS
    * in flip-gate.ts and the pin test in flip-gate.test.ts. */

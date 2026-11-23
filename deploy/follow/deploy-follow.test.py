@@ -1081,6 +1081,46 @@ def root_owned_readable_file():
     return None
 
 
+def free_fanout(repo):
+    """A two-hex fan-out name under objects/ that no object of the fixture occupies."""
+    objects = repo / ".git/objects"
+    return next(objects / ("%02x" % i) for i in range(256) if not (objects / ("%02x" % i)).exists())
+
+
+def prune_target(repo, kind):
+    """The walk target a race prunes, and its removal, for kind 'object' or 'fanout-dir'.
+
+    The fan-out name is chosen from the names the fixture does not use: a fixed
+    name collides with the fixture's own commit id for ~1 in 256 commit
+    timestamps, which fails the mkdir.
+    """
+    if kind == "object":
+        blob = git(repo, "rev-parse", "HEAD:tracked")
+        target = repo / ".git/objects" / blob[:2] / blob[2:]
+        return target, target.unlink
+    target = free_fanout(repo)
+    target.mkdir()
+    return target, target.rmdir
+
+
+def pruning_hook(target, remove, hook):
+    """Removes target the first time the walk calls os.access or Path.is_dir on it."""
+    fired = []
+    real_access, real_is_dir = os.access, Path.is_dir
+
+    def access(path, mode, **kwargs):
+        if Path(path) == target and not fired:
+            fired.append(remove())
+        return real_access(path, mode, **kwargs)
+
+    def is_dir(path, *args, **kwargs):
+        if path == target and not fired:
+            fired.append(remove())
+        return real_is_dir(path, *args, **kwargs)
+    return fired, (patch.object(follow.os, "access", side_effect=access) if hook == "access"
+                  else patch.object(Path, "is_dir", is_dir))
+
+
 class GitFixture(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -1367,28 +1407,8 @@ class GitWalkAndDiagnostics(GitFixture):
 
     def check_pruned_entry(self, hook, kind):
         repo = self.repo("%s-%s" % (hook, kind))
-        blob = git(repo, "rev-parse", "HEAD:tracked")
-        if kind == "object":
-            target = repo / ".git/objects" / blob[:2] / blob[2:]
-            remove = target.unlink
-        else:
-            target = repo / ".git/objects/ee"
-            target.mkdir()
-            remove = target.rmdir
-        fired = []
-        real_access, real_is_dir = os.access, Path.is_dir
-
-        def access(path, mode, **kwargs):
-            if Path(path) == target and not fired:
-                fired.append(remove())
-            return real_access(path, mode, **kwargs)
-
-        def is_dir(path, *args, **kwargs):
-            if path == target and not fired:
-                fired.append(remove())
-            return real_is_dir(path, *args, **kwargs)
-        hooked = (patch.object(follow.os, "access", side_effect=access) if hook == "access"
-                  else patch.object(Path, "is_dir", is_dir))
+        target, remove = prune_target(repo, kind)
+        fired, hooked = pruning_hook(target, remove, hook)
         with hooked:
             self.host(repo).check_checkout_writable()
         self.assertEqual(len(fired), 1, "the hook did not fire; the test proves nothing")
@@ -1398,6 +1418,57 @@ class GitWalkAndDiagnostics(GitFixture):
             for kind in ("object", "fanout-dir"):
                 with self.subTest(hook=hook, kind=kind):
                     self.check_pruned_entry(hook, kind)
+
+    def blocked_repo(self, name):
+        """Genuine blocks on both sides of objects/ in walk order: FETCH_HEAD, then refs."""
+        repo = self.repo(name)
+        before, after = repo / ".git/FETCH_HEAD", repo / ".git/refs"
+        before.write_text("")
+        self.chmod(before, 0o444)  # walked before objects/
+        self.chmod(after, 0o555)  # walked after objects/
+        return repo, (before, after)
+
+    def assert_blocks_named(self, repo, blocks, pruned):
+        with self.assertRaises(follow.Refusal) as caught:
+            self.host(repo).check_checkout_writable()
+        message = str(caught.exception)
+        for path in blocks:
+            self.assertIn(str(path) + " (owner=", message)
+        self.assertNotIn(str(pruned), message)
+
+    @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
+    def test_entry_pruned_after_stat_keeps_the_walk_going(self):
+        """A pruned entry is skipped, not the walk's end; both genuine blocks still refuse."""
+        for hook in ("access", "is_dir"):
+            for kind in ("object", "fanout-dir"):
+                with self.subTest(hook=hook, kind=kind):
+                    repo, blocks = self.blocked_repo("%s-%s" % (hook, kind))
+                    target, remove = prune_target(repo, kind)
+                    fired, hooked = pruning_hook(target, remove, hook)
+                    with hooked:
+                        self.assert_blocks_named(repo, blocks, target)
+                    self.assertEqual(len(fired), 1, "the hook did not fire; the test proves nothing")
+
+    @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
+    def test_entry_pruned_before_stat_or_listing_keeps_the_walk_going(self):
+        """The first-stat and listing skips also keep the walk going past a pruned entry."""
+        for method in ("stat", "iterdir"):
+            with self.subTest(method=method):
+                repo, blocks = self.blocked_repo("pre-" + method)
+                blob = git(repo, "rev-parse", "HEAD:tracked")
+                target = repo / ".git/objects" / blob[:2] / (blob[2:] if method == "stat" else "")
+                target = Path(str(target).rstrip("/"))
+                real = getattr(Path, method)
+                fired = []
+
+                def pruned(path, *args, **kwargs):
+                    if path == target:
+                        fired.append(True)
+                        raise FileNotFoundError(2, "No such file or directory", str(path))
+                    return real(path, *args, **kwargs)
+                with patch.object(Path, method, pruned):
+                    self.assert_blocks_named(repo, blocks, target)
+                self.assertTrue(fired, "the pruned entry was never reached")
 
     @unittest.skipIf(AS_ROOT, "root bypasses permission bits")
     def test_real_fetch_error_is_one_err_record_with_every_line(self):
@@ -1564,6 +1635,21 @@ MUTATIONS = [
     ('ancestry-stderr-last-line', 'FOLLOW_SCRIPT', 'detail = stderr_detail(result.stderr, full=True)', 'detail = stderr_detail(result.stderr, full=False)'),
     ('error-tick-warning', 'FOLLOW_SCRIPT', 'journal("err", "ERROR", str(error))', 'journal("warning", "ERROR", str(error))'),
     ('checkout-restat-errors-ignored', 'FOLLOW_SCRIPT', '                    try:\n                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        continue\n', '                    try:\n                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except OSError:\n                        continue\n'),
+    ('checkout-restat-return-ends-walk', 'FOLLOW_SCRIPT',
+     '                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        continue\n',
+     '                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        return\n'),
+    ('checkout-restat-break-ends-walk', 'FOLLOW_SCRIPT',
+     '                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        continue\n',
+     '                        path.stat()  # Auto-gc can prune after the first stat succeeded.\n                    except FileNotFoundError:\n                        break\n'),
+    ('checkout-pruned-stat-break-ends-walk', 'FOLLOW_SCRIPT',
+     "                except FileNotFoundError:\n                    # Fetch's auto-gc may prune an entry during this walk;\n                    # dangling symlinks likewise have no target to maintain.\n                    continue\n",
+     "                except FileNotFoundError:\n                    # Fetch's auto-gc may prune an entry during this walk;\n                    # dangling symlinks likewise have no target to maintain.\n                    break\n"),
+    ('checkout-pruned-listing-break-ends-walk', 'FOLLOW_SCRIPT',
+     '                        pending.extend(sorted(path.iterdir(), reverse=True))\n                    except FileNotFoundError:\n                        continue\n',
+     '                        pending.extend(sorted(path.iterdir(), reverse=True))\n                    except FileNotFoundError:\n                        break\n'),
+    ('checkout-pruned-listing-return-ends-walk', 'FOLLOW_SCRIPT',
+     '                        pending.extend(sorted(path.iterdir(), reverse=True))\n                    except FileNotFoundError:\n                        continue\n',
+     '                        pending.extend(sorted(path.iterdir(), reverse=True))\n                    except FileNotFoundError:\n                        return\n'),
     # promotion
     ("partial-go", "PROMOTE_SCRIPT", '    if GO_LINE not in text.splitlines():', '    if "Verdict" not in text:'),
     ("dirty-go", "PROMOTE_SCRIPT", '    if dirty:\n        return None', '    if False:\n        return None'),

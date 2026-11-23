@@ -23,6 +23,7 @@ import fcntl
 import fnmatch
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -310,6 +311,13 @@ def rollback_tag(image, env):
     return "%s:follow-rollback-%s" % (image.rsplit(":", 1)[0], env)
 
 
+def stderr_detail(stderr, *, quiet=False, full=False):
+    text = stderr.strip()
+    if quiet or not text:
+        return ""
+    return ": " + (text if full else text.splitlines()[-1][-500:])
+
+
 # ---------------------------------------------------------------------------
 # I/O. Everything the tick touches goes through this class, so the tests drive
 # the whole tick against a fake host.
@@ -323,14 +331,58 @@ class Host:
     def _run(self, argv, cwd=None, quiet=False):
         result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
-            # Compose and docker errors can echo interpolated values: name the
-            # command and its exit code, never its output.
-            detail = "" if quiet else (": " + result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "")
+            # Quiet commands (including Compose) show no stderr. Only git shows
+            # full stderr; other non-quiet commands show the last line, capped
+            # at 500 characters because their errors can echo interpolated values.
+            # Journal flattens records without losing lines.
+            detail = stderr_detail(result.stderr, quiet=quiet, full=argv[0] == "git")
             raise Refusal("%s exited %d%s" % (argv[0] if argv[0] != "sudo" else argv[1], result.returncode, detail))
         return result.stdout
 
     def _git(self, *args, repo=None):
         return self._run(["git", "-C", repo or self.config["FOLLOW_CHECKOUT"], *args]).strip()
+
+    def check_checkout_writable(self):
+        # Resolve both directories: linked worktrees keep their objects and
+        # shared refs in the common directory, outside their .git pointer file.
+        roots = self._git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir").splitlines()
+        blocked = []
+        for root in dict.fromkeys(roots):
+            pending = [Path(root)]
+            while pending:
+                path = pending.pop()
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    # Fetch's auto-gc may prune an entry during this walk;
+                    # dangling symlinks likewise have no target to maintain.
+                    continue
+                directory = path.is_dir()
+                mode = os.R_OK | os.W_OK | (os.X_OK if directory else 0)
+                # Git's immutable objects are normally 0444. They need read
+                # access, not writes; still reject foreign-owned objects that
+                # this service user cannot write or maintain.
+                own_object = (not directory and path.is_relative_to(Path(root) / "objects")
+                              and info.st_uid == os.geteuid()
+                              and os.access(path, os.R_OK, effective_ids=True))
+                if not os.access(path, mode, effective_ids=True) and not own_object:
+                    try:
+                        path.stat()  # Auto-gc can prune after the first stat succeeded.
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        owner = pwd.getpwuid(info.st_uid).pw_name
+                    except KeyError:
+                        owner = "unknown"
+                    blocked.append("%s (owner=%s uid=%d)" % (path, owner, info.st_uid))
+                elif directory:
+                    try:
+                        pending.extend(sorted(path.iterdir(), reverse=True))
+                    except FileNotFoundError:
+                        continue
+        if blocked:
+            raise Refusal("checkout Git paths are not writable by service uid=%d: %s"
+                          % (os.geteuid(), "; ".join(dict.fromkeys(blocked))))
 
     def _compose(self, *args, cwd=None):
         return self._run([*self.docker, "compose", *args], cwd=cwd or self.config["FOLLOW_COMPOSE_DIR"], quiet=True)
@@ -362,29 +414,32 @@ class Host:
         return self._git("rev-parse", "HEAD")
 
     def fetch(self, sha):
+        self.check_checkout_writable()
         self._git("fetch", "--quiet", "origin", self.config["FOLLOW_BRANCH"])
         self._git("cat-file", "-e", sha + "^{commit}")
 
     def is_ancestor(self, older, newer):
         """Fail closed: git's exit 1 is "no", anything but 0 or 1 is an error."""
-        code = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
-                               older, newer], capture_output=True).returncode
-        if code not in (0, 1):
-            raise Refusal("git merge-base exited %d" % code)
-        return code == 0
+        result = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
+                                 older, newer], capture_output=True, text=True)
+        if result.returncode not in (0, 1):
+            detail = stderr_detail(result.stderr, full=True)
+            raise Refusal("git merge-base exited %d%s" % (result.returncode, detail))
+        return result.returncode == 0
 
     def on_main(self, sha):
         """Whether sha is main's head or an ancestor of it, against a fresh fetch."""
+        self.check_checkout_writable()
         self._git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")
         return self.is_ancestor(sha, "refs/remotes/origin/main")
 
     def changed_paths(self, old, new):
-        return self._git("diff", "--name-only", old, new).splitlines()
+        return self._git("diff", "--name-only", "--no-renames", old, new).splitlines()
 
     def show(self, sha, path):
-        result = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "show", "%s:%s" % (sha, path)],
-                                capture_output=True, text=True)
-        return result.stdout if result.returncode == 0 else None
+        if not self._git("ls-tree", "--name-only", sha, "--", path):
+            return None
+        return self._run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "show", "%s:%s" % (sha, path)])
 
     def switch(self, sha, keep_dir):
         """Detach the checkout at sha. A skip-worktree file the host manages
@@ -528,6 +583,7 @@ class Journal:
 
     def __call__(self, level, step, message):
         stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        message = " | ".join(message.splitlines())
         line = "%s %s %s %s" % (stamp, self.env, step, message)
         print("<%d>%s" % (self.LEVELS[level], line), flush=True)
         if self.path is not None:

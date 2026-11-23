@@ -73,7 +73,8 @@ intent`) plus `docker image · build · boot`, the job that boots the image bein
 Every step goes to the systemd journal (with a priority) and to `journal.log` in
 the environment's state directory. Neither ever contains an env value: the settings
 check reads key names only, and Compose's own error output, which can carry
-interpolated values, is never printed.
+interpolated values, is never printed. Multi-line messages are joined into one
+record, so every line retains the step's priority and context.
 
 ## The settings rule
 
@@ -168,6 +169,10 @@ head and why); `clear` forgets a held or failed head so the next tick re-evaluat
 
 ## Failure modes
 
+- **Unwritable Git metadata.** Before either fetch, the tick refuses paths the
+  service user cannot maintain, naming each path and its owner in an ERROR; it
+  retries on the next tick after permissions are repaired. Readable immutable
+  objects owned by the service user are allowed.
 - **Red CI.** The head is held and re-checked each tick; a re-run that turns green
   deploys. A newer head replaces it.
 - **Failed health check.** Automatic rollback to the previous image and checkout; the

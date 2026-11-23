@@ -19,11 +19,12 @@ export const scenario: ConversationScenario = {
   p4: false,
   organisation: { identity, question: 'own' },
   messages: ['What are LOW’s VAT number and invoicing details?'],
-  expectedRoutes: ['think', 'info-retrieval', 'office-data'],
   expectedTools: ['read_neo4j_cypher', 'graph_files_search'],
   expectedArgs: {
+    read_neo4j_cypher: (a) => /Organization/i.test(String(a.query ?? '')),
     graph_files_search: (a) => /invoic|vat/i.test(String(a.query)),
   },
+  expectedRoutes: ['think', 'info-retrieval', 'office-data'],
   answerIncludes: ['SYNTHETIC-LOW-VAT-314', 'billing@lumen-orchard.example.org'],
   answerFromPrompt: true,
   artifacts: [],

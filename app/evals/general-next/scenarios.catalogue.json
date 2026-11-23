@@ -3406,6 +3406,11 @@
         },
         {
           "check": "validArgs",
+          "says": "module expectedArgs predicate: query the organisation records",
+          "tool": "read_neo4j_cypher"
+        },
+        {
+          "check": "validArgs",
           "says": "module expectedArgs predicate",
           "tool": "graph_files_search"
         },

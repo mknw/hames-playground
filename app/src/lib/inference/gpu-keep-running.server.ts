@@ -93,7 +93,7 @@
  * so the two layers cover the same race from both ends. Cost: one idempotent
  * control call per box per five minutes while OFF — and an `ops.py prewarm` run
  * by hand under an OFF switch is released within that window.
- * If the database becomes unreadable, the last observed OFF still owes that
+ * If the database becomes unreadable, the last observed or locally written OFF still owes that
  * re-assertion and its pending retries. Unknown or last-ON waits for a fresh
  * read; it never guesses OFF or sends a new ON during the outage.
  *
@@ -152,7 +152,7 @@ const ARMED_KEY = Symbol.for('hames-app.gpu-keep-running')
 
 interface ArmedLoop {
   timer: ReturnType<typeof setInterval>
-  /** A failed DB read still owes a previously observed OFF its re-assertion.
+  /** A failed DB read still owes a previously observed or locally written OFF its re-assertion.
    *  Unknown or last-ON never starts a control call during an outage. */
   lastKnownOn: boolean | null
   /** The failure string last logged, so a persistently failing tick logs once
@@ -297,6 +297,10 @@ export function driveModalSwitch(
 ): Promise<{ box: ModalBox; reason: string | null; doing: 'boot' | 'release' } | null> {
   return withSwitchLock(async () => {
     await setGpuState(on)
+    // The successful write is newer than the loop's last read. Remember it
+    // under the same lock before control calls, even if the next read fails.
+    const loop = (globalThis as LoopGlobal)[ARMED_KEY]
+    if (loop) loop.lastKnownOn = on
     let failure: { box: ModalBox; reason: string | null; doing: 'boot' | 'release' } | null = null
     for (const box of boxes) {
       if (on) {

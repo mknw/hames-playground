@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { extractGraphElements, extractGraphFromResult, isNeo4jGraphResult } from '@hames-ai/agents'
+import {
+  extractGraphElements,
+  extractGraphFromResult,
+  isNeo4jGraphResult,
+  isEdgeElement,
+  isNodeElement,
+} from '@hames-ai/agents'
 
 function ev(tool: string, result: unknown, patternId = 'neo4j-query', success = true) {
   return { type: 'tool_result' as const, ts: 1, patternId, data: { tool, result, success } }
@@ -62,7 +68,12 @@ describe('neo4j driver shapes', () => {
   it('extracts a driver Relationship inside a collection as an edge', () => {
     const result = [{ rels: [{ identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2 }] }]
     const [edge] = extractGraphElements([ev('read_neo4j_cypher', result)])
-    expect(edge.data).toMatchObject({ id: '11', source: '1', target: '2', label: 'HAS_CONCEPT' })
+    expect(edge.data).toMatchObject({
+      id: 'neo4j-rel:11',
+      source: '1',
+      target: '2',
+      label: 'HAS_CONCEPT',
+    })
   })
 
   it('uses the elementId endpoints when the numeric ones are absent', () => {
@@ -74,7 +85,12 @@ describe('neo4j driver shapes', () => {
       },
     ]
     const [edge] = extractGraphElements([ev('read_neo4j_cypher', result)])
-    expect(edge.data).toMatchObject({ id: '5:r:1', source: 'a', target: 'b', label: 'LINKS' })
+    expect(edge.data).toMatchObject({
+      id: 'neo4j-rel:5:r:1',
+      source: 'a',
+      target: 'b',
+      label: 'LINKS',
+    })
   })
 
   it('walks a driver Path into its nodes and relationships', () => {
@@ -84,20 +100,87 @@ describe('neo4j driver shapes', () => {
     const result = [{ paths: [{ segments: [{ start, relationship, end }] }] }]
     const elements = extractGraphElements([ev('read_neo4j_cypher', result)])
 
-    expect(elements.map((e) => e.data?.id)).toEqual(['1', '3', '2'])
+    expect(elements.map((e) => e.data?.id)).toEqual(['1', 'neo4j-rel:3', '2'])
     expect(elements.filter(isEdge)).toHaveLength(1)
   })
 
-  it('drops a bare driver Relationship sitting directly under a record key', () => {
-    // Documented limitation, not a desired behaviour: the MCP-node fallback
-    // (graph-extractor.ts:182-193) claims the value first and requires a
-    // string name/id/title, so a driver-shaped relationship never becomes an
-    // edge unless it is nested in a collection. See the PR body.
-    const result = [
-      { r: { identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2, properties: { score: 0.9 } } },
-    ]
-    expect(extractGraphElements([ev('read_neo4j_cypher', result)]).filter(isEdge)).toEqual([])
+  it.each([
+    ['without properties', { identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2 }],
+    [
+      'with properties',
+      { identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2, properties: { score: 0.9 } },
+    ],
+    [
+      'with a name property',
+      { identity: 11, type: 'HAS_CONCEPT', start: 1, end: 2, properties: { name: 'relname' } },
+    ],
+    [
+      'with elementId endpoints',
+      {
+        elementId: '5:r:1',
+        type: 'HAS_CONCEPT',
+        startNodeElementId: '1',
+        endNodeElementId: '2',
+        properties: { score: 0.9 },
+      },
+    ],
+  ])('extracts a bare driver Relationship %s as exactly one edge (#14)', (_name, rel) => {
+    const elements = extractGraphElements([ev('read_neo4j_cypher', [{ r: rel }])])
+    expect(elements).toEqual([
+      {
+        group: 'edges',
+        source: 'neo4j',
+        data: {
+          ...('properties' in rel ? rel.properties : {}),
+          id: 'identity' in rel ? 'neo4j-rel:11' : 'neo4j-rel:5:r:1',
+          source: '1',
+          target: '2',
+          label: 'HAS_CONCEPT',
+          kind: 'edge',
+        },
+      },
+    ])
   })
+
+  it.each(['record', 'collection', 'path'])(
+    'keeps both nodes and the relationship through %s extraction and deduplication (#14)',
+    (shape) => {
+      const start = { identity: 1, labels: ['Concept'], properties: { name: 'Start' } }
+      const end = { identity: 2, labels: ['Concept'], properties: { name: 'End' } }
+      const relationship = {
+        identity: 11,
+        type: 'HAS_CONCEPT',
+        start: 1,
+        end: 2,
+        properties: { score: 0.9 },
+      }
+      const row =
+        shape === 'record'
+          ? { start, r: relationship, end }
+          : shape === 'collection'
+            ? { values: [start, relationship, end] }
+            : { paths: [{ segments: [{ start, relationship, end }] }] }
+      // Repeated rows and events must retain one edge, never its phantom node.
+      const event = ev('read_neo4j_cypher', [row, row])
+      const elements = extractGraphElements([event, event])
+      expect(elements).toHaveLength(3)
+      expect(elements.filter(isNodeElement).map((el) => el.data?.id)).toEqual(['1', '2'])
+      expect(elements.filter(isEdgeElement)).toEqual([
+        {
+          group: 'edges',
+          source: 'neo4j',
+          data: {
+            id: 'neo4j-rel:11',
+            source: '1',
+            target: '2',
+            label: 'HAS_CONCEPT',
+            kind: 'edge',
+            score: 0.9,
+          },
+        },
+      ])
+    },
+  )
 
   it('recurses into arrays of driver objects', () => {
     const nodes = [

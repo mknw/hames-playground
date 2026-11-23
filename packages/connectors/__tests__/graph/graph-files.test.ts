@@ -100,6 +100,22 @@ beforeEach(() => {
 // ============================================================================
 
 describe('advertisement', () => {
+  it('distinguishes any-editor modification times from the signed-in person’s edits', () => {
+    for (const name of ['graph_files_search', 'graph_files_list']) {
+      const tool = appToolDescriptions().find((t) => t.name === name)!
+      expect(tool.description).toMatch(/modified.*by anyone/i)
+      expect(tool.description).toContain('graph_files_recent')
+    }
+    const search = appToolDescriptions().find((t) => t.name === 'graph_files_search')!
+    const properties = (
+      search.inputSchema as { properties: Record<string, { description: string }> }
+    ).properties
+    for (const field of ['sort', 'modified_after', 'modified_before']) {
+      expect(properties[field].description).toContain('by anyone')
+    }
+    expect(properties.author.description).toMatch(/not.*last editor/i)
+  })
+
   it('registers both file tools with no credential/user/session field', () => {
     const defs = appToolDescriptions().filter((t) =>
       ['graph_files_search', 'graph_files_list'].includes(t.name),

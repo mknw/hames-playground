@@ -302,6 +302,8 @@ async function createPatterns(
               'step’s tools (office-data), and the public web is the last resort for such a ' +
               'question. Never send the user to consult internal documentation: your tools ' +
               'read the organisation’s own sources, and the reply reports what they found. ' +
+              'The YOUR ORGANISATION block identifies it by full name, abbreviations and domains. ' +
+              'If a public fact about it needs a web lookup, use its full name and domain in the query, never its bare abbreviation. ' +
               '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
               'alongside the facts they support. Copy each source URL verbatim from the ' +
               'tool results or from the url argument of a successful fetch; never invent or ' +
@@ -479,7 +481,7 @@ async function createPatterns(
               'the graph may hold the organisation’s own projects (Project nodes) and may hold none — when it holds none, a projects question is office-data’s to answer from the organisation’s own files and sites next, the public web last; ' +
               'search or fetch public web sources and library documentation' +
               (pmTools.length ? "; search Lenny's Data's newsletter and podcast archive" : '') +
-              '.',
+              '. For the user’s own organisation, resolve names and abbreviations from YOUR ORGANISATION, use the graph then its Microsoft 365 files and sites first; any public-web lookup uses its full name and domain, never the bare abbreviation.',
             siblingResults: ['retriever'],
           },
           'read-documents': {

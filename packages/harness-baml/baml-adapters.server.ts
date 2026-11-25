@@ -16,7 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
-import { currentTimeBlock } from './time-block.server'
+import { currentTurnContext } from './turn-context.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   ControllerAction,
@@ -1275,7 +1275,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
-          currentTimeBlock(),
+          currentTurnContext(),
           baseOpts,
         )
         // The collector, not the routing intention, proves that this response
@@ -1308,7 +1308,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
-          currentTimeBlock(),
+          currentTurnContext(),
           baseOpts,
         )
       }
@@ -1402,7 +1402,7 @@ export function createLoopControllerAdapter(
               input.multiCallMode,
               input.planContext,
               input.returnStyle,
-              currentTimeBlock(),
+              currentTurnContext(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1433,7 +1433,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
-            currentTimeBlock(),
+            currentTurnContext(),
             retryOpts,
           )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
@@ -1481,7 +1481,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
-            currentTimeBlock(),
+            currentTurnContext(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -1644,7 +1644,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
           intent,
           tools,
           context,
-          currentTimeBlock(),
+          currentTurnContext(),
           baseOpts,
         )
         const selected = selectedCall()
@@ -1666,7 +1666,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         if (trace.kind !== 'trace') warning = 'no thinking trace'
         plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
       } else {
-        plan = await b.Planner(user_message, intent, tools, context, currentTimeBlock(), baseOpts)
+        plan = await b.Planner(user_message, intent, tools, context, currentTurnContext(), baseOpts)
       }
       llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
@@ -1737,7 +1737,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
               intent,
               tools,
               context,
-              currentTimeBlock(),
+              currentTurnContext(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1762,7 +1762,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
             intent,
             tools,
             context,
-            currentTimeBlock(),
+            currentTurnContext(),
             retryOpts,
           )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
@@ -1784,7 +1784,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
             intent,
             tools,
             retryContext,
-            currentTimeBlock(),
+            currentTurnContext(),
             baseOpts,
           )
           llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
@@ -2020,7 +2020,7 @@ export function createActorControllerAdapter(
         input.attemptNumber,
         input.maxAttempts,
         input.multiCallMode,
-        currentTimeBlock(),
+        currentTurnContext(),
         baseOpts,
       )
     } catch (e) {
@@ -2042,7 +2042,7 @@ export function createActorControllerAdapter(
             input.attemptNumber,
             input.maxAttempts,
             input.multiCallMode,
-            currentTimeBlock(),
+            currentTurnContext(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -2153,7 +2153,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     let result: CriticResult
     try {
       if (requestedThinking) {
-        result = await b.CriticThinking(intent, attempts, currentTimeBlock(), criticOpts)
+        result = await b.CriticThinking(intent, attempts, currentTurnContext(), criticOpts)
         // The collector, not the routing intention, proves that this response
         // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
         if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
@@ -2168,7 +2168,7 @@ export function createCriticAdapter(): CriticAdapterFn {
           )
         }
       } else {
-        result = await b.Critic(intent, attempts, currentTimeBlock(), criticOpts)
+        result = await b.Critic(intent, attempts, currentTurnContext(), criticOpts)
       }
     } catch (e) {
       const selected = selectedCall()

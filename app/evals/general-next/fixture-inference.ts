@@ -91,6 +91,13 @@ export async function fixtureInference() {
         }
       } else if (req.url === '/v1/systemone') {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
+        // #1072: without the deployment identity the short name is ambiguous.
+        // Model that failure as a namesake web lookup, rather than scripting a
+        // successful own-source route irrespective of what the decider read.
+        if (scenario.organisation?.question === 'own' && !hasOrganisation(body.state, scenario)) {
+          route = decisionIndex === 1 ? 'info-retrieval' : 'answer'
+          if (decisionIndex === 1) pending = ['search']
+        }
         const answers = Object.fromEntries(
           Object.entries(body.questions).map(([name, question]) => {
             const described = (question as { criteria: Record<string, unknown> }).criteria
@@ -124,6 +131,13 @@ export async function fixtureInference() {
             break
           case 'LoopController':
           case 'ActorController': {
+            if (
+              scenario.organisation?.question === 'own' &&
+              !hasOrganisation(prompt, scenario) &&
+              pending.some((tool) => tool !== 'search')
+            ) {
+              pending = ['search']
+            }
             // The org-knowledge draft loop (slice 7): its schema names the ontology. It
             // Wraps the scripted assertions in the explicit verdict envelope; absent, no proposal.
             if (fn === 'LoopController' && prompt.includes('ORGANIZATIONAL ONTOLOGY')) {
@@ -192,20 +206,22 @@ export async function fixtureInference() {
             result = { injection_detected: false, reason: 'Synthetic clean fixture', spans: [] }
             break
           case 'Synthesize':
-            result = scenario.memory
-              ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
-              : scenario.answerFromPrompt
-                ? evidenceAnswer(
-                    prompt,
-                    scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes,
-                  )
-                : scenario.guideAnswer
-                  ? guideAnswer(prompt)
-                  : scenario.clock
-                    ? timeAnswer(prompt)
-                    : scenario.failFirstTurn && turnIndex === 0
-                      ? 'The lookup failed: synthetic service unavailable. No count is known.'
-                      : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
+            result = scenario.organisation
+              ? organisationAnswer(prompt)
+              : scenario.memory
+                ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
+                : scenario.answerFromPrompt
+                  ? evidenceAnswer(
+                      prompt,
+                      scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes,
+                    )
+                  : scenario.guideAnswer
+                    ? guideAnswer(prompt)
+                    : scenario.clock
+                      ? timeAnswer(prompt)
+                      : scenario.failFirstTurn && turnIndex === 0
+                        ? 'The lookup failed: synthetic service unavailable. No count is known.'
+                        : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
             result = scenario.messages.at(-1)
@@ -281,6 +297,24 @@ export async function fixtureInference() {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
   }
+}
+
+function hasOrganisation(prompt: string, scenario: ConversationScenario): boolean {
+  const identity = scenario.organisation!.identity
+  const at = prompt.indexOf('YOUR ORGANISATION')
+  return (
+    at >= 0 &&
+    [identity.displayName, ...identity.abbreviations, ...identity.domains].every((value) =>
+      prompt.slice(at).includes(value),
+    )
+  )
+}
+
+/** Read invoice facts from the actual evidence, including the wrong namesake
+ * if that was retrieved. Never echo the scenario's expected answer. */
+function organisationAnswer(prompt: string): string {
+  const facts = [...new Set(prompt.match(/SYNTHETIC-[A-Z-]+-\d+|(?:billing|pay)@[a-z.-]+/g) ?? [])]
+  return facts.length ? `From the sources: ${facts.join('; ')}` : 'No invoicing details were found.'
 }
 
 const MEMORY_STORE_FIELDS = ['confirm', 'kind', 'sensitive', 'target']

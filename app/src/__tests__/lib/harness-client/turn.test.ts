@@ -164,6 +164,7 @@ type OpenedFrame = {
   config?: { maxResultForSummary?: number }
   inference?: { tier?: string }
   clock?: { instant: number; timeZone: string; zoneUnknown?: boolean }
+  organisation?: import('@hames-ai/harness-patterns/organisation').OrganisationIdentity | null
   live?: unknown
   /** The host's one `hitl` slot (#433 F7/m8): supplied around the main run
    *  only, carrying the turn's `attended`. */
@@ -207,6 +208,15 @@ const resolveTurnClock = vi.fn(
 )
 vi.mock('../../../lib/time-zone.server', () => ({
   resolveTurnClock: (input: never) => resolveTurnClock(input),
+}))
+const sessionOrganisation = vi.fn(async (_sessionId: string, _userId: string) => ({
+  displayName: 'Lumen Orchard Works',
+  abbreviations: ['LOW'],
+  domains: ['lumen-orchard.example.org'],
+}))
+vi.mock('../../../lib/organisation.server', () => ({
+  sessionOrganisation: (sessionId: string, userId: string) =>
+    sessionOrganisation(sessionId, userId),
 }))
 
 const resolveConversationTier = vi.fn<
@@ -2968,6 +2978,15 @@ describe('session ownership on the turn path', () => {
 // Mutation: drop `clock` from `runTurnAndPersist`'s `withRunFrame` bag → the
 // frame has none; pass the request's zone to nothing → the claim is not seen.
 describe('the turn clock', () => {
+  it('places the owner/session-resolved organisation on the turn frame', async () => {
+    await runTurnAndPersist(interactive())
+    expect(sessionOrganisation).toHaveBeenCalledExactlyOnceWith('sess-1', 'user-1')
+    expect(openedFrames[0].organisation).toEqual({
+      displayName: 'Lumen Orchard Works',
+      abbreviations: ['LOW'],
+      domains: ['lumen-orchard.example.org'],
+    })
+  })
   it("puts the resolved clock on the turn's one frame, with the browser's claim", async () => {
     vi.useFakeTimers({ now: Date.parse('2026-11-04T23:30:00Z'), toFake: ['Date'] })
     try {

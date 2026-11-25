@@ -612,6 +612,9 @@ describe('general-next composition', () => {
     // and no deferral to internal documentation.
     const infoContext = String(mocks.controllerOptions.mock.calls.at(-1)![0])
     expect(infoContext).toContain(
+      'If a public fact about it needs a web lookup, use its full name and domain in the query, never its bare abbreviation.',
+    )
+    expect(infoContext).toContain(
       'A question about the user’s own organisation’s work — its projects, people, plans — is answered from that organisation’s own sources: query the graph first.',
     )
     // r2 (review): the rule is scoped to the user's OWN organisation, so a public
@@ -1101,7 +1104,7 @@ describe('general-next composition', () => {
         'Look things up in the knowledge graph, on the public web and in library docs. Its graph identifies people in the organisation (a name to an email) before office-data searches mail or files. It may hold its projects; a projects question it cannot answer goes to office-data, the web last.\n' +
         'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
       capability:
-        'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; the graph may hold the organisation’s own projects (Project nodes) and may hold none — when it holds none, a projects question is office-data’s to answer from the organisation’s own files and sites next, the public web last; search or fetch public web sources and library documentation.',
+        'Read the knowledge graph, which can identify people in the organisation (for example a name to an email address) before office-data searches mail or files involving them; the graph may hold the organisation’s own projects (Project nodes) and may hold none — when it holds none, a projects question is office-data’s to answer from the organisation’s own files and sites next, the public web last; search or fetch public web sources and library documentation. For the user’s own organisation, resolve names and abbreviations from YOUR ORGANISATION, use the graph then its Microsoft 365 files and sites first; any public-web lookup uses its full name and domain, never the bare abbreviation.',
     })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,

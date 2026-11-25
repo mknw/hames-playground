@@ -255,6 +255,13 @@ the clock to the current request only, respects an explicit reference date, and
 preserves dated quotations' own temporal context. It explicitly says this is
 not the date of documents or events.
 
+The host may also supply `organisation: { displayName?, abbreviations, domains }`
+on the run frame, resolved and cached per session for its authenticated owner.
+`null` means the host could not resolve it and records an “Organisation unknown”
+warning; omission preserves the existing prompts. The decisions state and BAML
+per-turn tail share `formatOrganisationBlock` (`organisation.ts`), after every
+cache marker. Identity is metadata, never evidence of business facts.
+
 ### Protecting the web route's earlier inputs
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
